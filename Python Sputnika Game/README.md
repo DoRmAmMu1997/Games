@@ -19,7 +19,7 @@ Orbital Orchard is a desktop Python puzzle game built with `pygame-ce`. You drop
 
 - The Python source files now include beginner-friendly comments, docstrings, and inline explanations throughout the code.
 - `requirements.txt` supports comments, so it includes a short note directly in the file.
-- `save_data.json` does not support real comments because standard JSON would become invalid. That file intentionally stays minimal and currently stores just one field: `high_score`.
+- `save_data.json` does not support real comments because standard JSON would become invalid. That file stays minimal and stores three fields: `high_score`, `games_played`, and `best_tier`. It lives in your user profile, not next to the source (see "Run" below).
 
 ## Install
 
@@ -36,7 +36,27 @@ pip install -r requirements.txt
 python main.py
 ```
 
-The game stores the local high score in `save_data.json` beside the source files once you beat the current best.
+The game saves your high score and lifetime stats to `%APPDATA%\Orbital Orchard\save_data.json`. This per-user location is used whether you run the script or a compiled `.exe`, so progress survives across sessions, even if you move the `.exe` elsewhere.
+
+## Build a Standalone .exe
+
+The game can be packaged into a single Windows executable with [PyInstaller](https://pyinstaller.org/).
+
+1. Install PyInstaller (only needed once):
+
+```bash
+pip install pyinstaller
+```
+
+2. From this folder (`Python Sputnika Game`), build using the bundled spec file:
+
+```bash
+pyinstaller "Orbital Orchard Game.spec"
+```
+
+3. The finished program is written to `dist\Orbital Orchard Game.exe`. Copy that file anywhere you like and double-click it to play.
+
+The spec file produces a single-file, windowed executable and bundles the window icon. Because save data lives in `%APPDATA%`, the high score and stats persist no matter where the `.exe` is moved.
 
 ## Controls
 
