@@ -239,7 +239,11 @@ def _make_offer(game, player, partner, wanted):
     if swap is not None:
         give["props"].append(swap)
     affordable = max(0, player.cash - AI_CASH_CUSHION)
-    # Search upward for the least cash the partner will accept.
+    # Search upward for the least cash the partner will accept. The smaller
+    # this number ends up being, the better the deal is for THIS AI -- so the
+    # first cash amount the partner accepts is also the best one we will find
+    # (every larger amount would just give the partner more for the same
+    # property), which is why we return as soon as the partner says yes.
     for cash in range(0, affordable + 1, 25):
         give["cash"] = cash
         offer = {"from": player.index, "to": partner.index, "give": give, "get": get}

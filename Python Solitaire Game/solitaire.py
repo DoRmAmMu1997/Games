@@ -1856,7 +1856,15 @@ class SolitaireApp:
         self.check_for_loss()
 
     def auto_solve_state_key(self) -> Tuple:
-        """Build a hashable summary of the board for loop detection."""
+        """Build a hashable summary of the board for loop detection.
+
+        Auto-solve cycles the stock looking for cards it can send to a
+        foundation. If a full stock cycle finishes without making progress,
+        every pile is in exactly the situation it was in last time -- which
+        means the next cycle will do the same nothing and we should give up.
+        Bundling stock, waste, foundations and tableau into one tuple gives a
+        single value we can drop in a `set` and check against on each step.
+        """
         return (
             tuple((card.suit, card.rank) for card in self.game.stock),
             tuple((card.suit, card.rank) for card in self.game.waste),
@@ -2363,7 +2371,14 @@ class SolitaireApp:
         )
 
     def draw_card_back_pattern(self, x: float, y: float) -> None:
-        """Draw clipped diagonal stripes inside a face-down card."""
+        """Draw clipped diagonal stripes inside a face-down card.
+
+        The pattern is a family of parallel 45-degree lines spaced
+        `stripe_spacing` pixels apart. Each line starts on either the left
+        edge or the top edge of the card and travels down-right until it
+        meets either the right edge or the bottom edge, whichever comes
+        first -- that is how the lines stay neatly clipped inside the card.
+        """
         stripe_spacing = 14
         for offset in range(0, CARD_WIDTH + CARD_HEIGHT, stripe_spacing):
             # Start each stripe on either the left edge or the top edge.
@@ -2521,7 +2536,13 @@ class SolitaireApp:
         return self.tableau_positions_for_cards(self.game.tableau[column_index])
 
     def tableau_positions_for_cards(self, cards: List[Card]) -> List[int]:
-        """Return stacked y-positions for any supplied list of cards."""
+        """Return stacked y-positions for any supplied list of cards.
+
+        Face-down cards can overlap more tightly because nothing on them needs
+        to be readable, while face-up cards step further down so their rank
+        and suit still show at the top edge. That is why two different
+        spacings (FACE_UP_SPACING and FACE_DOWN_SPACING) are used here.
+        """
         y_positions: List[int] = []
         y = TABLEAU_Y
         for card in cards:
