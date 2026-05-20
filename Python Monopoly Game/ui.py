@@ -76,10 +76,12 @@ def _text(surface, fonts, key, text, pos, color=WHITE, center=False):
 def setup_buttons(has_save: bool) -> list:
     """Build the clickable buttons for the setup screen."""
     buttons = [
+        # The right-hand stepper buttons sit far enough out so even the
+        # widest theme name ("World Landmarks") fits between them.
         Button((90, 250, 44, 44), "-", "humans_down"),
-        Button((250, 250, 44, 44), "+", "humans_up"),
+        Button((380, 250, 44, 44), "+", "humans_up"),
         Button((90, 380, 44, 44), "<", "theme_prev"),
-        Button((250, 380, 44, 44), ">", "theme_next"),
+        Button((380, 380, 44, 44), ">", "theme_next"),
         Button((90, 470, 320, 56), "Start Game", "start", color=(46, 116, 78)),
         # A way out of the setup screen without closing the window.
         Button((SCREEN_WIDTH - 160, 30, 130, 40), "Quit", "quit",
@@ -101,11 +103,13 @@ def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse) -> None:
           (SCREEN_WIDTH // 2, 165), SOFT, center=True)
 
     _text(surface, fonts, "med", "Human players", (90, 215))
-    _text(surface, fonts, "huge", str(human_count), (172, 240), WHITE)
+    # Centre the digit and theme name between their stepper buttons so they
+    # never overlap the arrows, however long the theme name is.
+    _text(surface, fonts, "huge", str(human_count), (257, 272), WHITE, center=True)
 
     _text(surface, fonts, "med", "Board", (90, 345))
     theme_name = board_data.THEMES[theme_key]["name"]
-    _text(surface, fonts, "big", theme_name, (150, 378), GOLD)
+    _text(surface, fonts, "big", theme_name, (257, 402), GOLD, center=True)
 
     for button in buttons:
         button.draw(surface, fonts, mouse)
@@ -342,23 +346,31 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     _text(surface, fonts, "big", "PROPOSE A TRADE",
           (panel.centerx, panel.y + 26), GOLD, center=True)
     _text(surface, fonts, "med", f"With:  {partner.name}",
-          (panel.centerx, panel.y + 64), WHITE, center=True)
+          (panel.centerx, panel.y + 67), WHITE, center=True)
     # Showing the partner's cash helps the human size up a fair counter-offer.
     _text(surface, fonts, "small", f"They hold ${partner.cash}",
           (panel.centerx, panel.y + 92), SOFT, center=True)
     _text(surface, fonts, "small", "You give", (panel.x + 30, panel.y + 120), SUCCESS)
     _text(surface, fonts, "small", "You receive", (panel.x + 380, panel.y + 120), SUCCESS)
 
+    # Each row is a checkbox + property name. Unselected rows draw NO fill so
+    # they sit invisibly on the panel background -- that, plus an empty box,
+    # makes it clear nothing is selected until the player ticks something.
     for key, chosen in (("give_rows", trade["give"]["props"]),
                         ("get_rows", trade["get"]["props"])):
         for row, pos in layout[key]:
             picked = pos in chosen
-            pygame.draw.rect(surface, (58, 92, 70) if picked else PANEL_CARD,
-                             row, border_radius=4)
-            pygame.draw.rect(surface, GOLD if picked else INK, row, 1, border_radius=4)
-            space = game.board[pos]
-            _text(surface, fonts, "tiny", space.name[:30], (row.x + 6, row.y + 4),
-                  WHITE)
+            if picked:
+                pygame.draw.rect(surface, (58, 92, 70), row, border_radius=4)
+                pygame.draw.rect(surface, GOLD, row, 1, border_radius=4)
+            # A small checkbox at the left makes selection state unambiguous.
+            box = pygame.Rect(row.x + 6, row.y + 5, 14, 14)
+            pygame.draw.rect(surface, PANEL_BG, box)
+            pygame.draw.rect(surface, GOLD if picked else SOFT, box, 2)
+            if picked:
+                pygame.draw.rect(surface, GOLD, box.inflate(-6, -6))
+            _text(surface, fonts, "tiny", game.board[pos].name[:30],
+                  (row.x + 28, row.y + 4), WHITE)
 
     _text(surface, fonts, "small",
           f"Cash you give: ${trade['give']['cash']}",
