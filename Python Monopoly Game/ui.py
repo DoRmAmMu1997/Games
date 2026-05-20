@@ -329,22 +329,47 @@ def draw_auction(surface, fonts, game, buttons, mouse) -> None:
 # --------------------------------------------------------------------------
 # Trade overlay
 # --------------------------------------------------------------------------
+#: How many property rows are visible per side at once before the user has
+#: to scroll. Set so the 15th row's bottom stays well above the cash labels
+#: drawn at panel.bottom - 132.
+TRADE_VISIBLE_ROWS = 15
+
+
 def trade_layout(game, trade) -> dict:
     """Compute the clickable rectangles of the trade dialog.
 
     `trade` is the in-progress offer being built by a human. Returning the
     rectangles here lets both the drawing code and the click handler agree on
-    the layout.
+    the layout. The two side lists honour the per-side scroll offsets
+    (`give_scroll` / `get_scroll`) so the rendered rows match the clickable
+    rows even when the player owns more properties than fit on screen.
     """
-    panel = pygame.Rect(0, 0, 720, 560)
+    panel = pygame.Rect(0, 0, 800, 700)
     panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
     human = game.players[trade["from"]]
     partner = game.players[trade["to"]]
-    layout = {"panel": panel, "give_rows": [], "get_rows": []}
+    layout = {
+        "panel": panel,
+        "give_rows": [],
+        "get_rows": [],
+        "give_more_above": False,
+        "give_more_below": False,
+        "get_more_above": False,
+        "get_more_below": False,
+    }
     for side, key, owner, x in (("give", "give_rows", human, panel.x + 30),
-                                ("get", "get_rows", partner, panel.x + 380)):
-        for i, pos in enumerate(sorted(game.properties_of(owner))):
-            row = pygame.Rect(x, panel.y + 150 + i * 26, 300, 24)
+                                ("get", "get_rows", partner, panel.x + 420)):
+        props = sorted(game.properties_of(owner))
+        # Clamp the stored scroll: properties might have shrunk since the
+        # last scroll (e.g. a partner cycle), and an out-of-bounds offset
+        # would silently hide rows the player still owns.
+        max_scroll = max(0, len(props) - TRADE_VISIBLE_ROWS)
+        scroll = max(0, min(trade.get(f"{side}_scroll", 0), max_scroll))
+        layout[f"{side}_more_above"] = scroll > 0
+        layout[f"{side}_more_below"] = scroll + TRADE_VISIBLE_ROWS < len(props)
+        visible_props = props[scroll : scroll + TRADE_VISIBLE_ROWS]
+        for i, pos in enumerate(visible_props):
+            row = pygame.Rect(x, panel.y + 150 + i * 26, 340, 24)
             layout[key].append((row, pos))
     return layout
 
@@ -367,7 +392,7 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     _text(surface, fonts, "small", f"They hold ${partner.cash}",
           (panel.centerx, panel.y + 92), SOFT, center=True)
     _text(surface, fonts, "small", "You give", (panel.x + 30, panel.y + 120), SUCCESS)
-    _text(surface, fonts, "small", "You receive", (panel.x + 380, panel.y + 120), SUCCESS)
+    _text(surface, fonts, "small", "You receive", (panel.x + 420, panel.y + 120), SUCCESS)
 
     # Each row is a checkbox + property name. Unselected rows draw NO fill so
     # they sit invisibly on the panel background -- that, plus an empty box,
@@ -388,14 +413,42 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
             _text(surface, fonts, "tiny", game.board[pos].name[:30],
                   (row.x + 28, row.y + 4), WHITE)
 
+    # Scroll indicators -- small gold triangles drawn above/below a column
+    # when more rows are hidden in that direction. Mouse wheel scrolls the
+    # side under the cursor; the glyph is the only hint the user gets that
+    # there is anything off-screen.
+    _draw_trade_scroll_glyphs(surface, layout, "give", panel.x + 30 + 170)
+    _draw_trade_scroll_glyphs(surface, layout, "get", panel.x + 420 + 170)
+
     _text(surface, fonts, "small",
           f"Cash you give: ${trade['give']['cash']}",
           (panel.x + 30, panel.bottom - 132), WHITE)
     _text(surface, fonts, "small",
           f"Cash you receive: ${trade['get']['cash']}",
-          (panel.x + 380, panel.bottom - 132), WHITE)
+          (panel.x + 420, panel.bottom - 132), WHITE)
     for button in buttons:
         button.draw(surface, fonts, mouse)
+
+
+def _draw_trade_scroll_glyphs(surface, layout, side: str, cx: int) -> None:
+    """Draw small upward/downward triangles when a trade column is scrolled.
+
+    The triangles sit just above the first row and just below the last
+    visible row, on the column centred at `cx`. Drawn in `GOLD` so they read
+    as 'there is more here' without competing with the row text.
+    """
+    panel = layout["panel"]
+    if layout.get(f"{side}_more_above"):
+        top_y = panel.y + 150 - 8
+        pygame.draw.polygon(
+            surface, GOLD,
+            [(cx, top_y - 4), (cx - 6, top_y + 4), (cx + 6, top_y + 4)])
+    if layout.get(f"{side}_more_below"):
+        last_row_bottom = panel.y + 150 + TRADE_VISIBLE_ROWS * 26
+        bot_y = last_row_bottom + 4
+        pygame.draw.polygon(
+            surface, GOLD,
+            [(cx, bot_y + 4), (cx - 6, bot_y - 4), (cx + 6, bot_y - 4)])
 
 
 # --------------------------------------------------------------------------

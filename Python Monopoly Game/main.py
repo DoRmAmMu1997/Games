@@ -206,6 +206,11 @@ class MonopolyApp:
                     # keeps logical coordinates intact, so we don't need to
                     # remap anything ourselves.
                     pygame.display.toggle_fullscreen()
+                elif (event.type == pygame.MOUSEWHEEL
+                      and self.mode == "trade" and self.trade is not None):
+                    # Scroll whichever side of the trade dialog the cursor
+                    # is over. event.y > 0 means the wheel rolled up.
+                    self._scroll_trade(pygame.mouse.get_pos(), event.y)
             self._update(autotest)
             self._draw()
             pygame.display.flip()
@@ -419,6 +424,10 @@ class MonopolyApp:
             "from": me, "to": others[0],
             "give": {"props": [], "cash": 0, "jail": 0},
             "get": {"props": [], "cash": 0, "jail": 0},
+            # Per-side scroll offsets for the property row lists. Used when
+            # the player owns more properties than fit in the visible window.
+            "give_scroll": 0,
+            "get_scroll": 0,
         }
 
     def _cycle_trade_partner(self, step: int) -> None:
@@ -431,12 +440,36 @@ class MonopolyApp:
         self.trade["to"] = others[(current + step) % len(others)]
         self.trade["give"]["props"].clear()
         self.trade["get"]["props"].clear()
+        # A new partner usually has a different property list -- reset scroll
+        # so the next dialog opens at the top of both columns.
+        self.trade["give_scroll"] = 0
+        self.trade["get_scroll"] = 0
 
     def _adjust_trade_cash(self, side: str, delta: int) -> None:
         """Step the cash on one side of the in-progress trade offer."""
         idx = self.trade["from"] if side == "give" else self.trade["to"]
         cap = self.game.players[idx].cash
         self.trade[side]["cash"] = max(0, min(cap, self.trade[side]["cash"] + delta))
+
+    def _scroll_trade(self, mouse_pos, wheel_dy: int) -> None:
+        """Scroll one side of the trade dialog under the mouse cursor.
+
+        Wheeling up (`wheel_dy > 0`) moves the visible window UP the list
+        (decreases the scroll offset). The offset is clamped so the player
+        cannot scroll past the last full window.
+        """
+        if self.trade is None:
+            return
+        panel = ui.trade_layout(self.game, self.trade)["panel"]
+        side = "give" if mouse_pos[0] < panel.centerx else "get"
+        owner_idx = self.trade["from"] if side == "give" else self.trade["to"]
+        owner = self.game.players[owner_idx]
+        max_scroll = max(0, len(self.game.properties_of(owner))
+                         - ui.TRADE_VISIBLE_ROWS)
+        key = f"{side}_scroll"
+        current = self.trade.get(key, 0)
+        step = -1 if wheel_dy > 0 else 1
+        self.trade[key] = max(0, min(current + step, max_scroll))
 
     # ------------------------------------------------------------------
     # Drawing
@@ -550,13 +583,17 @@ class MonopolyApp:
                           "trade_partner_prev"),
                 ui.Button((panel.centerx + 170, panel.y + 54, 30, 26), ">",
                           "trade_partner_next"),
+                # Cash buttons sit directly under each column so the "Give"
+                # pair aligns with the give-side row list (x = panel.x + 30)
+                # and the "Get" pair aligns with the get-side rows
+                # (x = panel.x + 420 in the widened panel).
                 ui.Button((panel.x + 30, panel.bottom - 104, 130, 30), "Give -$50",
                           "give_cash_down"),
                 ui.Button((panel.x + 170, panel.bottom - 104, 130, 30), "Give +$50",
                           "give_cash_up"),
-                ui.Button((panel.x + 380, panel.bottom - 104, 130, 30), "Get -$50",
+                ui.Button((panel.x + 420, panel.bottom - 104, 130, 30), "Get -$50",
                           "get_cash_down"),
-                ui.Button((panel.x + 520, panel.bottom - 104, 130, 30), "Get +$50",
+                ui.Button((panel.x + 560, panel.bottom - 104, 130, 30), "Get +$50",
                           "get_cash_up"),
                 ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
                           "Propose", "trade_propose", color=(46, 116, 78)),
