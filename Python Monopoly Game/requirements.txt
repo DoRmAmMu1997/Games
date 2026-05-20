@@ -1,0 +1,3 @@
+# Monopoly uses pygame-ce (the community-maintained fork). The code is
+# compatible with the regular pygame import path, so either package works.
+pygame-ce
