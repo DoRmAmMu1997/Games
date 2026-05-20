@@ -122,7 +122,14 @@ class MonopolyApp:
     """Owns the window and run loop and routes input to the game engine."""
 
     def __init__(self):
-        self.window = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        # `SCALED` lets pygame stretch our logical 1280x880 surface to fit the
+        # physical screen when we toggle into fullscreen (with letterboxing
+        # for aspect-ratio mismatch). It also makes `event.pos` and
+        # `pygame.mouse.get_pos()` keep reporting logical 1280x880
+        # coordinates in BOTH windowed and fullscreen modes, so the existing
+        # hit-detection just works on either.
+        self.window = pygame.display.set_mode(
+            (SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SCALED)
         pygame.display.set_caption(WINDOW_TITLE)
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
@@ -194,6 +201,11 @@ class MonopolyApp:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self._handle_click(event.pos)
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    # F11 toggles fullscreen. The SCALED flag set at startup
+                    # keeps logical coordinates intact, so we don't need to
+                    # remap anything ourselves.
+                    pygame.display.toggle_fullscreen()
             self._update(autotest)
             self._draw()
             pygame.display.flip()
