@@ -30,7 +30,10 @@ from settings import (
     SCREEN_WIDTH, STATS_PATH, WINDOW_TITLE,
 )
 
-# Action-bar button slots: two columns by three rows inside the bottom panel.
+# Action-bar button slots: two columns by four rows inside the bottom panel.
+# The prompt text now sits in its own strip ABOVE the bar (drawn by
+# `ui.draw_action_bar`), so the first row of buttons can start at the very
+# top of the bar without ever covering the prompt.
 _BAR_COLS = (892, 1086)
 _BAR_ROWS = (700, 748, 796, 844)
 _BTN_W, _BTN_H = 182, 40
