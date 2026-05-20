@@ -627,7 +627,10 @@ class MonopolyGame:
         if not contenders:
             self._finish_auction()
             return
-        # Advance clockwise from the bidder who just acted.
+        # Advance clockwise from the bidder who just acted. If that bidder
+        # just passed, they have been removed from `active`/`order`, so
+        # `index(...)` would fail -- the `start = -1` fallback then makes the
+        # next iteration land on `order[0]`, the first remaining bidder.
         order = auction["active"]
         start = order.index(auction["current"]) if auction["current"] in order else -1
         for offset in range(1, len(order) + 1):
