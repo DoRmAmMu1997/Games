@@ -529,9 +529,11 @@ class MonopolyApp:
         if self.mode == "trade" and self.trade is not None:
             panel = ui.trade_layout(game, self.trade)["panel"]
             return [
-                ui.Button((panel.centerx - 40, panel.y + 54, 30, 26), "<",
+                # Arrows are placed symmetrically and well clear of the
+                # centred "With: NAME" label, however wide the name is.
+                ui.Button((panel.centerx - 200, panel.y + 54, 30, 26), "<",
                           "trade_partner_prev"),
-                ui.Button((panel.centerx + 90, panel.y + 54, 30, 26), ">",
+                ui.Button((panel.centerx + 170, panel.y + 54, 30, 26), ">",
                           "trade_partner_next"),
                 ui.Button((panel.x + 30, panel.bottom - 104, 130, 30), "Give -$50",
                           "give_cash_down"),
