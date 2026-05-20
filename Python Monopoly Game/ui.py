@@ -269,12 +269,28 @@ def _blit_wrapped(surface, font, text, rect, color) -> None:
 # Action bar
 # --------------------------------------------------------------------------
 def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
-    """Draw the bottom action bar: a prompt line and the current buttons."""
+    """Draw the bottom action bar: a prompt strip and the button bar.
+
+    The prompt and the buttons sit in two SEPARATE rects so a button can
+    never cover the prompt text: a slim prompt strip lives in the gap above
+    the bar (between the event log and the button rows), and the button bar
+    sits at its original position so every button -- including the final
+    "Save & Quit" -- stays inside the visible 880-pixel window even on
+    displays that show slightly less than the full screen.
+    """
+    # Slim prompt strip, just above the bar. One line of text fits; longer
+    # prompts get truncated rather than wrapped under a button.
+    prompt_strip = pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 214,
+                               PANEL_WIDTH + 8, 26)
+    pygame.draw.rect(surface, PANEL_CARD, prompt_strip, border_radius=8)
+    pygame.draw.rect(surface, INK, prompt_strip, 1, border_radius=8)
+    _blit_wrapped(surface, fonts["small"], prompt,
+                  pygame.Rect(prompt_strip.x + 12, prompt_strip.y + 4,
+                              prompt_strip.width - 24, 20), WHITE)
+
     bar = pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 184, PANEL_WIDTH + 8, 178)
     pygame.draw.rect(surface, PANEL_CARD, bar, border_radius=8)
     pygame.draw.rect(surface, INK, bar, 1, border_radius=8)
-    _blit_wrapped(surface, fonts["small"], prompt,
-                  pygame.Rect(bar.x + 12, bar.y + 10, bar.width - 24, 50), WHITE)
     for button in buttons:
         button.draw(surface, fonts, mouse)
 
