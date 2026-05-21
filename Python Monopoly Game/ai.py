@@ -328,8 +328,11 @@ def _make_offer(game, player, partner, wanted):
     """Build an offer to win `wanted` that both `player` and `partner` accept."""
     give = {"props": [], "cash": 0, "jail": 0}
     get = {"props": [wanted], "cash": 0, "jail": 0}
-    # The best sweetener is a property that completes a monopoly for the partner.
-    swap = _property_completing_for(game, player, partner)
+    # The best sweetener is a property that completes a monopoly for the
+    # partner -- but never one from the group the AI is itself completing,
+    # or the AI would trade away the very tile it is bargaining for.
+    swap = _property_completing_for(game, player, partner,
+                                    _group_of(game, wanted))
     if swap is not None:
         give["props"].append(swap)
     affordable = max(0, player.cash - _profile(game).cash_cushion)
@@ -351,11 +354,18 @@ def _make_offer(game, player, partner, wanted):
     return None
 
 
-def _property_completing_for(game, giver, partner):
+def _property_completing_for(game, giver, partner, avoid_group=None):
     """Return a house-free property `giver` owns that completes a monopoly for
     `partner`, or None. Such a property is safe to give away -- the giver holds
-    only that single space of the group."""
+    only that single space of the group.
+
+    `avoid_group` is the colour group the AI is itself trying to complete in
+    this trade; a sweetener must never come from it, otherwise the AI gives
+    away a tile of the very group it is bargaining for (for a two-property
+    group that is a pointless 1-for-1 swap)."""
     for group, members in board_data.COLOR_GROUPS.items():
+        if group == avoid_group:
+            continue
         partner_owned = sum(1 for p in members if game.owners.get(p) == partner.index)
         if partner_owned != len(members) - 1:
             continue
@@ -391,10 +401,14 @@ def _trade_swing(game, evaluator, offer) -> int:
 
     swing = _bundle_value(game, incoming) - _bundle_value(game, outgoing)
     for pos in incoming["props"]:
-        if _completes_group_with(game, evaluator, pos, incoming["props"]):
+        # The evaluator gains `incoming` but gives away `outgoing` -- a tile
+        # being traded away must not still count toward a monopoly.
+        if _completes_group_with(game, evaluator, pos, incoming["props"],
+                                 outgoing["props"]):
             swing += game.board[pos].price * 2
     for pos in outgoing["props"]:
-        if _completes_group_with(game, opponent, pos, outgoing["props"]):
+        if _completes_group_with(game, opponent, pos, outgoing["props"],
+                                 incoming["props"]):
             swing -= game.board[pos].price
     return swing
 
@@ -446,11 +460,15 @@ def _completes_group(game, player, position) -> bool:
     return owned == len(members) - 1
 
 
-def _completes_group_with(game, player, position, extra_positions) -> bool:
-    """Like `_completes_group`, but counting `extra_positions` as also owned.
+def _completes_group_with(game, player, position, extra_positions,
+                          removed_positions=()) -> bool:
+    """Like `_completes_group`, but for a trade in flight.
 
-    Used when valuing a trade: the properties coming in are not owned yet but
-    would be once the trade goes through.
+    `extra_positions` are titles coming IN to `player` (not owned yet, but
+    will be); `removed_positions` are titles going OUT (owned now, but won't
+    be after the trade). A member only counts if `player` gains it or keeps
+    it -- otherwise valuing a swap would credit a monopoly the player has
+    just traded half of away.
     """
     group = _group_of(game, position)
     if not group:
@@ -458,6 +476,9 @@ def _completes_group_with(game, player, position, extra_positions) -> bool:
     members = board_data.COLOR_GROUPS[group]
     owned = 0
     for pos in members:
-        if game.owners.get(pos) == player.index or pos in extra_positions:
+        gained = pos in extra_positions
+        kept = (game.owners.get(pos) == player.index
+                and pos not in removed_positions)
+        if gained or kept:
             owned += 1
     return owned == len(members)
