@@ -82,13 +82,15 @@ def setup_buttons(has_save: bool) -> list:
         Button((380, 250, 44, 44), "+", "humans_up"),
         Button((90, 380, 44, 44), "<", "theme_prev"),
         Button((380, 380, 44, 44), ">", "theme_next"),
-        Button((90, 470, 320, 56), "Start Game", "start", color=(46, 116, 78)),
+        Button((90, 500, 44, 44), "<", "ai_profile_prev"),
+        Button((380, 500, 44, 44), ">", "ai_profile_next"),
+        Button((90, 590, 320, 56), "Start Game", "start", color=(46, 116, 78)),
         # A way out of the setup screen without closing the window.
         Button((SCREEN_WIDTH - 160, 30, 130, 40), "Quit", "quit",
                color=(120, 60, 60)),
     ]
     if has_save:
-        buttons.append(Button((90, 540, 320, 50), "Resume Saved Game",
+        buttons.append(Button((90, 660, 320, 50), "Resume Saved Game",
                               "resume", color=(58, 92, 140)))
     return buttons
 
@@ -99,7 +101,7 @@ def setup_name_field_rect(i: int) -> pygame.Rect:
 
 
 def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse,
-               stats, name_fields, active_field) -> None:
+               stats, name_fields, active_field, ai_profile_key) -> None:
     """Draw the new-game setup screen."""
     surface.fill(BG)
     _text(surface, fonts, "title", "MONOPOLY", (SCREEN_WIDTH // 2, 110),
@@ -116,6 +118,10 @@ def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse,
     _text(surface, fonts, "med", "Board", (90, 345))
     theme_name = board_data.THEMES[theme_key]["name"]
     _text(surface, fonts, "big", theme_name, (257, 402), GOLD, center=True)
+
+    _text(surface, fonts, "med", "AI Difficulty", (90, 465))
+    _text(surface, fonts, "big", ai_profile_key.replace("_", " ").title(),
+          (257, 522), GOLD, center=True)
 
     _draw_setup_info_panel(surface, fonts, stats, human_count,
                            name_fields, active_field)
@@ -294,6 +300,157 @@ def draw_center_card(surface, fonts, game) -> None:
     _blit_wrapped(surface, fonts["tiny"], words, panel.inflate(-24, -44), WHITE)
 
 
+def property_detail_lines(game, position: int) -> list[str]:
+    """Return compact deed-style detail lines for one board position."""
+    space = game.board[position]
+    lines = [space.name]
+    owner = game.owner_of(position)
+
+    if not space.is_ownable:
+        lines.append(space.kind.replace("_", " ").title())
+        return lines
+
+    lines.append(f"Owner: {owner.name}" if owner is not None else "Unowned")
+    if position in game.mortgaged:
+        lines.append("Mortgaged")
+    else:
+        lines.append(f"Mortgage: ${space.mortgage}")
+
+    if space.kind == "street":
+        lines.append(f"Rent: ${space.rent[0]} | 1H ${space.rent[1]} | 2H ${space.rent[2]}")
+        lines.append(f"3H ${space.rent[3]} | 4H ${space.rent[4]} | Hotel ${space.rent[5]}")
+        if owner is not None:
+            complete = "Complete group" if game.has_monopoly(owner, space.group) \
+                else "Group incomplete"
+            lines.append(complete)
+        lines.append(f"House cost: ${space.house_cost}")
+    elif space.kind == "railroad":
+        count = 0 if owner is None else game.count_railroads(owner)
+        lines.append(f"Railroads owned: {count}")
+        lines.append("Rent: $25 / $50 / $100 / $200")
+    elif space.kind == "utility":
+        count = 0 if owner is None else game.count_utilities(owner)
+        lines.append(f"Utilities owned: {count}")
+        lines.append("Rent: 4x dice with one utility, 10x with both")
+    return lines
+
+
+def draw_property_detail(surface, fonts, game, position: int) -> None:
+    """Draw a deed-style hover card in the lower board centre."""
+    lines = property_detail_lines(game, position)
+    panel = pygame.Rect(0, 0, 380, 176)
+    panel.center = (20 + (SCREEN_HEIGHT - 40) // 2,
+                    20 + (SCREEN_HEIGHT - 40) // 2 + 190)
+    pygame.draw.rect(surface, PANEL_BG, panel, border_radius=10)
+    pygame.draw.rect(surface, GOLD, panel, 2, border_radius=10)
+    _blit_wrapped(surface, fonts["med"], lines[0],
+                  pygame.Rect(panel.x + 18, panel.y + 14, panel.width - 36, 28),
+                  GOLD)
+    y = panel.y + 50
+    for line in lines[1:]:
+        _blit_wrapped(surface, fonts["tiny"], line,
+                      pygame.Rect(panel.x + 18, y, panel.width - 36, 18), WHITE)
+        y += 19
+        if y > panel.bottom - 18:
+            break
+
+
+ASSET_ROWS_PER_COL = 14
+
+
+def asset_layout(game, player) -> dict:
+    """Compute the asset-manager panel and clickable owned-title rows."""
+    panel = pygame.Rect(0, 0, 840, 620)
+    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    rows = []
+    owned = sorted(game.properties_of(player))
+    for i, position in enumerate(owned):
+        col = i // ASSET_ROWS_PER_COL
+        row = i % ASSET_ROWS_PER_COL
+        rect = pygame.Rect(panel.x + 28 + col * 220,
+                           panel.y + 110 + row * 31, 204, 26)
+        rows.append((rect, position))
+    return {
+        "panel": panel,
+        "title_rows": rows,
+        "detail": pygame.Rect(panel.x + 482, panel.y + 92, 328, 344),
+    }
+
+
+def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None:
+    """Draw the owned-title manager and engine-authored action reasons."""
+    _dim(surface)
+    player = game.current_player
+    layout = asset_layout(game, player)
+    panel = layout["panel"]
+    detail = layout["detail"]
+    pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
+    pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
+    _text(surface, fonts, "big", "ASSET MANAGER",
+          (panel.centerx, panel.y + 30), GOLD, center=True)
+    _text(surface, fonts, "small",
+          f"{player.name}: select a title to manage.",
+          (panel.x + 28, panel.y + 70), WHITE)
+    _text(surface, fonts, "small", "Owned titles",
+          (panel.x + 28, panel.y + 88), SUCCESS)
+
+    for row, position in layout["title_rows"]:
+        if selected_position == position:
+            pygame.draw.rect(surface, (60, 84, 62), row.inflate(4, 4), border_radius=6)
+            pygame.draw.rect(surface, GOLD, row.inflate(4, 4), 1, border_radius=6)
+
+    pygame.draw.rect(surface, PANEL_CARD, detail, border_radius=8)
+    pygame.draw.rect(surface, INK, detail, 1, border_radius=8)
+    if selected_position is None:
+        _text(surface, fonts, "small", "No title selected.",
+              (detail.x + 18, detail.y + 18), SOFT)
+    else:
+        lines = property_detail_lines(game, selected_position)
+        _blit_wrapped(surface, fonts["med"], lines[0],
+                      pygame.Rect(detail.x + 18, detail.y + 16,
+                                  detail.width - 36, 30), GOLD)
+        y = detail.y + 58
+        for line in lines[1:]:
+            _blit_wrapped(surface, fonts["tiny"], line,
+                          pygame.Rect(detail.x + 18, y, detail.width - 36, 18),
+                          WHITE)
+            y += 20
+            if y > detail.y + 178:
+                break
+
+        _text(surface, fonts, "small", "Action status",
+              (detail.x + 18, detail.y + 202), SUCCESS)
+        action_names = {
+            "build": "Build",
+            "sell": "Sell",
+            "mortgage": "Mortgage",
+            "unmortgage": "Lift",
+        }
+        actions = game.asset_actions_for(player, selected_position)
+        y = detail.y + 230
+        for key in ("build", "sell", "mortgage", "unmortgage"):
+            status = actions[key]
+            line = (f"{action_names[key]}: ready" if status["allowed"]
+                    else f"{action_names[key]}: {status['reason']}")
+            _blit_wrapped(surface, fonts["tiny"], line,
+                          pygame.Rect(detail.x + 18, y, detail.width - 36, 34),
+                          SUCCESS if status["allowed"] else SOFT)
+            y += 28
+
+    _text(surface, fonts, "tiny",
+          "M = mortgaged. Street markers show building level; H means hotel.",
+          (panel.x + 28, panel.bottom - 38), SOFT)
+    for button in buttons:
+        button.draw(surface, fonts, mouse)
+    for row, position in layout["title_rows"]:
+        if position in game.mortgaged:
+            _text(surface, fonts, "tiny", "M", (row.right - 16, row.y + 5), DANGER)
+        elif game.houses.get(position, 0):
+            level = game.houses[position]
+            marker = "H" if level == 5 else str(level)
+            _text(surface, fonts, "tiny", marker, (row.right - 16, row.y + 5), GOLD)
+
+
 def _blit_wrapped(surface, font, text, rect, color) -> None:
     """Word-wrap `text` inside `rect` and draw it."""
     words = text.split()
@@ -354,12 +511,16 @@ def draw_auction(surface, fonts, game, buttons, mouse) -> None:
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
     auction = game.auction
     space = game.board[auction["position"]]
-    _text(surface, fonts, "big", "AUCTION", (panel.centerx, panel.y + 30),
+    title = ("BANK AUCTION" if auction.get("context") == "bankruptcy" else "AUCTION")
+    _text(surface, fonts, "big", title, (panel.centerx, panel.y + 30),
           GOLD, center=True)
     _text(surface, fonts, "med", space.name, (panel.centerx, panel.y + 72),
           WHITE, center=True)
     _text(surface, fonts, "small", f"List price ${space.price}",
           (panel.centerx, panel.y + 102), SOFT, center=True)
+    if auction.get("context") == "bankruptcy":
+        _text(surface, fonts, "tiny", game.auction_context_message(),
+              (panel.centerx, panel.y + 122), SOFT, center=True)
     high = auction["high_bid"]
     bidder = auction["high_bidder"]
     bid_text = (f"High bid ${high} by {game.players[bidder].name}"
@@ -377,9 +538,9 @@ def draw_auction(surface, fonts, game, buttons, mouse) -> None:
 # Trade overlay
 # --------------------------------------------------------------------------
 #: How many property rows are visible per side at once before the user has
-#: to scroll. Set so the 15th row's bottom stays well above the cash labels
-#: drawn at panel.bottom - 132.
-TRADE_VISIBLE_ROWS = 15
+#: to scroll. The gap below row 14 leaves space for consequence text before
+#: the cash labels and cash steppers.
+TRADE_VISIBLE_ROWS = 14
 
 
 def trade_layout(game, trade) -> dict:
@@ -473,6 +634,15 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     _text(surface, fonts, "small",
           f"Cash you receive: ${trade['get']['cash']}",
           (panel.x + 420, panel.bottom - 132), WHITE)
+    consequence_y = panel.bottom - 174
+    for line in game.trade_consequence_lines(trade):
+        _text(surface, fonts, "tiny", line, (panel.x + 30, consequence_y), GOLD)
+        consequence_y += 18
+    error = game.trade_error(trade)
+    if error:
+        _blit_wrapped(surface, fonts["tiny"], error,
+                      pygame.Rect(panel.x + 30, consequence_y, panel.width - 60, 34),
+                      DANGER)
     for button in buttons:
         button.draw(surface, fonts, mouse)
 
@@ -534,6 +704,10 @@ def draw_trade_response(surface, fonts, game, buttons, mouse) -> None:
         y += 18
     if you_give["cash"]:
         _text(surface, fonts, "tiny", f"- ${you_give['cash']} cash", (panel.x + 44, y))
+    consequence_y = panel.bottom - 100
+    for line in game.trade_consequence_lines(offer):
+        _text(surface, fonts, "tiny", line, (panel.x + 30, consequence_y), GOLD)
+        consequence_y += 18
     for button in buttons:
         button.draw(surface, fonts, mouse)
 

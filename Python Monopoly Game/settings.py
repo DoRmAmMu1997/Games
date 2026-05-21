@@ -61,12 +61,9 @@ GO_TO_JAIL_POSITION = 30
 
 
 # --------------------------------------------------------------------------
-# AI tuning knobs (see ai.py)
+# AI timing (difficulty/profile tuning lives in ai.py)
 # --------------------------------------------------------------------------
-AI_CASH_CUSHION = 200         # cash an AI tries to keep spare before spending
-AI_BUILD_RESERVE = 250        # cash kept back before spending on houses
 AI_TURN_DELAY_MS = 750        # pause between AI actions so a human can watch
-AI_TRADE_ACCEPT_MARGIN = 60   # an offer must beat the status quo by this much
 
 
 # --------------------------------------------------------------------------
