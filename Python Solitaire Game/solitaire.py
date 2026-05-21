@@ -1397,6 +1397,13 @@ class SolitaireApp:
 
     def start_new_game(self) -> None:
         """Deal a fresh game and clear all UI-only state."""
+        # Guard an in-progress game: a non-empty history with no win/loss yet
+        # means real moves would be discarded. Covers the button and Ctrl+N.
+        if self.history and not self.game.won and not self.game.lost:
+            if not messagebox.askyesno(
+                    "New Game",
+                    "Start a new game? Your current progress will be lost."):
+                return
         self.game.new_game()
         self.selection = None
         self.hint_move = None

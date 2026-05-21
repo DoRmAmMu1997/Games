@@ -93,7 +93,13 @@ def setup_buttons(has_save: bool) -> list:
     return buttons
 
 
-def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse) -> None:
+def setup_name_field_rect(i: int) -> pygame.Rect:
+    """Screen rect of the i-th human-player name box on the setup screen."""
+    return pygame.Rect(620, 393 + i * 50, 330, 38)
+
+
+def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse,
+               stats, name_fields, active_field) -> None:
     """Draw the new-game setup screen."""
     surface.fill(BG)
     _text(surface, fonts, "title", "MONOPOLY", (SCREEN_WIDTH // 2, 110),
@@ -111,8 +117,49 @@ def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse) -> None:
     theme_name = board_data.THEMES[theme_key]["name"]
     _text(surface, fonts, "big", theme_name, (257, 402), GOLD, center=True)
 
+    _draw_setup_info_panel(surface, fonts, stats, human_count,
+                           name_fields, active_field)
+
     for button in buttons:
         button.draw(surface, fonts, mouse)
+
+
+def _draw_setup_info_panel(surface, fonts, stats, human_count,
+                           name_fields, active_field) -> None:
+    """Draw the right-hand panel: lifetime stats on top, name boxes below."""
+    panel = pygame.Rect(470, 205, 720, 410)
+    pygame.draw.rect(surface, PANEL_CARD, panel, border_radius=10)
+    pygame.draw.rect(surface, INK, panel, 1, border_radius=10)
+
+    # Lifetime stats -- already loaded from stats.json, just never shown before.
+    _text(surface, fonts, "med", "Lifetime Stats",
+          (panel.x + 26, panel.y + 16), GOLD)
+    games = stats.get("games", 0)
+    wins = stats.get("human_wins", 0)
+    rate = f"{round(100 * wins / games)}%" if games else "0%"
+    for row, label in enumerate((f"Games played:  {games}",
+                                 f"Human wins:  {wins}",
+                                 f"Win rate:  {rate}")):
+        _text(surface, fonts, "small", label,
+              (panel.x + 26, panel.y + 52 + row * 26), WHITE)
+
+    # One name box per human player; AI players are auto-named.
+    _text(surface, fonts, "med", "Player Names",
+          (panel.x + 26, panel.y + 146), GOLD)
+    for i in range(human_count):
+        box = setup_name_field_rect(i)
+        _text(surface, fonts, "small", f"Human {i + 1}",
+              (panel.x + 26, box.y + 10), SOFT)
+        focused = active_field == i
+        pygame.draw.rect(surface, PANEL_BG, box, border_radius=6)
+        pygame.draw.rect(surface, GOLD if focused else INK, box,
+                         2, border_radius=6)
+        text = name_fields[i]
+        _text(surface, fonts, "small", text, (box.x + 10, box.y + 10), WHITE)
+        if focused:
+            caret_x = box.x + 12 + fonts["small"].size(text)[0]
+            pygame.draw.line(surface, WHITE, (caret_x, box.y + 9),
+                             (caret_x, box.y + 29), 2)
 
 
 # --------------------------------------------------------------------------
@@ -516,3 +563,38 @@ def _dim(surface) -> None:
     veil = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
     veil.fill((0, 0, 0, 150))
     surface.blit(veil, (0, 0))
+
+
+# --------------------------------------------------------------------------
+# Confirmation modal (used by the setup screen's overwrite-save guard)
+# --------------------------------------------------------------------------
+def confirm_panel_rect() -> pygame.Rect:
+    """The centred rect of the yes/no confirmation modal."""
+    panel = pygame.Rect(0, 0, 520, 220)
+    panel.center = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+    return panel
+
+
+def confirm_buttons() -> list:
+    """The Yes / Cancel buttons for the confirmation modal."""
+    panel = confirm_panel_rect()
+    y = panel.bottom - 62
+    return [
+        Button((panel.centerx - 170, y, 160, 46), "Yes, start",
+               "confirm_new_yes", color=(46, 116, 78)),
+        Button((panel.centerx + 10, y, 160, 46), "Cancel",
+               "confirm_new_no", color=(120, 60, 60)),
+    ]
+
+
+def draw_confirm(surface, fonts, lines, buttons, mouse) -> None:
+    """Draw a centred yes/no confirmation modal over the current screen."""
+    _dim(surface)
+    panel = confirm_panel_rect()
+    pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
+    pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
+    for i, line in enumerate(lines):
+        _text(surface, fonts, "med", line,
+              (panel.centerx, panel.y + 48 + i * 32), WHITE, center=True)
+    for button in buttons:
+        button.draw(surface, fonts, mouse)
