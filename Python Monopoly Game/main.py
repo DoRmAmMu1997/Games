@@ -143,6 +143,11 @@ class MonopolyApp:
         # Setup-screen choices.
         self.human_count = 1
         self.theme_index = 0
+        # Editable human-player names. The list is kept at length 4 so
+        # toggling the human count down then back up restores prior entries.
+        self.name_fields = ["Player 1", "Player 2", "Player 3", "Player 4"]
+        self.active_field: int | None = None    # focused name box, or None
+        self.confirm_new_game = False           # is the overwrite modal open?
 
         # In-game interaction state.
         self.mode = "normal"          # "normal", "build", "mortgage", "trade"
@@ -151,6 +156,7 @@ class MonopolyApp:
         self.message = ""
         self.stats = load_stats()
         self.buttons: list = []
+        self._autosave_current: int | None = None   # last-seen turn marker
 
         # Visual polish: tokens slide between spaces and the dice shuffle on
         # a roll instead of snapping to their final value. The AI pauses
@@ -177,6 +183,8 @@ class MonopolyApp:
         self.dice_show = (0, 0)
         self.dice_anim_remaining_ms = 0
         self.last_game_dice = (0, 0)
+        # Autosave baseline: a save fires when the turn (current player) moves.
+        self._autosave_current = game.current
 
     def _end_game(self) -> None:
         """Record the result and move to the end screen."""
@@ -206,6 +214,11 @@ class MonopolyApp:
                     # keeps logical coordinates intact, so we don't need to
                     # remap anything ourselves.
                     pygame.display.toggle_fullscreen()
+                elif (event.type == pygame.KEYDOWN and self.screen == "setup"
+                      and self.active_field is not None
+                      and not self.confirm_new_game):
+                    # Typing into a focused human-name box on the setup screen.
+                    self._type_into_name_field(event)
                 elif (event.type == pygame.MOUSEWHEEL
                       and self.mode == "trade" and self.trade is not None):
                     # Scroll whichever side of the trade dialog the cursor
@@ -225,6 +238,12 @@ class MonopolyApp:
         if self.game.phase == "game_over":
             self._end_game()
             return
+
+        # Autosave once per completed turn: the engine advances `current` to
+        # the next player when a turn ends, for both humans and AI.
+        if self.game.current != self._autosave_current:
+            self._autosave_current = self.game.current
+            save_game(self.game)
 
         elapsed = self.clock.get_time()
 
@@ -273,7 +292,7 @@ class MonopolyApp:
     def _handle_click(self, pos) -> None:
         """Route a left-click to the right handler for the current screen."""
         if self.screen == "setup":
-            self._click_button(pos)
+            self._click_setup(pos)
         elif self.screen == "over":
             self._click_button(pos)
         elif self.screen == "playing":
@@ -295,6 +314,34 @@ class MonopolyApp:
                 self._on_button(button.key)
                 return True
         return False
+
+    def _click_setup(self, pos) -> None:
+        """Route a setup-screen click: modal buttons, buttons, or a name box."""
+        if self.confirm_new_game:
+            self._click_button(pos)          # only the modal Yes/Cancel react
+            return
+        if self._click_button(pos):
+            return
+        # A click that missed every button may be focusing a name box.
+        self.active_field = None
+        for i in range(self.human_count):
+            if ui.setup_name_field_rect(i).collidepoint(pos):
+                self.active_field = i
+                return
+
+    def _type_into_name_field(self, event) -> None:
+        """Apply one keystroke to the focused setup-screen name box."""
+        i = self.active_field
+        if i is None:
+            return
+        if event.key == pygame.K_BACKSPACE:
+            self.name_fields[i] = self.name_fields[i][:-1]
+        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
+                           pygame.K_ESCAPE, pygame.K_TAB):
+            self.active_field = None
+        elif event.unicode and event.unicode.isprintable() \
+                and len(self.name_fields[i]) < 14:
+            self.name_fields[i] += event.unicode
 
     def _click_board(self, pos) -> None:
         """In build/mortgage mode, act on the board space that was clicked."""
@@ -336,7 +383,16 @@ class MonopolyApp:
         elif key == "theme_next":
             self.theme_index = (self.theme_index + 1) % len(THEME_ORDER)
         elif key == "start":
+            # Guard the player's saved game: confirm before overwriting it.
+            if has_saved_game():
+                self.confirm_new_game = True
+            else:
+                self._begin_new_game()
+        elif key == "confirm_new_yes":
+            self.confirm_new_game = False
             self._begin_new_game()
+        elif key == "confirm_new_no":
+            self.confirm_new_game = False
         elif key == "resume":
             saved = load_saved_game()
             if saved is not None:
@@ -406,7 +462,11 @@ class MonopolyApp:
         specs = []
         for i in range(4):
             human = i < self.human_count
-            name = f"Player {i + 1}" if human else f"{ai_names[i]} (AI)"
+            if human:
+                # Fall back to "Player N" if the name box was left blank.
+                name = self.name_fields[i].strip() or f"Player {i + 1}"
+            else:
+                name = f"{ai_names[i]} (AI)"
             specs.append((name, human))
         theme = THEME_ORDER[self.theme_index]
         self.start_game(MonopolyGame(specs, theme=theme))
@@ -481,7 +541,13 @@ class MonopolyApp:
         if self.screen == "setup":
             theme = THEME_ORDER[self.theme_index]
             ui.draw_setup(self.window, self.fonts, self.human_count, theme,
-                          self.buttons, mouse)
+                          self.buttons, mouse, self.stats, self.name_fields,
+                          self.active_field)
+            if self.confirm_new_game:
+                ui.draw_confirm(
+                    self.window, self.fonts,
+                    ["A saved game will be overwritten.", "Start a new game?"],
+                    self.buttons, mouse)
         elif self.screen == "over":
             ui.draw_game_over(self.window, self.fonts, self.game, self.buttons, mouse)
         elif self.screen == "playing":
@@ -531,7 +597,9 @@ class MonopolyApp:
         game = self.game
         actor = game.players[game.actor()]
         if not actor.is_human:
-            return f"{actor.name} (AI) is taking their turn..."
+            # AI player names already carry an "(AI)" suffix -- don't add it
+            # again here or the prompt reads "Mira (AI) (AI) is taking...".
+            return f"{actor.name} is taking their turn..."
         if self.mode == "build":
             return "Click a property in one of your monopolies to build. Then Done."
         if self.mode == "mortgage":
@@ -555,6 +623,8 @@ class MonopolyApp:
     def _build_buttons(self) -> list:
         """Build the buttons appropriate to the current screen and state."""
         if self.screen == "setup":
+            if self.confirm_new_game:
+                return ui.confirm_buttons()
             return ui.setup_buttons(has_saved_game())
         if self.screen == "over":
             return [
