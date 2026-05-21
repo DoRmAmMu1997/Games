@@ -10,7 +10,7 @@ keeps its progress under `%APPDATA%` so saves survive moving the executable.
 |---|---|---|
 | `Python Sputnika Game/` | **[Orbital Orchard](Python%20Sputnika%20Game/README.md)** — a Suika-style merge puzzle. Drop celestial bodies into a bubble, bounce and merge them up to a Quasar Crown. | pygame |
 | `Python Solitaire Game/` | **[Klondike Solitaire](Python%20Solitaire%20Game/README.md)** — the classic single-player card game with hints, auto-solve, undo, and a confetti win celebration. | tkinter |
-| `Python Monopoly Game/` | **[Monopoly](Python%20Monopoly%20Game/README.md)** — full standard rules, 1-4 humans + AI to fill out four players, three themed boards, auctions, trading, and save & resume. | pygame |
+| `Python Monopoly Game/` | **[Monopoly](Python%20Monopoly%20Game/README.md)** — full standard rules, 1-4 humans + AI to fill out four players, thirteen themed boards, auctions, trading, and autosave + resume. | pygame |
 
 Click into a folder for the full per-game README with rules, controls,
 features and build notes.

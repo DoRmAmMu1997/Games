@@ -13,14 +13,100 @@ opponent for casual play, not a perfect solver.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import board_data
-from settings import AI_BUILD_RESERVE, AI_CASH_CUSHION, AI_TRADE_ACCEPT_MARGIN, JAIL_FINE
+from settings import JAIL_FINE
 
 # Colour groups roughly ordered by how rewarding they are to develop -- the
 # orange and red streets are landed on most often, so the AI builds them first.
 GROUP_BUILD_PRIORITY = [
     "orange", "red", "yellow", "light_blue", "pink", "green", "dark_blue", "brown",
 ]
+
+
+@dataclass(frozen=True)
+class AIProfile:
+    """Tunable decision knobs for one explainable AI difficulty."""
+
+    key: str
+    cash_cushion: int
+    build_reserve: int
+    trade_accept_margin: int
+    value_scale: float
+    auction_reserve: int
+    blocker_bonus: float
+
+
+AI_PROFILES = {
+    "cautious": AIProfile(
+        key="cautious",
+        cash_cushion=320,
+        build_reserve=360,
+        trade_accept_margin=110,
+        value_scale=0.88,
+        auction_reserve=140,
+        blocker_bonus=0.18,
+    ),
+    "standard": AIProfile(
+        key="standard",
+        cash_cushion=200,
+        build_reserve=250,
+        trade_accept_margin=60,
+        value_scale=1.0,
+        auction_reserve=60,
+        blocker_bonus=0.35,
+    ),
+    "sharp": AIProfile(
+        key="sharp",
+        cash_cushion=140,
+        build_reserve=180,
+        trade_accept_margin=30,
+        value_scale=1.12,
+        auction_reserve=40,
+        blocker_bonus=0.55,
+    ),
+}
+
+
+def _profile(game) -> AIProfile:
+    """Return the named game-wide AI profile, falling back to standard."""
+    return AI_PROFILES.get(getattr(game, "ai_profile", "standard"),
+                           AI_PROFILES["standard"])
+
+
+def _trace(game, player, message: str) -> None:
+    """Leave one compact explainable AI decision in the shared event log."""
+    game._note(f"{player.name}: {message}")
+
+
+def property_value(game, player, position, profile: AIProfile | None = None) -> int:
+    """Estimate a title's strategic value to `player`.
+
+    Valuation stays deliberately readable: title price starts the estimate,
+    rent potential raises streets with development upside, collections raise
+    railroads/utilities, monopoly progress raises titles the player wants, and
+    a smaller denial bonus prices blocking an opponent's last title.
+    """
+    profile = profile or _profile(game)
+    space = game.board[position]
+    value = float(space.price)
+
+    if space.kind == "street":
+        value += space.rent[-1] * 0.08
+        if _completes_group(game, player, position):
+            value *= 2.35
+        elif _owns_some_of_group(game, player, position):
+            value *= 1.32
+        elif any(_completes_group(game, opponent, position)
+                 for opponent in game.other_players(player)):
+            value *= 1.0 + profile.blocker_bonus
+    elif space.kind == "railroad":
+        value *= 1.0 + 0.28 * game.count_railroads(player)
+    elif space.kind == "utility":
+        value *= 1.12 if game.count_utilities(player) else 0.95
+
+    return max(space.mortgage, int(round(value * profile.value_scale)))
 
 
 # --------------------------------------------------------------------------
@@ -42,7 +128,10 @@ def take_action(game) -> None:
     elif state == "post_roll":
         _do_post_roll(game, player)
     elif state == "trade_response":
-        game.respond_trade(evaluate_offer(game, player, game.pending_trade))
+        accept = evaluate_offer(game, player, game.pending_trade)
+        _trace(game, player, "accepts a trade on value." if accept
+               else "rejects a weak trade.")
+        game.respond_trade(accept)
 
 
 # --------------------------------------------------------------------------
@@ -55,6 +144,7 @@ def _do_pre_roll(game, player) -> None:
         return
     target = _best_build(game, player)
     if target is not None:
+        _trace(game, player, f"builds into {game.board[target].group} pressure.")
         game.build_house(target)
         return
     game.roll_dice()
@@ -64,15 +154,18 @@ def _do_post_roll(game, player) -> None:
     """After moving: build, lift a mortgage if flush, otherwise end the turn."""
     target = _best_build(game, player)
     if target is not None:
+        _trace(game, player, f"builds into {game.board[target].group} pressure.")
         game.build_house(target)
         return
     if game._trades_proposed == 0:
         proposal = propose_trade(game, player)
         if proposal is not None:
+            _trace(game, player, "offers a trade for group value.")
             game.propose_trade(proposal)
             return
     lift = _best_unmortgage(game, player)
     if lift is not None:
+        _trace(game, player, f"lifts {game.board[lift].name} for rent.")
         game.unmortgage(lift)
         return
     game.end_turn()
@@ -98,6 +191,7 @@ def _best_build(game, player):
     The AI only builds when it owns a complete colour group, can do so legally
     (the engine's even-building rule), and still keeps a cash reserve.
     """
+    profile = _profile(game)
     for group in GROUP_BUILD_PRIORITY:
         if not game.has_monopoly(player, group):
             continue
@@ -107,7 +201,7 @@ def _best_build(game, player):
         for pos in members:
             if game.can_build(player, pos):
                 cost = game.board[pos].house_cost
-                if player.cash - cost >= AI_BUILD_RESERVE:
+                if player.cash - cost >= profile.build_reserve:
                     return pos
     return None
 
@@ -126,7 +220,7 @@ def _best_unmortgage(game, player):
     mortgaged.sort(key=lambda pos: not _in_monopoly(game, player, pos))
     for pos in mortgaged:
         cost = int(round(game.board[pos].mortgage * 1.1))
-        if player.cash - cost >= AI_CASH_CUSHION:
+        if player.cash - cost >= _profile(game).cash_cushion:
             return pos
     return None
 
@@ -136,15 +230,19 @@ def _best_unmortgage(game, player):
 # --------------------------------------------------------------------------
 def _do_buy_decision(game, player) -> None:
     """Decide whether to buy the space just landed on, or send it to auction."""
-    if _wants_to_buy(game, player, game.pending_purchase):
+    position = game.pending_purchase
+    if _wants_to_buy(game, player, position):
+        _trace(game, player, f"buys {game.board[position].name}; value wins.")
         game.buy_property()
     else:
+        _trace(game, player, f"sends {game.board[position].name} to auction.")
         game.decline_property()
 
 
 def _wants_to_buy(game, player, position) -> bool:
     """True if the AI should buy `position` at its list price."""
     space = game.board[position]
+    profile = _profile(game)
     if player.cash < space.price:
         return False
     completes = _completes_group(game, player, position)
@@ -155,7 +253,8 @@ def _wants_to_buy(game, player, position) -> bool:
     if space.kind in ("railroad", "utility"):
         return player.cash - space.price >= 0
     # Streets: buy freely while cash is healthy, or if it extends a group.
-    if player.cash - space.price >= AI_CASH_CUSHION:
+    if property_value(game, player, position, profile) >= space.price \
+            and player.cash - space.price >= profile.cash_cushion:
         return True
     if _owns_some_of_group(game, player, position):
         return player.cash - space.price >= 0
@@ -174,24 +273,19 @@ def _do_auction(game, player) -> None:
     step = max(10, game.board[position].price // 20)
     bid = high + step
     if bid <= ceiling and bid <= player.cash:
+        _trace(game, player, f"bids ${bid}; ceiling ${ceiling}.")
         game.auction_bid(bid)
     else:
+        _trace(game, player, f"passes at ${high}; ceiling ${ceiling}.")
         game.auction_pass()
 
 
 def _auction_ceiling(game, player, position) -> int:
     """The most this AI is willing to pay for `position` at auction."""
-    space = game.board[position]
-    value = space.price
-    if _completes_group(game, player, position):
-        value = int(value * 2.5)          # finishing a monopoly is worth a lot
-    elif _owns_some_of_group(game, player, position):
-        value = int(value * 1.35)
-    elif space.kind == "railroad":
-        # Each extra railroad is worth more than the last.
-        value = int(value * (1.0 + 0.3 * game.count_railroads(player)))
+    profile = _profile(game)
+    value = property_value(game, player, position, profile)
     # Never bid into bankruptcy -- always keep a small cushion.
-    return min(value, max(0, player.cash - 50))
+    return min(value, max(0, player.cash - profile.auction_reserve))
 
 
 # --------------------------------------------------------------------------
@@ -238,7 +332,7 @@ def _make_offer(game, player, partner, wanted):
     swap = _property_completing_for(game, player, partner)
     if swap is not None:
         give["props"].append(swap)
-    affordable = max(0, player.cash - AI_CASH_CUSHION)
+    affordable = max(0, player.cash - _profile(game).cash_cushion)
     # Search upward for the least cash the partner will accept. The smaller
     # this number ends up being, the better the deal is for THIS AI -- so the
     # first cash amount the partner accepts is also the best one we will find
@@ -278,7 +372,7 @@ def evaluate_offer(game, player, offer) -> bool:
         return False
     if player.index not in (offer["from"], offer["to"]):
         return False
-    return _trade_swing(game, player, offer) >= AI_TRADE_ACCEPT_MARGIN
+    return _trade_swing(game, player, offer) >= _profile(game).trade_accept_margin
 
 
 def _trade_swing(game, evaluator, offer) -> int:
@@ -310,7 +404,11 @@ def _bundle_value(game, bundle) -> int:
     total = bundle["cash"] + bundle["jail"] * 50
     for pos in bundle["props"]:
         space = game.board[pos]
-        total += space.mortgage if pos in game.mortgaged else space.price
+        if pos in game.mortgaged:
+            # The receiver owes the immediate interest on a mortgaged title.
+            total += space.mortgage - space.mortgage // 10
+        else:
+            total += property_value(game, game.players[game.owners[pos]], pos)
     return total
 
 

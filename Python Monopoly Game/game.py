@@ -35,6 +35,9 @@ RAILROAD_RENT = {1: 25, 2: 50, 3: 100, 4: 200}
 # A game that somehow never ends is force-finished after this many turns
 # (a safety net for the headless AI test; real games end long before this).
 TURN_SAFETY_CAP = 3000
+# Saves without this field came from the initial game release. Version 2 adds
+# named AI profiles and guards future loaders from guessing at unknown payloads.
+SAVE_VERSION = 2
 
 
 class MonopolyGame:
@@ -44,7 +47,7 @@ class MonopolyGame:
     # Construction
     # ----------------------------------------------------------------------
     def __init__(self, player_specs: list[tuple[str, bool]], theme: str = "classic",
-                 seed: int | None = None):
+                 seed: int | None = None, ai_profile: str = "standard"):
         """Start a fresh game.
 
         `player_specs` is a list of (name, is_human) pairs, one per player.
@@ -53,6 +56,7 @@ class MonopolyGame:
         """
         self.rng = random.Random(seed)
         self.theme = theme
+        self.ai_profile = ai_profile
         self.board = board_data.build_board(theme)
 
         self.players = [
@@ -86,6 +90,7 @@ class MonopolyGame:
         # Pending-decision context (only one is active at a time).
         self.pending_purchase: int | None = None
         self.auction: dict | None = None
+        self.bankruptcy_auction_queue: list[int] = []
         self.pending_trade: dict | None = None
         self._awaiting_before_trade = "pre_roll"
         self._trades_proposed = 0       # trade offers made this turn (AI cap)
@@ -278,11 +283,15 @@ class MonopolyGame:
             creditor.cash += player.cash
             for pos in owned:
                 self.owners[pos] = creditor.index
+            self._charge_mortgage_transfer_interest(creditor, owned)
         else:
-            # Bankrupt to the bank: the land simply becomes unowned again.
+            # Bankrupt to the bank: the Bank clears mortgages, then offers
+            # every released property through the same public auction flow.
             for pos in owned:
                 self.owners.pop(pos, None)
                 self.mortgaged.discard(pos)
+            self.bankruptcy_auction_queue.extend(owned)
+            self._start_next_bankruptcy_auction()
         player.cash = 0
 
         # Any held jail cards go back to their decks.
@@ -302,6 +311,25 @@ class MonopolyGame:
             self.winner = survivors[0].index if survivors else None
             if self.winner is not None:
                 self._note(f"{self.players[self.winner].name} wins the game!")
+
+    def mortgage_transfer_interest(self, positions: list[int]) -> int:
+        """Return interest due now if `positions` transfer while mortgaged."""
+        return sum(self.board[pos].mortgage // 10
+                   for pos in positions if pos in self.mortgaged)
+
+    def _charge_mortgage_transfer_interest(self, recipient: Player,
+                                           positions: list[int]) -> None:
+        """Charge the 10% interest due when mortgaged land changes hands.
+
+        The classic rules require the new owner to pay the interest at once.
+        This game keeps the transferred title mortgaged after that payment;
+        the owner may lift it later through the normal unmortgage action.
+        """
+        interest = self.mortgage_transfer_interest(positions)
+        if interest <= 0:
+            return
+        self._note(f"{recipient.name} pays ${interest} mortgage transfer interest.")
+        self.charge(recipient, interest)
 
     # ----------------------------------------------------------------------
     # Turn flow
@@ -433,6 +461,8 @@ class MonopolyGame:
         to the post-roll phase where they may build/trade and end the turn.
         """
         if self.phase == "game_over":
+            return
+        if self.awaiting == "auction" and self.auction is not None:
             return
         if self.current_player.bankrupt:
             # A player who bankrupted on this landing cannot keep their turn.
@@ -585,7 +615,7 @@ class MonopolyGame:
         self.pending_purchase = None
         self._start_auction(position)
 
-    def _start_auction(self, position: int) -> None:
+    def _start_auction(self, position: int, context: str = "landing") -> None:
         """Open an ascending-bid auction for a property among all players."""
         bidders = [p.index for p in self.active_players()]
         self.auction = {
@@ -594,9 +624,26 @@ class MonopolyGame:
             "high_bid": 0,
             "high_bidder": None,
             "current": bidders[0],
+            "context": context,
         }
         self.awaiting = "auction"
-        self._note(f"{self.board[position].name} goes up for auction.")
+        if context == "bankruptcy":
+            self._note(f"Bank bankruptcy auction: {self.board[position].name}.")
+        else:
+            self._note(f"{self.board[position].name} goes up for auction.")
+
+    def _start_next_bankruptcy_auction(self) -> bool:
+        """Start the next Bank auction caused by bankruptcy, if one remains."""
+        if not self.bankruptcy_auction_queue:
+            return False
+        self._start_auction(self.bankruptcy_auction_queue.pop(0), context="bankruptcy")
+        return True
+
+    def auction_context_message(self) -> str:
+        """Explain why the active auction exists for prompts and dialogs."""
+        if self.auction is not None and self.auction.get("context") == "bankruptcy":
+            return "Bank bankruptcy auction: released title returns to bidders."
+        return "Open auction for an unbought title."
 
     def auction_bid(self, amount: int) -> None:
         """The current bidder raises the bid to `amount`."""
@@ -654,33 +701,128 @@ class MonopolyGame:
         else:
             self._note(f"{self.board[position].name} received no bids.")
         self.auction = None
+        if self._start_next_bankruptcy_auction():
+            return
         self._continue_after_landing()
 
     # ----------------------------------------------------------------------
     # Building, mortgaging
     # ----------------------------------------------------------------------
-    def can_build(self, player: Player, position: int) -> bool:
-        """True if `player` may legally build one more house/hotel on a space."""
+    def asset_actions_for(self, player: Player, position: int) -> dict[str, dict]:
+        """Describe legal management actions and reasons for one owned title."""
+        return {
+            "build": self._asset_action(
+                self.can_build(player, position),
+                self._build_blocker(player, position),
+            ),
+            "sell": self._asset_action(
+                self.can_sell_building(player, position),
+                self._sell_blocker(player, position),
+            ),
+            "mortgage": self._asset_action(
+                self.can_mortgage(player, position),
+                self._mortgage_blocker(player, position),
+            ),
+            "unmortgage": self._asset_action(
+                self.can_unmortgage(player, position),
+                self._unmortgage_blocker(player, position),
+            ),
+        }
+
+    @staticmethod
+    def _asset_action(allowed: bool, blocker: str | None) -> dict[str, object]:
+        """Build the tiny action status payload consumed by UI code."""
+        return {"allowed": allowed, "reason": "" if allowed else blocker or "Unavailable."}
+
+    def _managed_asset_blocker(self, player: Player, position: int) -> str | None:
+        """Reject title management outside a current player's action window."""
+        if self.owners.get(position) != player.index:
+            return "That title is not owned by this player."
+        if player is not self.current_player or self.awaiting not in ("pre_roll", "post_roll"):
+            return "Manage assets during that player's normal turn."
+        return None
+
+    def _build_blocker(self, player: Player, position: int) -> str | None:
+        blocker = self._managed_asset_blocker(player, position)
+        if blocker:
+            return blocker
         space = self.board[position]
-        if space.kind != "street" or self.owners.get(position) != player.index:
-            return False
+        if space.kind != "street":
+            return "Only streets can take buildings."
         if not self.has_monopoly(player, space.group):
-            return False
+            return "Own the complete color group before building."
         if any(pos in self.mortgaged for pos in board_data.COLOR_GROUPS[space.group]):
-            return False
+            return "Lift group mortgages before building."
         level = self.houses.get(position, 0)
         if level >= 5:
-            return False
-        # Even-building: you may only build on the least-developed lot.
-        group_levels = [self.houses.get(pos, 0) for pos in board_data.COLOR_GROUPS[space.group]]
+            return "This street already has a hotel."
+        group_levels = [self.houses.get(pos, 0)
+                        for pos in board_data.COLOR_GROUPS[space.group]]
         if level != min(group_levels):
-            return False
-        if level == 4:
-            if self.bank_hotels <= 0:
-                return False
-        elif self.bank_houses <= 0:
-            return False
-        return player.cash >= space.house_cost
+            return "Build evenly across the color group."
+        if level == 4 and self.bank_hotels <= 0:
+            return "The Bank has no hotels left."
+        if level < 4 and self.bank_houses <= 0:
+            return "The Bank has no houses left."
+        if player.cash < space.house_cost:
+            return f"Need ${space.house_cost} to build here."
+        return None
+
+    def _sell_blocker(self, player: Player, position: int) -> str | None:
+        blocker = self._managed_asset_blocker(player, position)
+        if blocker:
+            return blocker
+        space = self.board[position]
+        if space.kind != "street":
+            return "Only streets can sell buildings."
+        level = self.houses.get(position, 0)
+        if level <= 0:
+            return "No building is on this street."
+        group_levels = [self.houses.get(pos, 0)
+                        for pos in board_data.COLOR_GROUPS[space.group]]
+        if level != max(group_levels):
+            return "Sell evenly from the most developed street."
+        if level == 5 and self.bank_houses < 4:
+            return "The Bank needs four houses to break this hotel."
+        return None
+
+    def can_mortgage(self, player: Player, position: int) -> bool:
+        """True if `player` may mortgage `position` right now."""
+        return self._mortgage_blocker(player, position) is None
+
+    def _mortgage_blocker(self, player: Player, position: int) -> str | None:
+        blocker = self._managed_asset_blocker(player, position)
+        if blocker:
+            return blocker
+        if position in self.mortgaged:
+            return "This title is already mortgaged."
+        space = self.board[position]
+        if space.kind == "street" and any(
+                self.houses.get(pos, 0) > 0
+                for pos in board_data.COLOR_GROUPS[space.group]):
+            return "Sell buildings in this color group first."
+        if self.houses.get(position, 0) > 0:
+            return "Sell this property's buildings first."
+        return None
+
+    def can_unmortgage(self, player: Player, position: int) -> bool:
+        """True if `player` may lift the mortgage on `position` right now."""
+        return self._unmortgage_blocker(player, position) is None
+
+    def _unmortgage_blocker(self, player: Player, position: int) -> str | None:
+        blocker = self._managed_asset_blocker(player, position)
+        if blocker:
+            return blocker
+        if position not in self.mortgaged:
+            return "This title is not mortgaged."
+        cost = int(round(self.board[position].mortgage * 1.1))
+        if player.cash < cost:
+            return f"Need ${cost} to lift this mortgage."
+        return None
+
+    def can_build(self, player: Player, position: int) -> bool:
+        """True if `player` may legally build one more house/hotel on a space."""
+        return self._build_blocker(player, position) is None
 
     def build_house(self, position: int) -> bool:
         """Build one house (or a hotel) on a street the current player owns."""
@@ -701,6 +843,10 @@ class MonopolyGame:
         self._note(f"{player.name} builds {what} on {space.name}.")
         return True
 
+    def can_sell_building(self, player: Player, position: int) -> bool:
+        """True if `player` may sell one building from `position` now."""
+        return self._sell_blocker(player, position) is None
+
     def sell_house(self, position: int, forced: bool = False) -> bool:
         """Sell one house/hotel back to the bank for half its build cost."""
         player = self.current_player if not forced else self.owner_of(position)
@@ -709,12 +855,8 @@ class MonopolyGame:
         level = self.houses.get(position, 0)
         if level <= 0:
             return False
-        if not forced:
-            # Even-selling: only the most-developed lot in the group may sell.
-            group = self.board[position].group
-            group_levels = [self.houses.get(pos, 0) for pos in board_data.COLOR_GROUPS[group]]
-            if level != max(group_levels):
-                return False
+        if not forced and not self.can_sell_building(player, position):
+            return False
         space = self.board[position]
         if level == 5:
             # Selling a hotel needs four houses available from the bank.
@@ -732,7 +874,9 @@ class MonopolyGame:
         player = self.current_player if not forced else self.owner_of(position)
         if player is None or self.owners.get(position) != player.index:
             return False
-        if position in self.mortgaged or self.houses.get(position, 0) > 0:
+        if not forced and not self.can_mortgage(player, position):
+            return False
+        if forced and (position in self.mortgaged or self.houses.get(position, 0) > 0):
             return False
         space = self.board[position]
         self.mortgaged.add(position)
@@ -743,7 +887,7 @@ class MonopolyGame:
     def unmortgage(self, position: int) -> bool:
         """Lift a mortgage by repaying its value plus 10% interest."""
         player = self.current_player
-        if self.owners.get(position) != player.index or position not in self.mortgaged:
+        if not self.can_unmortgage(player, position):
             return False
         cost = int(round(self.board[position].mortgage * 1.1))
         if player.cash < cost:
@@ -756,31 +900,55 @@ class MonopolyGame:
     # ----------------------------------------------------------------------
     # Trading
     # ----------------------------------------------------------------------
+    def trade_consequence_lines(self, offer: dict) -> list[str]:
+        """Summarise immediate mortgage costs before a trade is accepted."""
+        try:
+            incoming = (
+                (self.players[offer["to"]], offer["give"]["props"]),
+                (self.players[offer["from"]], offer["get"]["props"]),
+            )
+        except (IndexError, KeyError, TypeError):
+            return []
+        lines = []
+        for recipient, positions in incoming:
+            interest = self.mortgage_transfer_interest(positions)
+            if interest:
+                lines.append(
+                    f"{recipient.name} owes ${interest} mortgage transfer interest.")
+        return lines
+
+    def trade_error(self, offer: dict) -> str | None:
+        """Return a readable reason an offer is illegal, or None if legal."""
+        try:
+            giver = self.players[offer["from"]]
+            taker = self.players[offer["to"]]
+            sides = ((offer["give"], giver), (offer["get"], taker))
+        except (IndexError, KeyError, TypeError):
+            return "That trade offer is incomplete."
+        if giver.bankrupt or taker.bankrupt or giver is taker:
+            return "Choose a solvent trade partner."
+        for side, owner in sides:
+            if side["cash"] < 0 or side["cash"] > owner.cash:
+                return f"{owner.name} does not have that cash available."
+            if side["jail"] < 0 or side["jail"] > owner.jail_cards:
+                return f"{owner.name} does not hold that many jail cards."
+            for pos in side["props"]:
+                if self.owners.get(pos) != owner.index:
+                    return f"{owner.name} does not own every selected title."
+                # Land cannot be traded while its colour group has buildings.
+                group = self.board[pos].group
+                if group and any(self.houses.get(p, 0) > 0
+                                 for p in board_data.COLOR_GROUPS[group]):
+                    return "Sell buildings in that color group before trading it."
+        return None
+
     def trade_is_legal(self, offer: dict) -> bool:
         """Check a trade offer is valid before it is proposed or accepted.
 
         An `offer` is a dict with `from`, `to`, and the two sides' `props`
         (lists of positions), `cash` and `jail` (jail-card counts).
         """
-        giver = self.players[offer["from"]]
-        taker = self.players[offer["to"]]
-        if giver.bankrupt or taker.bankrupt or giver is taker:
-            return False
-        for side, owner in ((offer["give"], giver), (offer["get"], taker)):
-            if side["cash"] < 0 or side["cash"] > owner.cash:
-                return False
-            if side["jail"] < 0 or side["jail"] > owner.jail_cards:
-                return False
-            for pos in side["props"]:
-                if self.owners.get(pos) != owner.index:
-                    return False
-                # Land cannot be traded while its colour group has buildings.
-                group = self.board[pos].group
-                if group:
-                    if any(self.houses.get(p, 0) > 0
-                           for p in board_data.COLOR_GROUPS[group]):
-                        return False
-        return True
+        return self.trade_error(offer) is None
 
     def propose_trade(self, offer: dict) -> bool:
         """The current player offers a trade; the target must then respond."""
@@ -822,6 +990,8 @@ class MonopolyGame:
             self.owners[pos] = taker.index
         for pos in get["props"]:
             self.owners[pos] = giver.index
+        self._charge_mortgage_transfer_interest(taker, give["props"])
+        self._charge_mortgage_transfer_interest(giver, get["props"])
         # Jail cards (tracked as simple counts plus their deck of origin).
         for _ in range(give["jail"]):
             giver.jail_cards -= 1
@@ -844,7 +1014,9 @@ class MonopolyGame:
         half-finished auction or trade ever needs to be stored.
         """
         return {
+            "save_version": SAVE_VERSION,
             "theme": self.theme,
+            "ai_profile": self.ai_profile,
             "players": [p.to_dict() for p in self.players],
             "owners": {str(k): v for k, v in self.owners.items()},
             "houses": {str(k): v for k, v in self.houses.items()},
@@ -861,8 +1033,12 @@ class MonopolyGame:
     @classmethod
     def from_dict(cls, data: dict) -> "MonopolyGame":
         """Rebuild a game from a `to_dict()` snapshot (used to resume a game)."""
+        save_version = int(data.get("save_version", 1))
+        if save_version not in (1, SAVE_VERSION):
+            raise ValueError(f"Unsupported Monopoly save version: {save_version}")
         specs = [(p["name"], p["is_human"]) for p in data["players"]]
-        game = cls(specs, theme=data.get("theme", "classic"))
+        game = cls(specs, theme=data.get("theme", "classic"),
+                   ai_profile=data.get("ai_profile", "standard"))
         game.players = [Player.from_dict(p) for p in data["players"]]
         game.owners = {int(k): v for k, v in data["owners"].items()}
         game.houses = {int(k): v for k, v in data["houses"].items()}

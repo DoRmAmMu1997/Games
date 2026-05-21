@@ -143,6 +143,8 @@ class MonopolyApp:
         # Setup-screen choices.
         self.human_count = 1
         self.theme_index = 0
+        self.ai_profile_keys = tuple(ai.AI_PROFILES)
+        self.ai_profile_index = self.ai_profile_keys.index("standard")
         # Editable human-player names. The list is kept at length 4 so
         # toggling the human count down then back up restores prior entries.
         self.name_fields = ["Player 1", "Player 2", "Player 3", "Player 4"]
@@ -150,8 +152,9 @@ class MonopolyApp:
         self.confirm_new_game = False           # is the overwrite modal open?
 
         # In-game interaction state.
-        self.mode = "normal"          # "normal", "build", "mortgage", "trade"
+        self.mode = "normal"   # "normal", "build", "sell", "mortgage", "assets", "trade"
         self.trade: dict | None = None
+        self.asset_position: int | None = None
         self.ai_timer = 0
         self.message = ""
         self.stats = load_stats()
@@ -176,6 +179,7 @@ class MonopolyApp:
         self.renderer.build_base(self.fonts)
         self.screen = "playing"
         self.mode = "normal"
+        self.asset_position = None
         self.ai_timer = 0
         self.message = ""
         # Reset the visuals so the next frame places tokens / dice from scratch.
@@ -214,6 +218,8 @@ class MonopolyApp:
                     # keeps logical coordinates intact, so we don't need to
                     # remap anything ourselves.
                     pygame.display.toggle_fullscreen()
+                elif event.type == pygame.KEYDOWN and self.screen == "playing":
+                    self._handle_shortcut(event.key)
                 elif (event.type == pygame.KEYDOWN and self.screen == "setup"
                       and self.active_field is not None
                       and not self.confirm_new_game):
@@ -299,9 +305,11 @@ class MonopolyApp:
             actor = self.game.players[self.game.actor()]
             if not actor.is_human:
                 return                   # ignore clicks during AI turns
-            if self.mode in ("build", "mortgage"):
+            if self.mode in ("build", "sell", "mortgage"):
                 if not self._click_button(pos):      # the "Done" button
                     self._click_board(pos)
+            elif self.mode == "assets":
+                self._click_button(pos)
             elif self.mode == "trade":
                 self._click_trade(pos)
             else:
@@ -344,11 +352,13 @@ class MonopolyApp:
             self.name_fields[i] += event.unicode
 
     def _click_board(self, pos) -> None:
-        """In build/mortgage mode, act on the board space that was clicked."""
+        """In build/sell/mortgage mode, act on the board space clicked."""
         for position in range(40):
             if board_render.space_rect(position).collidepoint(pos):
                 if self.mode == "build":
                     self.game.build_house(position)
+                elif self.mode == "sell":
+                    self.game.sell_house(position)
                 elif self.mode == "mortgage":
                     if position in self.game.mortgaged:
                         self.game.unmortgage(position)
@@ -382,6 +392,10 @@ class MonopolyApp:
             self.theme_index = (self.theme_index - 1) % len(THEME_ORDER)
         elif key == "theme_next":
             self.theme_index = (self.theme_index + 1) % len(THEME_ORDER)
+        elif key == "ai_profile_prev":
+            self.ai_profile_index = (self.ai_profile_index - 1) % len(self.ai_profile_keys)
+        elif key == "ai_profile_next":
+            self.ai_profile_index = (self.ai_profile_index + 1) % len(self.ai_profile_keys)
         elif key == "start":
             # Guard the player's saved game: confirm before overwriting it.
             if has_saved_game():
@@ -409,6 +423,8 @@ class MonopolyApp:
             game.decline_property()
         elif key == "build":
             self.mode = "build"
+        elif key == "sell":
+            self.mode = "sell"
         elif key == "mortgage":
             self.mode = "mortgage"
         elif key == "done":
@@ -426,6 +442,22 @@ class MonopolyApp:
             game.auction_pass()
         elif key == "trade":
             self._open_trade()
+        elif key == "assets":
+            self._open_assets()
+        elif key.startswith("asset_title_"):
+            self.asset_position = int(key.rsplit("_", 1)[1])
+            self.message = ""
+        elif key == "asset_build":
+            self._manage_asset("build", game.build_house)
+        elif key == "asset_sell":
+            self._manage_asset("sell", game.sell_house)
+        elif key == "asset_mortgage":
+            self._manage_asset("mortgage", game.mortgage)
+        elif key == "asset_unmortgage":
+            self._manage_asset("unmortgage", game.unmortgage)
+        elif key == "asset_close":
+            self.mode = "normal"
+            self.message = ""
         elif key == "trade_partner_prev":
             self._cycle_trade_partner(-1)
         elif key == "trade_partner_next":
@@ -442,7 +474,7 @@ class MonopolyApp:
             if game.propose_trade(self.trade):
                 self.mode = "normal"
             else:
-                self.message = "That trade is not legal."
+                self.message = game.trade_error(self.trade) or "That trade is not legal."
         elif key == "trade_cancel":
             self.mode = "normal"
         elif key == "trade_accept":
@@ -469,7 +501,8 @@ class MonopolyApp:
                 name = f"{ai_names[i]} (AI)"
             specs.append((name, human))
         theme = THEME_ORDER[self.theme_index]
-        self.start_game(MonopolyGame(specs, theme=theme))
+        profile = self.ai_profile_keys[self.ai_profile_index]
+        self.start_game(MonopolyGame(specs, theme=theme, ai_profile=profile))
 
     def _open_trade(self) -> None:
         """Start building a trade offer from the current human player."""
@@ -489,6 +522,31 @@ class MonopolyApp:
             "give_scroll": 0,
             "get_scroll": 0,
         }
+
+    def _open_assets(self) -> None:
+        """Open the title manager with the first owned title selected."""
+        owned = sorted(self.game.properties_of(self.game.current_player))
+        if not owned:
+            self.message = "You do not own any titles yet."
+            return
+        self.mode = "assets"
+        self.asset_position = owned[0]
+        self.message = ""
+
+    def _manage_asset(self, action: str, operation) -> None:
+        """Run one engine asset action or show the engine's blocker reason."""
+        if self.asset_position is None:
+            self.message = "Choose a title first."
+            return
+        player = self.game.current_player
+        status = self.game.asset_actions_for(player, self.asset_position)[action]
+        if not status["allowed"]:
+            self.message = status["reason"]
+            return
+        if not operation(self.asset_position):
+            self.message = status["reason"] or "That asset action did not resolve."
+            return
+        self.message = ""
 
     def _cycle_trade_partner(self, step: int) -> None:
         """Move the trade to another eligible partner; clear chosen items."""
@@ -531,6 +589,35 @@ class MonopolyApp:
         step = -1 if wheel_dy > 0 else 1
         self.trade[key] = max(0, min(current + step, max_scroll))
 
+    def _handle_shortcut(self, key: int) -> None:
+        """Run common human actions from the keyboard when they are available."""
+        if self.game is None:
+            return
+        actor = self.game.players[self.game.actor()]
+        if not actor.is_human or self.mode in ("assets", "trade"):
+            return
+        key_to_action = {
+            pygame.K_r: "roll",
+            pygame.K_b: "build",
+            pygame.K_s: "sell",
+            pygame.K_m: "mortgage",
+            pygame.K_t: "trade",
+            pygame.K_e: "end_turn",
+        }
+        action = key_to_action.get(key)
+        if action is None:
+            return
+        available = {button.key for button in self._build_buttons() if button.enabled}
+        if action in available:
+            self._on_button(action)
+
+    def _hovered_board_space(self, pos) -> int | None:
+        """Return the board space under `pos`, if the mouse is on the board."""
+        for position in range(40):
+            if board_render.space_rect(position).collidepoint(pos):
+                return position
+        return None
+
     # ------------------------------------------------------------------
     # Drawing
     # ------------------------------------------------------------------
@@ -542,7 +629,8 @@ class MonopolyApp:
             theme = THEME_ORDER[self.theme_index]
             ui.draw_setup(self.window, self.fonts, self.human_count, theme,
                           self.buttons, mouse, self.stats, self.name_fields,
-                          self.active_field)
+                          self.active_field,
+                          self.ai_profile_keys[self.ai_profile_index])
             if self.confirm_new_game:
                 ui.draw_confirm(
                     self.window, self.fonts,
@@ -557,7 +645,7 @@ class MonopolyApp:
         """Draw the board, side panel, action bar and any open dialog."""
         self.window.fill(BG)
 
-        # Yellow rings on the spaces the human can act on in build/mortgage mode.
+        # Yellow rings on the spaces the human can act on in board-click modes.
         highlights: list = []
         if self.mode == "build":
             human = self.game.current_player
@@ -567,6 +655,10 @@ class MonopolyApp:
             human = self.game.current_player
             highlights = [pos for pos in self.game.properties_of(human)
                           if self.game.houses.get(pos, 0) == 0]
+        elif self.mode == "sell":
+            human = self.game.current_player
+            highlights = [pos for pos in self.game.properties_of(human)
+                          if self.game.can_sell_building(human, pos)]
 
         self.renderer.draw(self.window, self.game, self.fonts,
                            token_pixels=self.token_px,
@@ -577,6 +669,9 @@ class MonopolyApp:
         ui.draw_center_card(self.window, self.fonts, self.game)
         if self.dice_show != (0, 0):
             ui.draw_dice(self.window, self.fonts, self.dice_show, board_centre)
+        hovered = self._hovered_board_space(mouse)
+        if hovered is not None:
+            ui.draw_property_detail(self.window, self.fonts, self.game, hovered)
 
         ui.draw_action_bar(self.window, self.fonts, self.buttons,
                            self._prompt(), mouse)
@@ -584,6 +679,9 @@ class MonopolyApp:
         # Modal dialogs on top of everything else.
         if self.game.awaiting == "auction":
             ui.draw_auction(self.window, self.fonts, self.game, self.buttons, mouse)
+        elif self.mode == "assets":
+            ui.draw_assets(self.window, self.fonts, self.game, self.asset_position,
+                           self.buttons, mouse)
         elif self.mode == "trade" and self.trade is not None:
             ui.draw_trade(self.window, self.fonts, self.game, self.trade,
                           self.buttons, mouse)
@@ -604,6 +702,10 @@ class MonopolyApp:
             return "Click a property in one of your monopolies to build. Then Done."
         if self.mode == "mortgage":
             return "Click a property to mortgage it, or a mortgaged one to lift it."
+        if self.mode == "sell":
+            return "Click a developed street to sell one building back. Then Done."
+        if self.mode == "assets":
+            return self.message or "Manage one title with deed detail and legal actions."
         if self.message:
             return self.message
         state = game.awaiting
@@ -614,6 +716,8 @@ class MonopolyApp:
         if state == "buy_or_auction":
             space = game.board[game.pending_purchase]
             return f"You landed on {space.name} (${space.price}). Buy it or auction it."
+        if state == "auction":
+            return game.auction_context_message()
         if state == "post_roll":
             return f"{actor.name}: build, trade, or end your turn."
         if state == "trade_response":
@@ -671,6 +775,35 @@ class MonopolyApp:
                           "Cancel", "trade_cancel"),
             ]
 
+        # Asset manager buttons: every title row selects a deed; the action
+        # buttons below use engine-provided availability and blocker reasons.
+        if self.mode == "assets":
+            layout = ui.asset_layout(game, actor)
+            buttons = []
+            for row, position in layout["title_rows"]:
+                color = (70, 96, 64) if position == self.asset_position else None
+                buttons.append(ui.Button(
+                    row, game.board[position].name[:24], f"asset_title_{position}",
+                    color=color))
+            panel = layout["panel"]
+            actions = (game.asset_actions_for(actor, self.asset_position)
+                       if self.asset_position is not None else {})
+            action_specs = (
+                ("Build", "asset_build", "build", (panel.x + 492, panel.bottom - 154)),
+                ("Sell", "asset_sell", "sell", (panel.x + 654, panel.bottom - 154)),
+                ("Mortgage", "asset_mortgage", "mortgage",
+                 (panel.x + 492, panel.bottom - 104)),
+                ("Lift Mortgage", "asset_unmortgage", "unmortgage",
+                 (panel.x + 654, panel.bottom - 104)),
+            )
+            for label, key, action, (x, y) in action_specs:
+                status = actions.get(action, {"allowed": False})
+                buttons.append(ui.Button((x, y, 148, 38), label, key,
+                                         enabled=bool(status["allowed"])))
+            buttons.append(ui.Button((panel.right - 116, panel.y + 18, 84, 32),
+                                     "Close", "asset_close"))
+            return buttons
+
         # Trade-response dialog buttons.
         if game.awaiting == "trade_response":
             panel = pygame.Rect(0, 0, 560, 360)
@@ -696,13 +829,15 @@ class MonopolyApp:
                           "Pass", "pass", color=(150, 60, 60)),
             ]
 
-        # Build / mortgage mode: just a Done button.
-        if self.mode in ("build", "mortgage"):
+        # Build / sell / mortgage mode: just a Done button.
+        if self.mode in ("build", "sell", "mortgage"):
             return [ui.Button(_bar_rect(0), "Done", "done", color=(46, 116, 78))]
 
         # Normal action bar.
         buttons = []
         state = game.awaiting
+        can_sell = any(game.can_sell_building(actor, pos)
+                       for pos in game.properties_of(actor))
         if state == "pre_roll":
             if actor.in_jail:
                 buttons.append(ui.Button(_bar_rect(0), "Roll Dice", "roll",
@@ -715,9 +850,12 @@ class MonopolyApp:
                 buttons.append(ui.Button(_bar_rect(0), "Roll Dice", "roll",
                                          color=(46, 116, 78)))
                 buttons.append(ui.Button(_bar_rect(1), "Build Houses", "build"))
-                buttons.append(ui.Button(_bar_rect(2), "Mortgage", "mortgage"))
-                buttons.append(ui.Button(_bar_rect(3), "Trade", "trade"))
-                buttons.append(ui.Button(_bar_rect(4), "Save & Quit", "save_quit"))
+                buttons.append(ui.Button(_bar_rect(2), "Sell Buildings", "sell",
+                                         enabled=can_sell))
+                buttons.append(ui.Button(_bar_rect(3), "Mortgage", "mortgage"))
+                buttons.append(ui.Button(_bar_rect(4), "Trade", "trade"))
+                buttons.append(ui.Button(_bar_rect(5), "Save & Quit", "save_quit"))
+                buttons.append(ui.Button(_bar_rect(6), "Assets", "assets"))
         elif state == "buy_or_auction":
             space = game.board[game.pending_purchase]
             buttons.append(ui.Button(_bar_rect(0), f"Buy (${space.price})", "buy",
@@ -728,8 +866,11 @@ class MonopolyApp:
             buttons.append(ui.Button(_bar_rect(0), "End Turn", "end_turn",
                                      color=(46, 116, 78)))
             buttons.append(ui.Button(_bar_rect(1), "Build Houses", "build"))
-            buttons.append(ui.Button(_bar_rect(2), "Mortgage", "mortgage"))
-            buttons.append(ui.Button(_bar_rect(3), "Trade", "trade"))
+            buttons.append(ui.Button(_bar_rect(2), "Sell Buildings", "sell",
+                                     enabled=can_sell))
+            buttons.append(ui.Button(_bar_rect(3), "Mortgage", "mortgage"))
+            buttons.append(ui.Button(_bar_rect(4), "Trade", "trade"))
+            buttons.append(ui.Button(_bar_rect(5), "Assets", "assets"))
         return buttons
 
 
