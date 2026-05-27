@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import math
 import os
 import sys
 import time
+from ctypes import wintypes
 from pathlib import Path
 
 import pygame
@@ -20,6 +22,7 @@ from settings import (
     BG,
     DICE_ANIM_MS,
     FPS,
+    MAX_PLAYERS,
     PANEL_BG,
     PANEL_CARD,
     PANEL_EDGE,
@@ -37,6 +40,104 @@ from settings import (
     WHITE,
     WINDOW_TITLE,
 )
+
+SETUP_CONTROL_X = PANEL_X + 24
+SETUP_CONTROL_WIDTH = 246
+SETUP_NAME_HEADER_Y = 570
+SETUP_NAME_START_Y = 608
+SETUP_NAME_FIELD_HEIGHT = 30
+SETUP_NAME_FIELD_STEP = 35
+SETUP_NAME_SECTION_BOTTOM = (
+    SETUP_NAME_START_Y + (MAX_PLAYERS - 1) * SETUP_NAME_FIELD_STEP + SETUP_NAME_FIELD_HEIGHT
+)
+SETUP_ACTION_GAP = 10
+SETUP_ACTION_BUTTON_GAP = 6
+SETUP_ACTION_HEIGHT = 34
+SETUP_RESUME_Y = SETUP_NAME_SECTION_BOTTOM + SETUP_ACTION_GAP
+SETUP_START_Y = SETUP_RESUME_Y + SETUP_ACTION_HEIGHT + SETUP_ACTION_BUTTON_GAP
+WINDOW_FIT_PADDING = 8
+
+
+def _fit_window_size(
+    available_size: tuple[int, int],
+    chrome_size: tuple[int, int] = (0, 0),
+) -> tuple[int, int]:
+    """Return the largest 16:9-ish Ludo client size that fits the desktop.
+
+    The game keeps drawing to a fixed ``SCREEN_WIDTH`` by ``SCREEN_HEIGHT``
+    canvas. This helper only decides how large the real OS window should be.
+    ``chrome_size`` accounts for the title bar and borders that live outside
+    Pygame's client area.
+    """
+
+    available_width, available_height = available_size
+    chrome_width, chrome_height = chrome_size
+    client_width = max(1, available_width - max(0, chrome_width))
+    client_height = max(1, available_height - max(0, chrome_height))
+    scale = min(client_width / SCREEN_WIDTH, client_height / SCREEN_HEIGHT, 1.0)
+    return (
+        max(1, min(SCREEN_WIDTH, int(SCREEN_WIDTH * scale))),
+        max(1, min(SCREEN_HEIGHT, int(SCREEN_HEIGHT * scale))),
+    )
+
+
+def _logical_to_window_point(pos: tuple[int, int], window_size: tuple[int, int]) -> tuple[int, int]:
+    """Map a logical 1280x900 point into the scaled OS window."""
+
+    width, height = max(1, window_size[0]), max(1, window_size[1])
+    return (
+        int(pos[0] * width / SCREEN_WIDTH),
+        int(pos[1] * height / SCREEN_HEIGHT),
+    )
+
+
+def _window_to_logical_point(pos: tuple[int, int], window_size: tuple[int, int]) -> tuple[int, int]:
+    """Map a scaled OS-window point back into logical game coordinates."""
+
+    width, height = max(1, window_size[0]), max(1, window_size[1])
+    logical_x = int(pos[0] * SCREEN_WIDTH / width)
+    logical_y = int(pos[1] * SCREEN_HEIGHT / height)
+    return (
+        max(0, min(SCREEN_WIDTH - 1, logical_x)),
+        max(0, min(SCREEN_HEIGHT - 1, logical_y)),
+    )
+
+
+def _desktop_work_area_size() -> tuple[int, int]:
+    """Return usable desktop size, preferring Windows' taskbar-aware value."""
+
+    if sys.platform == "win32":
+        try:
+            rect = wintypes.RECT()
+            ok = ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+            if ok:
+                width = int(rect.right - rect.left)
+                height = int(rect.bottom - rect.top)
+                if width > 0 and height > 0:
+                    return width, height
+        except (AttributeError, OSError):
+            pass
+    info = pygame.display.Info()
+    return max(1, int(info.current_w or SCREEN_WIDTH)), max(1, int(info.current_h or SCREEN_HEIGHT))
+
+
+def _window_chrome_size() -> tuple[int, int]:
+    """Estimate non-client window chrome so the outer window stays visible."""
+
+    if sys.platform == "win32":
+        try:
+            user32 = ctypes.windll.user32
+            frame_x = int(user32.GetSystemMetrics(32))
+            frame_y = int(user32.GetSystemMetrics(33))
+            padded = int(user32.GetSystemMetrics(92))
+            caption = int(user32.GetSystemMetrics(4))
+            return (
+                max(0, 2 * (frame_x + padded) + WINDOW_FIT_PADDING),
+                max(0, caption + 2 * (frame_y + padded) + WINDOW_FIT_PADDING),
+            )
+        except (AttributeError, OSError):
+            pass
+    return 0, 0
 
 
 def _log_error(error: Exception) -> None:
@@ -139,9 +240,11 @@ class LudoApp:
     def __init__(self) -> None:
         """Create the pygame window and initialize screen-level state."""
 
-        self.window = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self.window_size = _fit_window_size(_desktop_work_area_size(), _window_chrome_size())
+        self.screen_surface = pygame.display.set_mode(self.window_size)
         pygame.display.set_caption(WINDOW_TITLE)
         pygame.display.set_icon(_make_icon())
+        self.window = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT)).convert()
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
         self.running = True
@@ -176,7 +279,7 @@ class LudoApp:
     def setup_buttons(self) -> list[ui.Button]:
         """Build fresh button objects for the setup screen."""
 
-        x = PANEL_X + 24
+        x = SETUP_CONTROL_X
         return [
             ui.Button(pygame.Rect(x, 164, 46, 38), "-", "total_players_prev"),
             ui.Button(pygame.Rect(x + 200, 164, 46, 38), "+", "total_players_next"),
@@ -184,12 +287,37 @@ class LudoApp:
             ui.Button(pygame.Rect(x + 200, 236, 46, 38), "+", "human_count_next"),
             ui.Button(pygame.Rect(x, 308, 46, 38), "<", "ai_profile_prev"),
             ui.Button(pygame.Rect(x + 200, 308, 46, 38), ">", "ai_profile_next"),
-            ui.Button(pygame.Rect(x, 390, 246, 36), _toggle_label("Blockades", self.rule_blockades), "toggle_blockades"),
-            ui.Button(pygame.Rect(x, 436, 246, 36), _toggle_label("Capture bonus", self.rule_capture_bonus), "toggle_capture_bonus"),
-            ui.Button(pygame.Rect(x, 482, 246, 36), _toggle_label("Home bonus", self.rule_home_bonus), "toggle_home_bonus"),
-            ui.Button(pygame.Rect(x, 528, 246, 36), _toggle_label("Three 6s", self.rule_three_sixes), "toggle_three_sixes"),
-            ui.Button(pygame.Rect(x, 804, 246, 46), "Start Game", "start"),
-            ui.Button(pygame.Rect(x, 748, 246, 42), "Resume Saved Game", "resume", enabled=has_saved_game()),
+            ui.Button(
+                pygame.Rect(x, 390, SETUP_CONTROL_WIDTH, 36),
+                _toggle_label("Blockades", self.rule_blockades),
+                "toggle_blockades",
+            ),
+            ui.Button(
+                pygame.Rect(x, 436, SETUP_CONTROL_WIDTH, 36),
+                _toggle_label("Capture bonus", self.rule_capture_bonus),
+                "toggle_capture_bonus",
+            ),
+            ui.Button(
+                pygame.Rect(x, 482, SETUP_CONTROL_WIDTH, 36),
+                _toggle_label("Home bonus", self.rule_home_bonus),
+                "toggle_home_bonus",
+            ),
+            ui.Button(
+                pygame.Rect(x, 528, SETUP_CONTROL_WIDTH, 36),
+                _toggle_label("Three 6s", self.rule_three_sixes),
+                "toggle_three_sixes",
+            ),
+            ui.Button(
+                pygame.Rect(x, SETUP_START_Y, SETUP_CONTROL_WIDTH, SETUP_ACTION_HEIGHT),
+                "Start Game",
+                "start",
+            ),
+            ui.Button(
+                pygame.Rect(x, SETUP_RESUME_Y, SETUP_CONTROL_WIDTH, SETUP_ACTION_HEIGHT),
+                "Resume Saved Game",
+                "resume",
+                enabled=has_saved_game(),
+            ),
             ui.Button(pygame.Rect(SCREEN_WIDTH - 132, 24, 100, 36), "Quit", "quit"),
         ]
 
@@ -206,16 +334,35 @@ class LudoApp:
                 if event.type == pygame.QUIT:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    self._handle_click(event.pos)
+                    self._handle_click(self._window_to_logical(event.pos))
                 elif event.type == pygame.KEYDOWN:
                     self._handle_key(event)
 
             self._update(autotest)
             self._draw()
+            self._present()
             pygame.display.flip()
             frames += 1
             if max_frames is not None and frames >= max_frames:
                 break
+
+    def _present(self) -> None:
+        """Scale the logical canvas onto the actual OS window."""
+
+        if self.window_size == (SCREEN_WIDTH, SCREEN_HEIGHT):
+            self.screen_surface.blit(self.window, (0, 0))
+        else:
+            pygame.transform.smoothscale(self.window, self.window_size, self.screen_surface)
+
+    def _logical_mouse_pos(self) -> tuple[int, int]:
+        """Return mouse position in the same coordinates used by buttons."""
+
+        return self._window_to_logical(pygame.mouse.get_pos())
+
+    def _window_to_logical(self, pos: tuple[int, int]) -> tuple[int, int]:
+        """Convert a real-window coordinate into the fixed logical layout."""
+
+        return _window_to_logical_point(pos, self.window_size)
 
     def start_game(self, game: LudoGame) -> None:
         """Switch from setup into a playable game."""
@@ -508,7 +655,7 @@ class LudoApp:
         """Draw the setup screen, including preview boards and controls."""
 
         self.buttons = self.setup_buttons()
-        mouse = pygame.mouse.get_pos()
+        mouse = self._logical_mouse_pos()
         ui.draw_text(self.window, self.fonts["huge"], "LUDO", (450, 92), WHITE, center=True)
         ui.draw_wrapped(
             self.window,
@@ -527,7 +674,7 @@ class LudoApp:
         self._setup_value("AI Profile", self.ai_profiles[self.ai_profile_index].title(), 272)
 
         ui.draw_text(self.window, self.fonts["header"], "Advanced Rules", (PANEL_X + 24, 354), WHITE)
-        ui.draw_text(self.window, self.fonts["header"], "Human Names", (PANEL_X + 24, 584), WHITE)
+        ui.draw_text(self.window, self.fonts["header"], "Human Names", (SETUP_CONTROL_X, SETUP_NAME_HEADER_Y), WHITE)
         for index in range(self.human_count):
             # Name fields are lightweight hand-drawn rectangles. The active
             # one gets a colored border so typing focus is visible.
@@ -535,7 +682,7 @@ class LudoApp:
             color = PLAYER_COLORS[index]
             pygame.draw.rect(self.window, PANEL_CARD, rect, border_radius=6)
             pygame.draw.rect(self.window, color if self.active_field == index else PANEL_EDGE, rect, 2, border_radius=6)
-            ui.draw_text(self.window, self.fonts["body"], self.name_fields[index], (rect.x + 10, rect.y + 8), WHITE)
+            ui.draw_text(self.window, self.fonts["body"], self.name_fields[index], (rect.x + 10, rect.y + 4), WHITE)
 
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
@@ -563,7 +710,7 @@ class LudoApp:
         self._draw_score_panel()
         self._draw_action_panel()
         self.buttons = self._buttons_for_screen()
-        mouse = pygame.mouse.get_pos()
+        mouse = self._logical_mouse_pos()
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
 
@@ -652,7 +799,7 @@ class LudoApp:
             self.screen = "setup"
             return
         self.buttons = self._buttons_for_screen()
-        mouse = pygame.mouse.get_pos()
+        mouse = self._logical_mouse_pos()
         winner = self.game.players[self.game.winner] if self.game.winner is not None else self.game.players[0]
         ui.draw_text(self.window, self.fonts["huge"], "Game Over", (450, 104), WHITE, center=True)
         ui.draw_text(self.window, self.fonts["title"], f"{winner.name} wins!", (450, 174), winner.color, center=True)
@@ -701,7 +848,12 @@ class LudoApp:
 def _name_rect(index: int) -> pygame.Rect:
     """Return the setup-screen rectangle for one human name field."""
 
-    return pygame.Rect(PANEL_X + 24, 628 + index * 42, 246, 34)
+    return pygame.Rect(
+        SETUP_CONTROL_X,
+        SETUP_NAME_START_Y + index * SETUP_NAME_FIELD_STEP,
+        SETUP_CONTROL_WIDTH,
+        SETUP_NAME_FIELD_HEIGHT,
+    )
 
 
 def _toggle_label(label: str, enabled: bool) -> str:
