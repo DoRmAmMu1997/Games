@@ -12,7 +12,12 @@ from settings import PLAYER_COLORS, TOKENS_PER_PLAYER
 
 @dataclass(frozen=True)
 class LudoRules:
-    """Configurable rules for one game."""
+    """Configurable rules for one game.
+
+    These values are captured in save files so a resumed game keeps the same
+    house-rule choices it started with. The defaults match the classic
+    competitive rule set used by the setup screen.
+    """
 
     total_players: int
     blockades: bool = False
@@ -21,12 +26,19 @@ class LudoRules:
     three_sixes_penalty: bool = True
 
     def __post_init__(self) -> None:
+        """Validate the player count as soon as rules are created."""
+
         if self.total_players not in (4, 5, 6):
             raise ValueError("total_players must be 4, 5, or 6")
 
 
 class LudoGame:
-    """Turn-based state machine for classic competitive Ludo."""
+    """Turn-based state machine for classic competitive Ludo.
+
+    This class intentionally imports no Pygame. Humans, AI, tests, and future
+    interfaces all use the same methods, which keeps the official rules in one
+    place instead of duplicating them across UI click handlers.
+    """
 
     def __init__(
         self,
@@ -35,6 +47,8 @@ class LudoGame:
         seed: int | None = None,
         ai_profile: str = "tactical",
     ) -> None:
+        """Create a game from player names or already restored player states."""
+
         if len(players) != rules.total_players:
             raise ValueError("players length must match rules.total_players")
         self.rules = rules
@@ -46,6 +60,8 @@ class LudoGame:
         self.players: list[PlayerState] = []
         for index, player in enumerate(players):
             if isinstance(player, PlayerState):
+                # Restored games already have token positions, counters, and
+                # colors, so keep those objects instead of creating new ones.
                 self.players.append(player)
             else:
                 name, is_human = player
@@ -58,6 +74,9 @@ class LudoGame:
                 )
 
         self.current = 0
+        # ``awaiting`` is the small state machine the UI and AI both follow:
+        # pre_roll -> choose_move -> either pre_roll again for a bonus or the
+        # next player's pre_roll.
         self.phase = "playing"
         self.awaiting = "pre_roll"
         self.last_roll: int | None = None
@@ -71,6 +90,8 @@ class LudoGame:
 
     @property
     def current_player(self) -> PlayerState:
+        """Convenience accessor for the player whose turn is active."""
+
         return self.players[self.current]
 
     def roll_die(self) -> int:
@@ -114,7 +135,12 @@ class LudoGame:
         return False
 
     def legal_moves(self, die: int, player_index: int | None = None) -> list[Move]:
-        """Return every legal move for ``die``."""
+        """Return every legal move for ``die``.
+
+        The returned list is the contract between the rules engine and all
+        callers. If a move is not present here, the UI cannot offer it and the
+        AI cannot choose it.
+        """
 
         if self.phase == "game_over":
             return []
@@ -124,6 +150,7 @@ class LudoGame:
             if token.steps == self.layout.finish_steps:
                 continue
             if token.steps < 0:
+                # Yard tokens need a 6 before they can enter the start square.
                 if die != 6:
                     continue
                 to_steps = 0
@@ -132,6 +159,7 @@ class LudoGame:
                 to_steps = token.steps + die
                 enters = False
             if to_steps > self.layout.finish_steps:
+                # Ludo requires an exact roll to finish.
                 continue
             landing_index = self.layout.track_index(index, to_steps)
             if self._blocked_by_blockade(index, token.steps, to_steps):
@@ -151,7 +179,12 @@ class LudoGame:
         return moves
 
     def apply_move(self, move: Move) -> MoveResult:
-        """Apply a legal move and advance turn state."""
+        """Apply a legal move and advance turn state.
+
+        The method validates the move against the current legal-move list
+        before mutating anything. That keeps tests and UI clicks honest: they
+        must pass a move the engine itself already approved.
+        """
 
         if self.phase == "game_over":
             raise ValueError("game is already over")
@@ -228,10 +261,14 @@ class LudoGame:
             self._advance_turn()
 
     def token_track_index(self, player_index: int, token_index: int) -> int | None:
+        """Return where a token sits on the shared track, if anywhere."""
+
         steps = self.players[player_index].tokens[token_index].steps
         return self.layout.track_index(player_index, steps)
 
     def tokens_at_track(self, absolute_track_index: int) -> list[tuple[int, int]]:
+        """Return ``(player_index, token_index)`` pairs on a track cell."""
+
         matches: list[tuple[int, int]] = []
         for player_index, player in enumerate(self.players):
             for token_index, token in enumerate(player.tokens):
@@ -261,6 +298,8 @@ class LudoGame:
 
     @classmethod
     def from_dict(cls, data: dict) -> "LudoGame":
+        """Rebuild a game from save-file data."""
+
         rules = LudoRules(**data["rules"])
         players = [PlayerState.from_dict(item) for item in data["players"]]
         game = cls(players, rules, seed=data.get("seed"), ai_profile=data.get("ai_profile", "tactical"))
@@ -278,6 +317,8 @@ class LudoGame:
         return game
 
     def _capture_at(self, move: Move) -> list[tuple[int, int]]:
+        """Send opponent tokens on the landing cell back to their yards."""
+
         if move.landing_index is None or self.layout.is_safe_index(move.landing_index):
             return []
         captured: list[tuple[int, int]] = []
@@ -289,6 +330,8 @@ class LudoGame:
         return captured
 
     def _blocked_by_blockade(self, player_index: int, from_steps: int, to_steps: int) -> bool:
+        """Return True if optional blockade rules stop this path."""
+
         if not self.rules.blockades or from_steps < 0:
             return False
         blocked_indices = self._opponent_blockades(player_index)
@@ -300,6 +343,8 @@ class LudoGame:
         return False
 
     def _opponent_blockades(self, player_index: int) -> set[int]:
+        """Find every opponent square occupied by at least two same-player tokens."""
+
         blockades: set[int] = set()
         for index in range(len(self.players)):
             if index == player_index:
@@ -313,6 +358,8 @@ class LudoGame:
         return blockades
 
     def _advance_turn(self) -> None:
+        """Move turn control to the next player who has not finished."""
+
         self.turns_taken += 1
         for offset in range(1, len(self.players) + 1):
             candidate = (self.current + offset) % len(self.players)
@@ -323,6 +370,8 @@ class LudoGame:
         self._finish_game(self.current)
 
     def _finish_game(self, winner_index: int) -> None:
+        """Mark the game over and compute a final ranking."""
+
         self.phase = "game_over"
         self.awaiting = "game_over"
         self.winner = winner_index
@@ -344,10 +393,14 @@ class LudoGame:
         self._note(f"{self.players[winner_index].name} wins the game!")
 
     def _mark_finished_tokens(self) -> None:
+        """Teach token helper properties what this layout's finish step is."""
+
         for player in self.players:
             for token in player.tokens:
                 token._finished_steps = self.layout.finish_steps
 
     def _note(self, message: str) -> None:
+        """Append a short message to the on-screen event log."""
+
         self.event_log.append(message)
         del self.event_log[:-12]

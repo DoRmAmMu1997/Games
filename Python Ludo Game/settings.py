@@ -19,12 +19,16 @@ SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 900
 FPS = 60
 
+# The board lives on the left and the control panel lives on the right. Keeping
+# the logical size fixed makes click handling and PyInstaller builds simpler.
 BOARD_RECT = (30, 30, 840, 840)
 BOARD_CENTER = (450, 450)
 BOARD_RADIUS = 330
 PANEL_X = 900
 PANEL_WIDTH = SCREEN_WIDTH - PANEL_X - 30
 
+# AI delay is intentionally visible so human players can follow what happened
+# instead of seeing computer turns flash by instantly.
 AI_TURN_DELAY_MS = 650
 DICE_ANIM_MS = 350
 TOKEN_ANIM_SPEED = 9.0
@@ -36,6 +40,8 @@ TOKEN_ANIM_SPEED = 9.0
 MIN_PLAYERS = 4
 MAX_PLAYERS = 6
 TOKENS_PER_PLAYER = 4
+# Each player contributes one 13-cell segment to the shared track, then owns a
+# private 6-cell home lane. BoardLayout uses these to generalize 4P, 5P, and 6P.
 SEGMENT_LENGTH = 13
 HOME_LENGTH = 6
 
@@ -43,6 +49,8 @@ HOME_LENGTH = 6
 # ---------------------------------------------------------------------------
 # Colours
 # ---------------------------------------------------------------------------
+# Plain RGB tuples are easy to tweak. The palette avoids needing image assets:
+# every board cell, panel, token, and highlight is drawn procedurally.
 BG = (28, 35, 39)
 BOARD_BG = (232, 226, 205)
 BOARD_LINE = (37, 43, 48)
@@ -82,5 +90,5 @@ def _user_save_dir() -> Path:
 
 
 SAVE_DIR = _user_save_dir()
-STATS_PATH = SAVE_DIR / "stats.json"
-SAVEGAME_PATH = SAVE_DIR / "savegame.json"
+STATS_PATH = SAVE_DIR / "stats.json"          # lifetime games and wins
+SAVEGAME_PATH = SAVE_DIR / "savegame.json"    # one resumable in-progress game

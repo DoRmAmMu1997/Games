@@ -15,12 +15,18 @@ from game import LudoGame, LudoRules
 
 
 def make_game(total_players: int = 4) -> LudoGame:
+    """Create a deterministic game used by engine tests."""
+
     players = [(f"P{i + 1}", i == 0) for i in range(total_players)]
     return LudoGame(players, LudoRules(total_players=total_players), seed=11)
 
 
 class EngineRuleTests(unittest.TestCase):
+    """Focused checks for rules that are easy to regress."""
+
     def test_six_can_enter_a_token_from_yard(self) -> None:
+        """A 6 should offer yard-entry moves and keep the turn alive."""
+
         game = make_game()
 
         moves = game.legal_moves(6)
@@ -33,6 +39,8 @@ class EngineRuleTests(unittest.TestCase):
         self.assertTrue(result.extra_turn)
 
     def test_non_six_cannot_move_when_every_token_is_in_yard(self) -> None:
+        """A non-6 with all tokens in yard should auto-pass the turn."""
+
         game = make_game()
 
         self.assertEqual(game.legal_moves(3), [])
@@ -42,6 +50,8 @@ class EngineRuleTests(unittest.TestCase):
         self.assertEqual(game.awaiting, "pre_roll")
 
     def test_exact_home_roll_is_required(self) -> None:
+        """Tokens may finish only with an exact die value."""
+
         game = make_game()
         game.players[0].tokens[0].steps = game.layout.finish_steps - 2
 
@@ -53,6 +63,8 @@ class EngineRuleTests(unittest.TestCase):
         self.assertTrue(game.players[0].tokens[0].finished)
 
     def test_capture_sends_opponent_home_and_grants_bonus(self) -> None:
+        """Landing on an exposed opponent token should capture it."""
+
         game = make_game()
         game.players[0].tokens[0].steps = 0
         game.players[1].tokens[0].steps = game.layout.steps_to_reach(1, game.layout.track_index(0, 3))
@@ -65,6 +77,8 @@ class EngineRuleTests(unittest.TestCase):
         self.assertTrue(result.extra_turn)
 
     def test_safe_square_prevents_capture(self) -> None:
+        """Safe squares should protect opponent tokens from capture."""
+
         game = make_game()
         safe_index = game.layout.safe_indices[1]
         game.players[0].tokens[0].steps = game.layout.steps_to_reach(0, game.layout.previous_index(safe_index, 2))
@@ -77,6 +91,8 @@ class EngineRuleTests(unittest.TestCase):
         self.assertEqual(game.current, 1)
 
     def test_three_consecutive_sixes_forfeit_the_third_roll_only(self) -> None:
+        """The third 6 should be lost without undoing earlier moves."""
+
         game = make_game()
         game.record_roll(6)
         game.apply_move(game.legal_moves(6)[0])
@@ -92,6 +108,8 @@ class EngineRuleTests(unittest.TestCase):
         self.assertEqual(game.current, 1)
 
     def test_save_load_round_trip_keeps_rule_and_player_state(self) -> None:
+        """Saving and restoring should preserve rules and progress."""
+
         game = make_game(total_players=5)
         game.players[0].tokens[0].steps = 4
         game.players[2].tokens[1].steps = 10

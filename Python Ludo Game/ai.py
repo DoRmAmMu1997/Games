@@ -9,6 +9,13 @@ from models import Move
 
 @dataclass(frozen=True)
 class AIProfile:
+    """Numeric weights that describe one AI personality.
+
+    The AI does not search future turns. It simply scores every currently
+    legal move, and these weights decide what it cares about most. Larger
+    numbers make a profile value that idea more strongly.
+    """
+
     capture: int
     safety: int
     progress: int
@@ -26,7 +33,13 @@ AI_PROFILES: dict[str, AIProfile] = {
 
 
 def choose_move(game, profile_key: str, die: int) -> Move | None:
-    """Return the highest-scoring legal move for the current AI player."""
+    """Return the highest-scoring legal move for the current AI player.
+
+    This function is deliberately tiny: it asks the rules engine for legal
+    moves, scores them, and picks the best one. Keeping legality in
+    ``game.legal_moves`` prevents the AI from quietly learning its own version
+    of Ludo.
+    """
 
     moves = game.legal_moves(die)
     if not moves:
@@ -41,13 +54,22 @@ def choose_move(game, profile_key: str, die: int) -> Move | None:
 
 
 def score_move(game, move: Move, profile: AIProfile) -> int:
-    """Score a move from the current board state."""
+    """Score a move from the current board state.
+
+    Positive numbers are good for the AI and negative numbers are risky. The
+    result is only meaningful relative to the other legal moves in the same
+    turn; it is not meant to be an absolute "quality" score.
+    """
 
     score = move.to_steps * profile.progress
+    # Getting a token out matters because tokens in the yard cannot threaten
+    # captures or make progress toward home.
     if move.enters_board:
         score += profile.enter
+    # Finishing a token is the biggest single-turn accomplishment.
     if move.reaches_home:
         score += profile.finish
+    # Safe squares cannot be captured, so defensive profiles value them more.
     if game.layout.is_safe_index(move.landing_index):
         score += profile.safety
 
@@ -67,12 +89,22 @@ def score_move(game, move: Move, profile: AIProfile) -> int:
 
 
 def _capture_count(game, move: Move) -> int:
+    """Count how many opposing tokens this move would send back to yard."""
+
     if move.landing_index is None or game.layout.is_safe_index(move.landing_index):
         return 0
     return sum(1 for player_index, _ in game.tokens_at_track(move.landing_index) if player_index != move.player_index)
 
 
 def _lands_in_danger(game, move: Move) -> bool:
+    """Return True when an opponent could capture the landing square soon.
+
+    A full tactical search would simulate future dice rolls. For a readable
+    beginner-friendly AI, this uses a simpler warning: if any opponent token
+    can reach the landing square with a die value from 1 to 6, the square is
+    considered dangerous.
+    """
+
     if move.landing_index is None or game.layout.is_safe_index(move.landing_index):
         return False
     for player_index, player in enumerate(game.players):
@@ -89,6 +121,8 @@ def _lands_in_danger(game, move: Move) -> bool:
 
 
 def _builds_own_blockade(game, move: Move) -> bool:
+    """Return True if the move stacks two own tokens on a track square."""
+
     if move.landing_index is None:
         return False
     same_square = 0

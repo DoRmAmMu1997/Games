@@ -17,17 +17,25 @@ from game import LudoGame, LudoRules
 
 
 def make_game(total_players: int = 4) -> LudoGame:
+    """Create a deterministic Ludo game for layout and AI tests."""
+
     players = [(f"P{i + 1}", i == 0) for i in range(total_players)]
     return LudoGame(players, LudoRules(total_players=total_players), seed=21)
 
 
 class LayoutTests(unittest.TestCase):
+    """Checks for generated board geometry."""
+
     def test_player_counts_generate_expected_polygon_shapes(self) -> None:
+        """Player count should directly choose square, pentagon, or hexagon."""
+
         self.assertEqual(BoardLayout.for_player_count(4).polygon_sides, 4)
         self.assertEqual(BoardLayout.for_player_count(5).polygon_sides, 5)
         self.assertEqual(BoardLayout.for_player_count(6).polygon_sides, 6)
 
     def test_layout_has_generalized_track_home_and_safe_cells(self) -> None:
+        """Every supported board should expose track, home, and safe cells."""
+
         for count in (4, 5, 6):
             layout = BoardLayout.for_player_count(count)
 
@@ -39,7 +47,11 @@ class LayoutTests(unittest.TestCase):
 
 
 class AiChoiceTests(unittest.TestCase):
+    """Checks for important heuristic AI priorities."""
+
     def test_ai_prefers_finishing_move(self) -> None:
+        """A finishing move should outrank ordinary progress."""
+
         game = make_game()
         game.current = 1
         game.players[1].tokens[0].steps = game.layout.finish_steps - 1
@@ -50,6 +62,8 @@ class AiChoiceTests(unittest.TestCase):
         self.assertEqual(move.token_index, 0)
 
     def test_ai_prefers_capture_over_neutral_progress(self) -> None:
+        """Aggressive AI should take an available capture."""
+
         game = make_game()
         game.current = 1
         game.players[1].tokens[0].steps = 0
@@ -62,6 +76,8 @@ class AiChoiceTests(unittest.TestCase):
         self.assertEqual(move.token_index, 0)
 
     def test_ai_choice_is_deterministic_for_same_seed(self) -> None:
+        """Equivalent game states should produce the same AI decision."""
+
         game_a = make_game()
         game_b = make_game()
         for game in (game_a, game_b):
