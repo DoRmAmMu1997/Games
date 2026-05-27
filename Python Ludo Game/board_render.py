@@ -20,9 +20,16 @@ from settings import (
 
 
 class BoardRenderer:
-    """Draw a generated Ludo layout with active highlights."""
+    """Draw a generated Ludo layout with active highlights.
+
+    The renderer knows about pixels, colors, and fonts, but it does not decide
+    what moves are legal. It receives a rules-engine layout and a list of legal
+    moves, then turns those facts into shapes on the screen.
+    """
 
     def __init__(self, layout) -> None:
+        """Store the board layout and shared cell size."""
+
         self.layout = layout
         self.cell_radius = 17
 
@@ -34,8 +41,12 @@ class BoardRenderer:
         legal_moves: list[Move] | None = None,
         animated_positions: dict[tuple[int, int], tuple[float, float]] | None = None,
     ) -> None:
+        """Draw the complete board for the current frame."""
+
         legal_moves = legal_moves or []
         animated_positions = animated_positions or {}
+        # Draw from back to front: board surface first, tokens last. Later
+        # layers visually sit on top of earlier layers.
         self._draw_board_background(surface, fonts)
         self._draw_track(surface)
         self._draw_home_lanes(surface)
@@ -54,6 +65,8 @@ class BoardRenderer:
         return None
 
     def _draw_board_background(self, surface: pygame.Surface, fonts: dict[str, pygame.font.Font]) -> None:
+        """Paint the large polygon board and center medallion."""
+
         polygon = _outer_polygon(self.layout)
         pygame.draw.polygon(surface, BOARD_BG, polygon)
         pygame.draw.polygon(surface, BOARD_LINE, polygon, 4)
@@ -63,11 +76,15 @@ class BoardRenderer:
         surface.blit(title, title.get_rect(center=_point(self.layout.center)))
 
     def _draw_track(self, surface: pygame.Surface) -> None:
+        """Draw the shared outer track cells."""
+
         for index, point in enumerate(self.layout.track_positions):
             rect = _cell_rect(point, self.cell_radius)
             fill = TRACK_FILL
             owner = _owner_for_start(index, self.layout.start_indices)
             if owner is not None:
+                # Start squares use the owning player's color, making it easy
+                # to see where yard tokens enter the race.
                 fill = PLAYER_COLORS[owner]
             elif index in self.layout.safe_indices:
                 fill = GOLD
@@ -77,6 +94,8 @@ class BoardRenderer:
                 _draw_star(surface, point, 8, BOARD_LINE)
 
     def _draw_home_lanes(self, surface: pygame.Surface) -> None:
+        """Draw each player's private path into the center."""
+
         for player_index, lane in enumerate(self.layout.home_lanes):
             color = PLAYER_COLORS[player_index]
             for point in lane:
@@ -85,6 +104,8 @@ class BoardRenderer:
                 pygame.draw.rect(surface, color, rect, 3, border_radius=7)
 
     def _draw_yards(self, surface: pygame.Surface, game, fonts: dict[str, pygame.font.Font]) -> None:
+        """Draw each player's off-board token yard and name plate."""
+
         for player_index, positions in enumerate(self.layout.yard_positions):
             color = PLAYER_COLORS[player_index]
             xs = [point[0] for point in positions]
@@ -100,6 +121,8 @@ class BoardRenderer:
             surface.blit(image, plate)
 
     def _draw_move_highlights(self, surface: pygame.Surface, moves: list[Move]) -> None:
+        """Ring clickable tokens and their destinations for a human turn."""
+
         for move in moves:
             start = self.layout.position_for(move.player_index, move.from_steps, move.token_index)
             pygame.draw.circle(surface, WHITE, _point(start), self.cell_radius + 10, 3)
@@ -113,6 +136,8 @@ class BoardRenderer:
         fonts: dict[str, pygame.font.Font],
         animated_positions: dict[tuple[int, int], tuple[float, float]],
     ) -> None:
+        """Draw every token, including simple offsets for stacked tokens."""
+
         stack_offsets: dict[tuple[int, int], int] = {}
         for player_index, player in enumerate(game.players):
             for token_index, token in enumerate(player.tokens):
@@ -123,6 +148,9 @@ class BoardRenderer:
                 track_index = self.layout.track_index(player_index, token.steps)
                 offset = (0, 0)
                 if track_index is not None:
+                    # Tokens can share a square. Tiny offsets keep both token
+                    # numbers readable instead of painting them directly on
+                    # top of each other.
                     count = stack_offsets.get((player_index, track_index), 0)
                     stack_offsets[(player_index, track_index)] = count + 1
                     offset = ((count % 2) * 10 - 5, (count // 2) * 10 - 5)
@@ -136,6 +164,8 @@ class BoardRenderer:
 
 
 def _outer_polygon(layout) -> list[tuple[int, int]]:
+    """Return the outer board outline, slightly larger than the track."""
+
     points = []
     cx, cy = layout.center
     for i in range(layout.polygon_sides):
@@ -145,6 +175,8 @@ def _outer_polygon(layout) -> list[tuple[int, int]]:
 
 
 def _owner_for_start(index: int, start_indices: tuple[int, ...]) -> int | None:
+    """Return which player owns a start square, or ``None``."""
+
     for owner, start in enumerate(start_indices):
         if index == start:
             return owner
@@ -152,14 +184,20 @@ def _owner_for_start(index: int, start_indices: tuple[int, ...]) -> int | None:
 
 
 def _cell_rect(point: tuple[float, float], radius: int) -> pygame.Rect:
+    """Build a square pygame rect centered on a board coordinate."""
+
     return pygame.Rect(int(point[0] - radius), int(point[1] - radius), radius * 2, radius * 2)
 
 
 def _point(point: tuple[float, float]) -> tuple[int, int]:
+    """Convert floating layout coordinates to integer pixels."""
+
     return int(point[0]), int(point[1])
 
 
 def _draw_star(surface: pygame.Surface, center: tuple[float, float], radius: int, color: tuple[int, int, int]) -> None:
+    """Draw a small star marking a safe square."""
+
     points = []
     cx, cy = center
     for index in range(10):

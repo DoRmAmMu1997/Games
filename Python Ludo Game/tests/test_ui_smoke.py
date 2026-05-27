@@ -20,15 +20,23 @@ from main import LudoApp
 
 
 class UiSmokeTests(unittest.TestCase):
+    """Small pygame checks that catch broken imports and screen wiring."""
+
     @classmethod
     def setUpClass(cls) -> None:
+        """Initialize pygame once for this test class."""
+
         pygame.init()
 
     @classmethod
     def tearDownClass(cls) -> None:
+        """Release pygame resources after the smoke tests."""
+
         pygame.quit()
 
     def test_setup_buttons_expose_player_and_rule_controls(self) -> None:
+        """The setup screen should expose the expected controls."""
+
         app = LudoApp()
         try:
             keys = {button.key for button in app.setup_buttons()}
@@ -41,6 +49,8 @@ class UiSmokeTests(unittest.TestCase):
             app.running = False
 
     def test_autotest_frames_can_render_without_crashing(self) -> None:
+        """The app should draw a few headless frames successfully."""
+
         app = LudoApp()
         try:
             app.run(max_frames=3)

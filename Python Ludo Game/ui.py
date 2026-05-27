@@ -21,7 +21,12 @@ from settings import (
 
 @dataclass
 class Button:
-    """Simple rectangular button used by setup and play screens."""
+    """Simple rectangular button used by setup and play screens.
+
+    The ``key`` is the value the app receives when the button is clicked. That
+    lets drawing code stay generic while ``main.py`` decides what each button
+    actually does.
+    """
 
     rect: pygame.Rect
     text: str
@@ -30,9 +35,13 @@ class Button:
     accent: tuple[int, int, int] = GOLD
 
     def contains(self, pos: tuple[int, int]) -> bool:
+        """Return True when ``pos`` clicks this enabled button."""
+
         return self.enabled and self.rect.collidepoint(pos)
 
     def draw(self, surface: pygame.Surface, fonts: dict[str, pygame.font.Font], mouse: tuple[int, int]) -> None:
+        """Render the button, including disabled and hover states."""
+
         hovered = self.contains(mouse)
         fill = self.accent if hovered else PANEL_CARD
         if not self.enabled:
@@ -66,6 +75,13 @@ def draw_text(
     *,
     center: bool = False,
 ) -> None:
+    """Draw a single line of text.
+
+    Pygame surfaces draw text by rendering it into a tiny image first, then
+    blitting that image onto the main window. ``center=True`` changes how the
+    destination rectangle is positioned.
+    """
+
     image = font.render(text, True, color)
     rect = image.get_rect(center=pos) if center else image.get_rect(topleft=pos)
     surface.blit(image, rect)
@@ -78,6 +94,8 @@ def draw_panel(
     border: tuple[int, int, int] = PANEL_EDGE,
     fill: tuple[int, int, int] = PANEL_CARD,
 ) -> None:
+    """Draw a rounded rectangular panel used behind sidebar content."""
+
     pygame.draw.rect(surface, fill, rect, border_radius=10)
     pygame.draw.rect(surface, border, rect, 2, border_radius=10)
 
@@ -90,6 +108,12 @@ def draw_wrapped(
     color: tuple[int, int, int] = WHITE,
     line_gap: int = 4,
 ) -> None:
+    """Draw text inside ``rect`` using simple word wrapping.
+
+    This helper is intentionally small and predictable. It is good enough for
+    short UI prompts and avoids pulling in a larger text layout dependency.
+    """
+
     words = text.split()
     lines: list[str] = []
     current = ""
@@ -98,6 +122,8 @@ def draw_wrapped(
         if font.size(candidate)[0] <= rect.width:
             current = candidate
         else:
+            # Once adding the next word would overflow, commit the line we
+            # already know fits and start a fresh line with the new word.
             if current:
                 lines.append(current)
             current = word
@@ -113,7 +139,11 @@ def draw_wrapped(
 
 
 def draw_dice(surface: pygame.Surface, fonts: dict[str, pygame.font.Font], value: int | None, rect: pygame.Rect) -> None:
-    """Draw one die face."""
+    """Draw one die face.
+
+    ``None`` means no roll is visible yet, so the center shows a dash instead
+    of pips.
+    """
 
     pygame.draw.rect(surface, WHITE, rect, border_radius=12)
     pygame.draw.rect(surface, INK, rect, 3, border_radius=12)
@@ -133,6 +163,8 @@ def draw_dice(surface: pygame.Surface, fonts: dict[str, pygame.font.Font], value
 
 
 def _pip_offsets(value: int) -> list[tuple[int, int]]:
+    """Return normalized pip positions for a die value from 1 to 6."""
+
     if value == 1:
         return [(0, 0)]
     if value == 2:
@@ -147,6 +179,8 @@ def _pip_offsets(value: int) -> list[tuple[int, int]]:
 
 
 def status_color(text: str) -> tuple[int, int, int]:
+    """Choose an event-log text color from a short message."""
+
     lowered = text.lower()
     if "wins" in lowered or "home" in lowered:
         return SUCCESS

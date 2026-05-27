@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+# PyInstaller reads this file to build a single windowed executable. The game
+# draws its icon and art procedurally, so there are no image or sound files to
+# include in the `datas` list.
+
 
 a = Analysis(
     ['main.py'],
@@ -29,7 +33,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=False,  # open as a normal desktop app without a terminal window
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

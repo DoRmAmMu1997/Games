@@ -20,23 +20,41 @@ class TokenState:
 
     @property
     def in_yard(self) -> bool:
+        """True while the token has not entered the board."""
+
         return self.steps < 0
 
     @property
     def finished(self) -> bool:
+        """True when the token has reached the final home cell.
+
+        ``TokenState`` does not know the board length by itself, so the game
+        stores the current layout's finish step on the token before this
+        property is used.
+        """
+
         return getattr(self, "_finished_steps", None) == self.steps
 
     def to_dict(self) -> dict:
+        """Serialize just the token fields that belong in save files."""
+
         return {"steps": self.steps}
 
     @classmethod
     def from_dict(cls, data: dict) -> "TokenState":
+        """Rebuild a token from saved JSON data."""
+
         return cls(steps=int(data.get("steps", -1)))
 
 
 @dataclass
 class PlayerState:
-    """One Ludo player, human or AI."""
+    """One Ludo player, human or AI.
+
+    The player owns four token states plus a few counters used for the final
+    ranking and lifetime stats. UI-only details, such as selected buttons, do
+    not live here because this object is saved to disk.
+    """
 
     name: str
     is_human: bool
@@ -49,12 +67,18 @@ class PlayerState:
     finished_turn: int | None = None
 
     def finished_count(self, finish_steps: int) -> int:
+        """Count how many of this player's tokens are fully home."""
+
         return sum(1 for token in self.tokens if token.steps == finish_steps)
 
     def progress_score(self, finish_steps: int) -> int:
+        """Return a simple total-progress score for ranking unfinished players."""
+
         return sum(max(0, min(token.steps, finish_steps)) for token in self.tokens)
 
     def to_dict(self) -> dict:
+        """Serialize the player into JSON-compatible save data."""
+
         return {
             "name": self.name,
             "is_human": self.is_human,
@@ -67,6 +91,8 @@ class PlayerState:
 
     @classmethod
     def from_dict(cls, data: dict) -> "PlayerState":
+        """Rebuild a player and all four tokens from saved JSON data."""
+
         return cls(
             name=str(data["name"]),
             is_human=bool(data["is_human"]),
@@ -80,7 +106,12 @@ class PlayerState:
 
 @dataclass(frozen=True)
 class Move:
-    """A legal token move for a specific die roll."""
+    """A legal token move for a specific die roll.
+
+    ``from_steps`` and ``to_steps`` are relative to the moving player's own
+    start square. ``landing_index`` is the shared board index, or ``None`` when
+    the move lands in the private home lane.
+    """
 
     player_index: int
     token_index: int
@@ -94,7 +125,11 @@ class Move:
 
 @dataclass
 class MoveResult:
-    """Outcome returned after applying a move."""
+    """Outcome returned after applying a move.
+
+    The UI uses this to decide what to announce and whether a player earned a
+    bonus turn. Tests also inspect it so rule regressions are easy to spot.
+    """
 
     move: Move
     capture: bool = False

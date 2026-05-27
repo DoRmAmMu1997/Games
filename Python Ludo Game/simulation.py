@@ -46,6 +46,8 @@ def run_ai_game(
 
 
 def main() -> None:
+    """Parse command-line options and print aggregate AI results."""
+
     parser = argparse.ArgumentParser(description="Run seeded Ludo AI simulations.")
     parser.add_argument("--games", type=int, default=5)
     parser.add_argument("--players", type=int, choices=(4, 5, 6), default=4)
@@ -58,6 +60,8 @@ def main() -> None:
     total_turns = 0
     total_captures = 0
     for offset in range(args.games):
+        # Incrementing the seed gives reproducible but different games within
+        # one batch, which is useful when comparing AI profile tweaks.
         metrics = run_ai_game(
             total_players=args.players,
             profile_key=args.profile,
