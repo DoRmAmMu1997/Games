@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-# PyInstaller reads this file to build a single windowed executable. The game
-# draws its icon and art procedurally, so there are no image or sound files to
-# include in the `datas` list.
+# PyInstaller reads this file to build a single windowed executable. The app
+# window draws most art procedurally, while the bundled Windows executable uses
+# `ludo_icon.ico` for its file/taskbar icon.
 
 
 a = Analysis(
@@ -39,4 +39,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['ludo_icon.ico'],
 )
