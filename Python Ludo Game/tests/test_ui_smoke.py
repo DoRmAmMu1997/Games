@@ -50,6 +50,39 @@ class UiSmokeTests(unittest.TestCase):
         finally:
             app.running = False
 
+    def test_setup_option_rows_keep_labels_values_and_buttons_aligned(self) -> None:
+        """Setup option labels, values, and buttons should share row geometry."""
+
+        row_helper = getattr(ludo_main, "_setup_option_row", None)
+        self.assertIsNotNone(row_helper)
+
+        app = LudoApp()
+        try:
+            buttons = {button.key: button for button in app.setup_buttons()}
+            rows = [
+                (0, "total_players_prev", "total_players_next"),
+                (1, "human_count_prev", "human_count_next"),
+                (2, "ai_profile_prev", "ai_profile_next"),
+            ]
+            for offset, (row_index, left_key, right_key) in enumerate(rows):
+                with self.subTest(row=row_index):
+                    row = row_helper(row_index)
+                    left_button = buttons[left_key].rect
+                    right_button = buttons[right_key].rect
+
+                    self.assertEqual(left_button, row.left_button)
+                    self.assertEqual(right_button, row.right_button)
+                    self.assertLessEqual(row.label_y + app.fonts["body"].get_height(), row.control_y)
+                    self.assertEqual(row.value_center[1], left_button.centery)
+                    self.assertEqual(row.value_center[1], right_button.centery)
+
+                    if offset + 1 < len(rows):
+                        next_row = row_helper(row_index + 1)
+                        self.assertLessEqual(left_button.bottom, next_row.label_y)
+                        self.assertLessEqual(right_button.bottom, next_row.label_y)
+        finally:
+            app.running = False
+
     def test_setup_name_fields_do_not_overlap_buttons_for_large_human_counts(self) -> None:
         """Name fields must stay clear of buttons even with every seat human."""
 

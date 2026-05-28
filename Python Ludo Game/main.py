@@ -9,12 +9,14 @@ import os
 import sys
 import time
 from ctypes import wintypes
+from dataclasses import dataclass
 from pathlib import Path
 
 import pygame
 
 import ai
 import ui
+import visual_theme as theme
 from board_render import BoardRenderer
 from game import LudoGame, LudoRules
 from settings import (
@@ -22,12 +24,14 @@ from settings import (
     BG,
     DICE_ANIM_MS,
     FPS,
+    GOLD,
     MAX_PLAYERS,
     PANEL_BG,
     PANEL_CARD,
     PANEL_EDGE,
     PANEL_WIDTH,
     PANEL_X,
+    INK,
     PLAYER_COLORS,
     PLAYER_NAMES,
     SAVE_DIR,
@@ -43,6 +47,11 @@ from settings import (
 
 SETUP_CONTROL_X = PANEL_X + 24
 SETUP_CONTROL_WIDTH = 246
+SETUP_OPTION_LABEL_START_Y = 112
+SETUP_OPTION_STEP = 78
+SETUP_OPTION_CONTROL_OFFSET_Y = 32
+SETUP_OPTION_CONTROL_HEIGHT = 38
+SETUP_OPTION_BUTTON_WIDTH = 46
 SETUP_NAME_HEADER_Y = 570
 SETUP_NAME_START_Y = 608
 SETUP_NAME_FIELD_HEIGHT = 30
@@ -56,6 +65,53 @@ SETUP_ACTION_HEIGHT = 34
 SETUP_RESUME_Y = SETUP_NAME_SECTION_BOTTOM + SETUP_ACTION_GAP
 SETUP_START_Y = SETUP_RESUME_Y + SETUP_ACTION_HEIGHT + SETUP_ACTION_BUTTON_GAP
 WINDOW_FIT_PADDING = 8
+PLAY_SAVE_RECT = pygame.Rect(34, 794, 136, 38)
+PLAY_NEW_RECT = pygame.Rect(34, 842, 136, 34)
+PLAY_DICE_TRAY_RECT = pygame.Rect(214, 790, 430, 86)
+PLAY_ROLL_RECT = pygame.Rect(510, 818, 112, 38)
+PLAY_MOVE_START = (690, 566)
+PLAY_MOVE_SIZE = (188, 38)
+PLAY_MOVE_GAP = 8
+PLAY_LOG_RECT = pygame.Rect(674, 742, 206, 132)
+PLAY_ROSTER_X = 932
+PLAY_ROSTER_Y = 90
+
+
+@dataclass(frozen=True)
+class SetupOptionRow:
+    """One setup option row with shared label, value, and button geometry."""
+
+    label_y: int
+    control_y: int
+    value_center: tuple[int, int]
+    left_button: pygame.Rect
+    right_button: pygame.Rect
+
+
+def _setup_option_row(index: int) -> SetupOptionRow:
+    """Return aligned geometry for one top setup option row."""
+
+    label_y = SETUP_OPTION_LABEL_START_Y + index * SETUP_OPTION_STEP
+    control_y = label_y + SETUP_OPTION_CONTROL_OFFSET_Y
+    left_button = pygame.Rect(
+        SETUP_CONTROL_X,
+        control_y,
+        SETUP_OPTION_BUTTON_WIDTH,
+        SETUP_OPTION_CONTROL_HEIGHT,
+    )
+    right_button = pygame.Rect(
+        SETUP_CONTROL_X + SETUP_CONTROL_WIDTH - SETUP_OPTION_BUTTON_WIDTH,
+        control_y,
+        SETUP_OPTION_BUTTON_WIDTH,
+        SETUP_OPTION_CONTROL_HEIGHT,
+    )
+    return SetupOptionRow(
+        label_y=label_y,
+        control_y=control_y,
+        value_center=(SETUP_CONTROL_X + SETUP_CONTROL_WIDTH // 2, left_button.centery),
+        left_button=left_button,
+        right_button=right_button,
+    )
 
 
 def _fit_window_size(
@@ -279,14 +335,17 @@ class LudoApp:
     def setup_buttons(self) -> list[ui.Button]:
         """Build fresh button objects for the setup screen."""
 
+        total_row = _setup_option_row(0)
+        human_row = _setup_option_row(1)
+        ai_row = _setup_option_row(2)
         x = SETUP_CONTROL_X
         return [
-            ui.Button(pygame.Rect(x, 164, 46, 38), "-", "total_players_prev"),
-            ui.Button(pygame.Rect(x + 200, 164, 46, 38), "+", "total_players_next"),
-            ui.Button(pygame.Rect(x, 236, 46, 38), "-", "human_count_prev"),
-            ui.Button(pygame.Rect(x + 200, 236, 46, 38), "+", "human_count_next"),
-            ui.Button(pygame.Rect(x, 308, 46, 38), "<", "ai_profile_prev"),
-            ui.Button(pygame.Rect(x + 200, 308, 46, 38), ">", "ai_profile_next"),
+            ui.Button(total_row.left_button, "-", "total_players_prev"),
+            ui.Button(total_row.right_button, "+", "total_players_next"),
+            ui.Button(human_row.left_button, "-", "human_count_prev"),
+            ui.Button(human_row.right_button, "+", "human_count_next"),
+            ui.Button(ai_row.left_button, "<", "ai_profile_prev"),
+            ui.Button(ai_row.right_button, ">", "ai_profile_next"),
             ui.Button(
                 pygame.Rect(x, 390, SETUP_CONTROL_WIDTH, 36),
                 _toggle_label("Blockades", self.rule_blockades),
@@ -598,7 +657,13 @@ class LudoApp:
         for player_index, player in enumerate(self.game.players):
             for token_index, token in enumerate(player.tokens):
                 key = (player_index, token_index)
-                target = self.game.layout.position_for(player_index, token.steps, token_index)
+                # The renderer may display a friendlier board shape than the
+                # engine's raw coordinate grid, so animation targets come from
+                # the renderer when one is active.
+                if self.renderer is not None:
+                    target = self.renderer.position_for(player_index, token.steps, token_index)
+                else:
+                    target = self.game.layout.position_for(player_index, token.steps, token_index)
                 current = self.token_pixels.get(key)
                 if current is None:
                     # First frame: snap tokens into place so they do not glide
@@ -643,7 +708,7 @@ class LudoApp:
     def _draw(self) -> None:
         """Clear the window and draw whichever screen is active."""
 
-        self.window.fill(BG)
+        theme.draw_ludo_wallpaper(self.window)
         if self.screen == "setup":
             self._draw_setup()
         elif self.screen == "playing":
@@ -656,6 +721,8 @@ class LudoApp:
 
         self.buttons = self.setup_buttons()
         mouse = self._logical_mouse_pos()
+        # The setup screen shares the new wallpaper so the menu feels like the
+        # same game as the redesigned board instead of a separate utility page.
         ui.draw_text(self.window, self.fonts["huge"], "LUDO", (450, 92), WHITE, center=True)
         ui.draw_wrapped(
             self.window,
@@ -667,11 +734,11 @@ class LudoApp:
         _draw_preview_board(self.window)
 
         panel = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 30, SCREEN_HEIGHT)
-        pygame.draw.rect(self.window, PANEL_BG, panel)
+        theme.draw_shadowed_rect(self.window, panel.inflate(-14, -18), PANEL_BG, border=PANEL_EDGE, radius=16)
         ui.draw_text(self.window, self.fonts["title"], "Setup", (PANEL_X + 24, 42), WHITE)
-        self._setup_value("Total Players", str(self.total_players), 128)
-        self._setup_value("Human Players", str(self.human_count), 200)
-        self._setup_value("AI Profile", self.ai_profiles[self.ai_profile_index].title(), 272)
+        self._setup_value("Total Players", str(self.total_players), 0)
+        self._setup_value("Human Players", str(self.human_count), 1)
+        self._setup_value("AI Profile", self.ai_profiles[self.ai_profile_index].title(), 2)
 
         ui.draw_text(self.window, self.fonts["header"], "Advanced Rules", (PANEL_X + 24, 354), WHITE)
         ui.draw_text(self.window, self.fonts["header"], "Human Names", (SETUP_CONTROL_X, SETUP_NAME_HEADER_Y), WHITE)
@@ -687,14 +754,15 @@ class LudoApp:
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
 
-    def _setup_value(self, label: str, value: str, y: int) -> None:
+    def _setup_value(self, label: str, value: str, row_index: int) -> None:
         """Draw one setup label plus its centered current value."""
 
-        ui.draw_text(self.window, self.fonts["body"], label, (PANEL_X + 24, y), SOFT)
-        ui.draw_text(self.window, self.fonts["header"], value, (PANEL_X + 146, y + 38), WHITE, center=True)
+        row = _setup_option_row(row_index)
+        ui.draw_text(self.window, self.fonts["body"], label, (SETUP_CONTROL_X, row.label_y), SOFT)
+        ui.draw_text(self.window, self.fonts["header"], value, row.value_center, WHITE, center=True)
 
     def _draw_playing(self) -> None:
-        """Draw the board, sidebar, action buttons, and legal highlights."""
+        """Draw the board, themed HUD, action buttons, and legal highlights."""
 
         if self.game is None or self.renderer is None:
             return
@@ -705,14 +773,94 @@ class LudoApp:
             self.visible_moves = self.game.legal_moves(self.game.last_roll)
         self.renderer.draw(self.window, self.game, self.fonts, self.visible_moves, self.token_pixels)
 
-        panel = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 30, SCREEN_HEIGHT)
-        pygame.draw.rect(self.window, PANEL_BG, panel)
-        self._draw_score_panel()
-        self._draw_action_panel()
+        self._draw_world_hud()
         self.buttons = self._buttons_for_screen()
         mouse = self._logical_mouse_pos()
         for button in self.buttons:
-            button.draw(self.window, self.fonts, mouse)
+            self._draw_play_button(button, mouse)
+
+    def _draw_world_hud(self) -> None:
+        """Draw compact gameplay controls over the wallpaper, not in a sidebar."""
+
+        if self.game is None:
+            return
+        current = self.game.current_player
+        die_value = self.game.last_roll
+        if self.dice_anim_remaining > 0:
+            die_value = ((pygame.time.get_ticks() // 70) % 6) + 1
+
+        # A single lower tray carries the current player and die, similar to a
+        # physical board-game table where the dice sit beside the board.
+        tray = PLAY_DICE_TRAY_RECT
+        theme.draw_dice_tray(self.window, tray, die_value, self.fonts, accent=current.color)
+        banner = pygame.Rect(tray.x + 104, tray.y + 12, 180, 28)
+        theme.draw_player_banner(self.window, banner, current.color, current.name[:18], self.fonts)
+
+        if current.is_human and self.game.awaiting == "choose_move":
+            prompt = "Pick a highlighted token or use a move button."
+        elif current.is_human:
+            prompt = "Roll the die."
+        else:
+            prompt = "AI is thinking..."
+        ui.draw_wrapped(
+            self.window,
+            self.fonts["small"],
+            prompt,
+            pygame.Rect(tray.x + 104, tray.y + 46, 300, 34),
+            WHITE,
+        )
+
+        self._draw_player_roster()
+        log_panel = PLAY_LOG_RECT
+        theme.draw_shadowed_rect(self.window, log_panel, theme.HUD_DARK, border=PANEL_EDGE, radius=12)
+        ui.draw_text(self.window, self.fonts["small"], "Table Log", (log_panel.x + 12, log_panel.y + 10), WHITE)
+        y = log_panel.y + 38
+        for line in self.game.event_log[-4:]:
+            ui.draw_text(self.window, self.fonts["tiny"], line[:36], (log_panel.x + 12, y), ui.status_color(line))
+            y += 22
+
+    def _draw_player_roster(self) -> None:
+        """Draw compact floating player chips instead of a heavy sidebar."""
+
+        if self.game is None:
+            return
+        ui.draw_text(self.window, self.fonts["header"], "Players", (PLAY_ROSTER_X, PLAY_ROSTER_Y - 42), WHITE)
+        for index, player in enumerate(self.game.players):
+            rect = pygame.Rect(PLAY_ROSTER_X, PLAY_ROSTER_Y + index * 52, 254, 40)
+            border = player.color if index == self.game.current else PANEL_EDGE
+            theme.draw_shadowed_rect(self.window, rect, theme.HUD_DARK, border=border, radius=12, shadow_offset=(0, 4))
+            pygame.draw.circle(self.window, player.color, (rect.x + 22, rect.centery), 12)
+            ui.draw_text(self.window, self.fonts["small"], player.name[:18], (rect.x + 44, rect.y + 7), WHITE)
+            tag = "Human" if player.is_human else self.game.ai_profile.title()
+            done = player.finished_count(self.game.layout.finish_steps)
+            ui.draw_text(
+                self.window,
+                self.fonts["tiny"],
+                f"{tag}  Home {done}/4  Captures {player.captures}",
+                (rect.x + 44, rect.y + 25),
+                SOFT,
+            )
+
+    def _draw_play_button(self, button: ui.Button, mouse: tuple[int, int]) -> None:
+        """Draw gameplay buttons with the new table-HUD treatment."""
+
+        hovered = button.contains(mouse)
+        current_color = self.game.current_player.color if self.game is not None else GOLD
+        if button.key in {"save_quit", "new_game"}:
+            # These small controls behave like table buttons rather than a
+            # rectangular sidebar menu. The key text stays short so it fits
+            # after the adaptive window scaling shrinks the game.
+            color = GOLD if button.key == "save_quit" else current_color
+            if hovered:
+                color = theme.brighten(color, 28)
+            theme.draw_round_icon_button(self.window, button.rect, color, button.text, self.fonts)
+            return
+
+        fill = theme.brighten(current_color, 18) if hovered else theme.HUD_DARK
+        border = GOLD if button.key == "roll" else current_color
+        theme.draw_shadowed_rect(self.window, button.rect, fill, border=border, radius=12, shadow_offset=(0, 4))
+        text_color = INK if hovered else WHITE
+        ui.draw_text(self.window, self.fonts["button"], button.text, button.rect.center, text_color, center=True)
 
     def _draw_score_panel(self) -> None:
         """Draw one compact status card per player."""
@@ -781,15 +929,21 @@ class LudoApp:
         if self.game is None:
             return []
         buttons: list[ui.Button] = []
-        x = PANEL_X + 32
         if self.game.current_player.is_human and self.game.awaiting == "pre_roll":
-            buttons.append(ui.Button(pygame.Rect(x, 454, 238, 42), "Roll Die  (R)", "roll"))
+            buttons.append(ui.Button(PLAY_ROLL_RECT, "Roll", "roll"))
         elif self.game.current_player.is_human and self.game.awaiting == "choose_move":
             for index, move in enumerate(self.visible_moves[:4]):
                 label = f"{index + 1}: Token {move.token_index + 1} -> {move.to_steps}"
-                buttons.append(ui.Button(pygame.Rect(x, 422 + index * 42, 238, 38), label, f"move_{index}"))
-        buttons.append(ui.Button(pygame.Rect(x, 804, 238, 42), "Save & Quit", "save_quit"))
-        buttons.append(ui.Button(pygame.Rect(x, 850, 238, 34), "New Game", "new_game"))
+                y = PLAY_MOVE_START[1] + index * (PLAY_MOVE_SIZE[1] + PLAY_MOVE_GAP)
+                buttons.append(
+                    ui.Button(
+                        pygame.Rect(PLAY_MOVE_START[0], y, PLAY_MOVE_SIZE[0], PLAY_MOVE_SIZE[1]),
+                        label,
+                        f"move_{index}",
+                    )
+                )
+        buttons.append(ui.Button(PLAY_SAVE_RECT, "Save", "save_quit"))
+        buttons.append(ui.Button(PLAY_NEW_RECT, "New", "new_game"))
         return buttons
 
     def _draw_game_over(self) -> None:
@@ -805,7 +959,7 @@ class LudoApp:
         ui.draw_text(self.window, self.fonts["title"], f"{winner.name} wins!", (450, 174), winner.color, center=True)
 
         table = pygame.Rect(210, 248, 480, 360)
-        ui.draw_panel(self.window, table)
+        theme.draw_shadowed_rect(self.window, table, theme.HUD_DARK, border=winner.color, radius=14)
         ui.draw_text(self.window, self.fonts["header"], "Final Ranking", (table.x + 28, table.y + 24), WHITE)
         for rank, player_index in enumerate(self.game.ranking, start=1):
             player = self.game.players[player_index]
@@ -820,8 +974,9 @@ class LudoApp:
             )
 
         stats = pygame.Rect(PANEL_X + 14, 60, PANEL_WIDTH + 2, 540)
-        pygame.draw.rect(self.window, PANEL_BG, (PANEL_X, 0, PANEL_WIDTH + 30, SCREEN_HEIGHT))
-        ui.draw_panel(self.window, stats)
+        # The stats card keeps the old information but uses the same floating
+        # table-card style as the redesigned setup and play screens.
+        theme.draw_shadowed_rect(self.window, stats, theme.HUD_DARK, border=PANEL_EDGE, radius=14)
         ui.draw_text(self.window, self.fonts["header"], "Lifetime Stats", (stats.x + 18, stats.y + 18), WHITE)
         games = max(1, int(self.stats.get("games", 0)))
         average_turns = int(self.stats.get("turn_total", 0)) / games
