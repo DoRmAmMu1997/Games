@@ -192,7 +192,30 @@ class BoardRenderer:
             border_width=4,
         )
 
+    def draw_static(self, surface: pygame.Surface) -> None:
+        """Draw the empty board without tokens, banners, or highlights.
+
+        The setup screen uses this to render true-to-life preview thumbnails
+        of each board shape before a game exists.
+        """
+
+        self._draw_table(surface)
+        if self.layout.total_players == 4:
+            self._draw_square_yards(surface)
+        else:
+            self._draw_radial_yards(surface)
+        self._draw_track(surface)
+        self._draw_home_lanes(surface)
+        self._draw_center_home(surface, None)
+
     def _draw_square_homes(self, surface: pygame.Surface, game, fonts: dict[str, pygame.font.Font]) -> None:
+        """Draw the four square yards plus each player's name banner."""
+
+        self._draw_square_yards(surface)
+        for player_index, yard in enumerate(_square_home_rects()):
+            self._draw_player_tab(surface, game, fonts, player_index, yard)
+
+    def _draw_square_yards(self, surface: pygame.Surface) -> None:
         """Draw four large square home yards like a classic Ludo board."""
 
         for player_index, yard in enumerate(_square_home_rects()):
@@ -203,9 +226,23 @@ class BoardRenderer:
             pygame.draw.rect(surface, WHITE, inner, border_radius=5)
             pygame.draw.rect(surface, theme.BOARD_EDGE, inner, 2, border_radius=5)
             self._draw_yard_slots(surface, positions, color)
-            self._draw_player_tab(surface, game, fonts, player_index, yard)
 
     def _draw_radial_homes(self, surface: pygame.Surface, game, fonts: dict[str, pygame.font.Font]) -> None:
+        """Draw the radial yard wedges plus each player's name banner."""
+
+        self._draw_radial_yards(surface)
+        for player_index in range(self.layout.total_players):
+            banner = pygame.Rect(0, 0, 150, 28)
+            banner.center = _ipoint(self.display.banner_anchors[player_index])
+            theme.draw_player_banner(
+                surface,
+                banner,
+                self.display.seat_colors[player_index],
+                game.players[player_index].name[:16],
+                fonts,
+            )
+
+    def _draw_radial_yards(self, surface: pygame.Surface) -> None:
         """Draw the triangular yard wedges between the radial board arms."""
 
         for player_index, positions in enumerate(self.display.yard_positions):
@@ -233,11 +270,6 @@ class BoardRenderer:
             pygame.draw.polygon(surface, WHITE, inner)
             pygame.draw.polygon(surface, theme.BOARD_EDGE, inner, 2)
             self._draw_yard_slots(surface, positions, color)
-            banner = pygame.Rect(0, 0, 150, 28)
-            banner.center = _ipoint(self.display.banner_anchors[player_index])
-            theme.draw_player_banner(
-                surface, banner, color, game.players[player_index].name[:16], fonts
-            )
 
     def _draw_yard_slots(
         self,
@@ -335,8 +367,12 @@ class BoardRenderer:
         pygame.draw.polygon(surface, fill, points)
         pygame.draw.polygon(surface, border, points, 2)
 
-    def _draw_center_home(self, surface: pygame.Surface, game) -> None:
-        """Draw the multicolor finish area in the board center."""
+    def _draw_center_home(self, surface: pygame.Surface, game=None) -> None:
+        """Draw the multicolor finish area in the board center.
+
+        ``game`` may be ``None`` for static preview renders; the hub die then
+        shows a blank face instead of the last roll.
+        """
 
         if self.layout.total_players == 4:
             self._draw_square_center_home(surface)
@@ -359,7 +395,7 @@ class BoardRenderer:
         die_size = 44
         die_rect = pygame.Rect(0, 0, die_size, die_size)
         die_rect.center = center
-        theme.draw_die_face(surface, die_rect, game.last_roll)
+        theme.draw_die_face(surface, die_rect, game.last_roll if game is not None else None)
 
     def _draw_square_center_home(self, surface: pygame.Surface) -> None:
         """Draw the four colored triangles in the classic square board center."""

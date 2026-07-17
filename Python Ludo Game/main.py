@@ -17,6 +17,7 @@ import pygame
 import ai
 import ui
 import visual_theme as theme
+from board import BoardLayout
 from board_render import BoardRenderer
 from game import LudoGame, LudoRules
 from settings import (
@@ -38,7 +39,7 @@ from settings import (
     SCREEN_WIDTH,
     SOFT,
     STATS_PATH,
-    TOKEN_ANIM_SPEED,
+    TOKEN_HOP_SPEED,
     WHITE,
     WINDOW_TITLE,
     seat_colors,
@@ -75,6 +76,8 @@ PLAY_MOVE_GAP = 8
 PLAY_LOG_RECT = pygame.Rect(674, 742, 206, 132)
 PLAY_ROSTER_X = 932
 PLAY_ROSTER_Y = 90
+PREVIEW_CENTERS = ((200, 470), (450, 470), (700, 470))
+PREVIEW_SIZE = 216
 
 
 @dataclass(frozen=True)
@@ -299,7 +302,7 @@ class LudoApp:
         self.window_size = _fit_window_size(_desktop_work_area_size(), _window_chrome_size())
         self.screen_surface = pygame.display.set_mode(self.window_size)
         pygame.display.set_caption(WINDOW_TITLE)
-        pygame.display.set_icon(_make_icon())
+        pygame.display.set_icon(_load_icon())
         self.window = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT)).convert()
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
@@ -328,7 +331,12 @@ class LudoApp:
         self.stats_recorded = False
         self.ai_timer = 0
         self.dice_anim_remaining = 0
+        # Animation state per (player_index, token_index): the drawn pixel,
+        # the engine steps it reflects, and the queue of cells still to hop.
         self.token_pixels: dict[tuple[int, int], tuple[float, float]] = {}
+        self.token_steps: dict[tuple[int, int], int] = {}
+        self.token_waypoints: dict[tuple[int, int], list[tuple[float, float]]] = {}
+        self.preview_cache: dict[int, pygame.Surface] = {}
         self.message = "Choose a table and start the race."
         self.saved_turns_taken: int | None = None
 
@@ -434,6 +442,8 @@ class LudoApp:
         self.ai_timer = 0
         self.dice_anim_remaining = 0
         self.token_pixels = {}
+        self.token_steps = {}
+        self.token_waypoints = {}
         self.saved_turns_taken = game.turns_taken
         self.message = "Roll a 6 to bring a token out."
 
@@ -648,34 +658,88 @@ class LudoApp:
                 result = self.game.apply_move(move)
                 self.message = result.message
 
+    def _token_position(self, player_index: int, steps: int, token_index: int) -> tuple[float, float]:
+        """Return the drawn coordinate for a token's step value.
+
+        The renderer may display a friendlier board shape than the engine's
+        raw coordinate grid, so animation targets come from the renderer when
+        one is active.
+        """
+
+        if self.renderer is not None:
+            return self.renderer.position_for(player_index, steps, token_index)
+        assert self.game is not None
+        return self.game.layout.position_for(player_index, steps, token_index)
+
+    def _token_waypoints(
+        self, player_index: int, token_index: int, old_steps: int, new_steps: int
+    ) -> list[tuple[float, float]]:
+        """Return the cells a token visibly travels through for one move.
+
+        Forward moves hop through every intermediate cell like a real Ludo
+        token counting its die roll. Captures (back to the yard) and yard
+        exits are single direct slides, matching how players physically pick
+        the token up and place it.
+        """
+
+        if 0 <= old_steps < new_steps:
+            return [
+                self._token_position(player_index, steps, token_index)
+                for steps in range(old_steps + 1, new_steps + 1)
+            ]
+        return [self._token_position(player_index, new_steps, token_index)]
+
     def _update_token_pixels(self, elapsed_ms: int) -> None:
-        """Ease drawn token positions toward their true board coordinates."""
+        """Advance drawn token positions along their pending waypoints."""
 
         if self.game is None:
             return
-        amount = min(1.0, elapsed_ms / 1000 * TOKEN_ANIM_SPEED)
+        budget = TOKEN_HOP_SPEED * elapsed_ms / 1000
         for player_index, player in enumerate(self.game.players):
             for token_index, token in enumerate(player.tokens):
                 key = (player_index, token_index)
-                # The renderer may display a friendlier board shape than the
-                # engine's raw coordinate grid, so animation targets come from
-                # the renderer when one is active.
-                if self.renderer is not None:
-                    target = self.renderer.position_for(player_index, token.steps, token_index)
-                else:
-                    target = self.game.layout.position_for(player_index, token.steps, token_index)
-                current = self.token_pixels.get(key)
-                if current is None:
+                target = self._token_position(player_index, token.steps, token_index)
+                if key not in self.token_pixels:
                     # First frame: snap tokens into place so they do not glide
                     # in from the top-left corner of the window.
                     self.token_pixels[key] = target
+                    self.token_steps[key] = token.steps
+                    self.token_waypoints[key] = []
                     continue
-                dx = target[0] - current[0]
-                dy = target[1] - current[1]
-                if dx * dx + dy * dy < 1.0:
-                    self.token_pixels[key] = target
-                else:
-                    self.token_pixels[key] = (current[0] + dx * amount, current[1] + dy * amount)
+                if token.steps != self.token_steps.get(key):
+                    self.token_waypoints[key] = self._token_waypoints(
+                        player_index, token_index, self.token_steps.get(key, -1), token.steps
+                    )
+                    self.token_steps[key] = token.steps
+
+                # Walk the waypoint queue at constant speed. One frame may
+                # consume several waypoints when the frame rate dips.
+                current = self.token_pixels[key]
+                queue = self.token_waypoints.setdefault(key, [])
+                remaining = budget
+                while queue and remaining > 0:
+                    head = queue[0]
+                    dx = head[0] - current[0]
+                    dy = head[1] - current[1]
+                    length = math.hypot(dx, dy)
+                    if length <= remaining:
+                        current = head
+                        queue.pop(0)
+                        remaining -= length
+                    else:
+                        current = (current[0] + dx / length * remaining, current[1] + dy / length * remaining)
+                        remaining = 0
+                if not queue and current != target and remaining > 0:
+                    # No pending hops: keep the token glued to its cell (this
+                    # also covers loading a save or renderer changes).
+                    dx = target[0] - current[0]
+                    dy = target[1] - current[1]
+                    length = math.hypot(dx, dy)
+                    current = target if length <= remaining else (
+                        current[0] + dx / length * remaining,
+                        current[1] + dy / length * remaining,
+                    )
+                self.token_pixels[key] = current
 
     def _save_if_turn_completed(self) -> None:
         """Autosave after completed turns, not after every animation frame."""
@@ -731,7 +795,7 @@ class LudoApp:
             pygame.Rect(170, 138, 560, 80),
             SOFT,
         )
-        _draw_preview_board(self.window)
+        self._draw_board_previews()
 
         panel = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 30, SCREEN_HEIGHT)
         theme.draw_shadowed_rect(self.window, panel.inflate(-14, -18), PANEL_BG, border=PANEL_EDGE, radius=16)
@@ -760,6 +824,46 @@ class LudoApp:
         row = _setup_option_row(row_index)
         ui.draw_text(self.window, self.fonts["body"], label, (SETUP_CONTROL_X, row.label_y), SOFT)
         ui.draw_text(self.window, self.fonts["header"], value, row.value_center, WHITE, center=True)
+
+    def _board_preview(self, total_players: int) -> pygame.Surface:
+        """Return a cached true-to-life thumbnail of one board shape."""
+
+        cached = self.preview_cache.get(total_players)
+        if cached is None:
+            # Render the real board once at full logical size, then crop the
+            # board area and shrink it. The preview is therefore always an
+            # honest picture of the layout the player is about to get.
+            canvas = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            theme.draw_ludo_wallpaper(canvas)
+            renderer = BoardRenderer(BoardLayout.for_player_count(total_players))
+            renderer.draw_static(canvas)
+            if total_players == 4:
+                crop = pygame.Rect(120, 90, 660, 660)
+            else:
+                crop = pygame.Rect(95, 55, 710, 710)
+            board = canvas.subsurface(crop).copy()
+            cached = pygame.transform.smoothscale(board, (PREVIEW_SIZE, PREVIEW_SIZE))
+            self.preview_cache[total_players] = cached
+        return cached
+
+    def _draw_board_previews(self) -> None:
+        """Draw the 4P/5P/6P board thumbnails, highlighting the selection."""
+
+        for count, center in zip((4, 5, 6), PREVIEW_CENTERS):
+            thumb = self._board_preview(count)
+            rect = thumb.get_rect(center=center)
+            self.window.blit(thumb, rect)
+            selected = count == self.total_players
+            border = GOLD if selected else PANEL_EDGE
+            pygame.draw.rect(self.window, border, rect.inflate(10, 10), 4 if selected else 2, border_radius=10)
+            ui.draw_text(
+                self.window,
+                self.fonts["small"],
+                f"{count} Players",
+                (rect.centerx, rect.bottom + 18),
+                WHITE if selected else SOFT,
+                center=True,
+            )
 
     def _draw_playing(self) -> None:
         """Draw the board, themed HUD, action buttons, and legal highlights."""
@@ -862,60 +966,6 @@ class LudoApp:
         text_color = INK if hovered else WHITE
         ui.draw_text(self.window, self.fonts["button"], button.text, button.rect.center, text_color, center=True)
 
-    def _draw_score_panel(self) -> None:
-        """Draw one compact status card per player."""
-
-        if self.game is None:
-            return
-        y = 22
-        for index, player in enumerate(self.game.players):
-            rect = pygame.Rect(PANEL_X + 14, y, PANEL_WIDTH + 2, 60)
-            border = player.color if index == self.game.current else PANEL_EDGE
-            ui.draw_panel(self.window, rect, border=border)
-            pygame.draw.circle(self.window, player.color, (rect.x + 26, rect.y + 26), 14)
-            ui.draw_text(self.window, self.fonts["body"], player.name[:20], (rect.x + 50, rect.y + 12), WHITE)
-            tag = "Human" if player.is_human else self.game.ai_profile.title()
-            done = player.finished_count(self.game.layout.finish_steps)
-            ui.draw_text(
-                self.window,
-                self.fonts["tiny"],
-                f"{tag}  Home {done}/4  Captures {player.captures}",
-                (rect.x + 50, rect.y + 42),
-                SOFT,
-            )
-            y += 66
-
-    def _draw_action_panel(self) -> None:
-        """Draw the current-turn prompt, die, and recent event log."""
-
-        if self.game is None:
-            return
-        action = pygame.Rect(PANEL_X + 14, 610, PANEL_WIDTH + 2, 264)
-        ui.draw_panel(self.window, action)
-        ui.draw_text(self.window, self.fonts["header"], "Turn", (action.x + 18, action.y + 16), WHITE)
-        current = self.game.current_player
-        ui.draw_text(self.window, self.fonts["body"], current.name, (action.x + 18, action.y + 50), current.color)
-        die_value = self.game.last_roll
-        if self.dice_anim_remaining > 0:
-            die_value = ((pygame.time.get_ticks() // 70) % 6) + 1
-        ui.draw_dice(self.window, self.fonts, die_value, pygame.Rect(action.right - 102, action.y + 24, 72, 72))
-
-        if current.is_human and self.game.awaiting == "choose_move":
-            prompt = "Pick a highlighted token or use the move buttons."
-        elif current.is_human:
-            prompt = "Roll the die."
-        else:
-            prompt = "AI is thinking..."
-        ui.draw_wrapped(self.window, self.fonts["small"], prompt, pygame.Rect(action.x + 18, action.y + 106, action.width - 36, 42), SOFT)
-
-        log_rect = pygame.Rect(action.x + 18, action.y + 150, action.width - 36, 96)
-        pygame.draw.rect(self.window, (26, 34, 38), log_rect, border_radius=8)
-        pygame.draw.rect(self.window, PANEL_EDGE, log_rect, 1, border_radius=8)
-        y = log_rect.y + 10
-        for line in self.game.event_log[-6:]:
-            ui.draw_text(self.window, self.fonts["tiny"], line[:54], (log_rect.x + 10, y), ui.status_color(line))
-            y += 24
-
     def _buttons_for_screen(self) -> list[ui.Button]:
         """Return the buttons that are valid on the current screen."""
 
@@ -1017,12 +1067,34 @@ def _toggle_label(label: str, enabled: bool) -> str:
     return f"{label}: {'On' if enabled else 'Off'}"
 
 
-def _make_icon() -> pygame.Surface:
-    """Create a tiny procedural window icon.
+def _resource_path(name: str) -> Path:
+    """Return the path to a bundled read-only resource file, such as the icon.
 
-    No image file is required; this keeps the Ludo folder self-contained for
-    both source runs and PyInstaller builds.
+    PyInstaller unpacks bundled data into ``sys._MEIPASS`` at runtime; running
+    from source the file simply sits next to this script.
     """
+
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base) / name
+    return Path(__file__).resolve().parent / name
+
+
+def _load_icon() -> pygame.Surface:
+    """Load the window icon, falling back to a procedural one.
+
+    The .ico file gives Windows a crisp multi-resolution icon; the drawn
+    fallback keeps source checkouts working even if the file goes missing.
+    """
+
+    try:
+        return pygame.image.load(str(_resource_path("ludo_icon.ico")))
+    except (OSError, pygame.error):
+        return _make_icon()
+
+
+def _make_icon() -> pygame.Surface:
+    """Create a tiny procedural window icon as a fallback."""
 
     icon = pygame.Surface((64, 64), pygame.SRCALPHA)
     pygame.draw.rect(icon, (238, 232, 209), (4, 4, 56, 56), border_radius=12)
@@ -1031,23 +1103,6 @@ def _make_icon() -> pygame.Surface:
         y = 22 + (index // 2) * 20
         pygame.draw.circle(icon, color, (x, y), 9)
     return icon
-
-
-def _draw_preview_board(surface: pygame.Surface) -> None:
-    """Draw the small 4P/5P/6P board-shape preview on setup."""
-
-    center = (450, 476)
-    radius = 210
-    for sides, x_offset in ((4, -250), (5, 0), (6, 250)):
-        points = []
-        cx = center[0] + x_offset
-        cy = center[1]
-        for index in range(sides):
-            angle = -math.pi / 2 + math.tau * index / sides
-            points.append((int(cx + math.cos(angle) * radius * 0.42), int(cy + math.sin(angle) * radius * 0.42)))
-        pygame.draw.polygon(surface, (238, 232, 209), points)
-        pygame.draw.polygon(surface, seat_colors(sides)[0], points, 4)
-        ui.draw_text(surface, pygame.font.SysFont("arial", 24, bold=True), f"{sides}P", (cx, cy), WHITE, center=True)
 
 
 def main() -> None:

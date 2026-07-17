@@ -9,7 +9,8 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    # Bundle the icon so the running window can load it via _resource_path.
+    datas=[('ludo_icon.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

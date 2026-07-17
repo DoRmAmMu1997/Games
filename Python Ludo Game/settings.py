@@ -31,7 +31,9 @@ PANEL_WIDTH = SCREEN_WIDTH - PANEL_X - 30
 # instead of seeing computer turns flash by instantly.
 AI_TURN_DELAY_MS = 650
 DICE_ANIM_MS = 350
-TOKEN_ANIM_SPEED = 9.0
+# Tokens hop cell-by-cell along the track. This is the travel speed in pixels
+# per second: fast enough not to drag, slow enough to follow each hop.
+TOKEN_HOP_SPEED = 460.0
 
 
 # ---------------------------------------------------------------------------
