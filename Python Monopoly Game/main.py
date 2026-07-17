@@ -16,6 +16,8 @@ import os
 import random
 import sys
 import time
+from pathlib import Path
+from typing import Callable
 
 import pygame
 
@@ -27,7 +29,7 @@ from game import MonopolyGame
 from board_data import THEME_ORDER
 from settings import (
     AI_TURN_DELAY_MS, BG, FPS, SAVE_DIR, SAVEGAME_PATH, SCREEN_HEIGHT,
-    SCREEN_WIDTH, STATS_PATH, WINDOW_TITLE,
+    SCREEN_WIDTH, STATS_PATH, TOKEN_HOP_SPEED, WINDOW_TITLE,
 )
 
 # Action-bar button slots: two columns by four rows inside the bottom panel.
@@ -67,7 +69,7 @@ def _log_error(error: Exception) -> None:
         pass
 
 
-def _atomic_write(path, payload: dict) -> None:
+def _atomic_write(path: Path, payload: dict) -> None:
     """Write JSON via a temp file + os.replace, so a crash cannot corrupt it."""
     try:
         SAVE_DIR.mkdir(parents=True, exist_ok=True)
@@ -121,7 +123,7 @@ def _clear_saved_game() -> None:
 class MonopolyApp:
     """Owns the window and run loop and routes input to the game engine."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         # `SCALED` lets pygame stretch our logical 1280x880 surface to fit the
         # physical screen when we toggle into fullscreen (with letterboxing
         # for aspect-ratio mismatch). It also makes `event.pos` and
@@ -161,10 +163,12 @@ class MonopolyApp:
         self.buttons: list = []
         self._autosave_current: int | None = None   # last-seen turn marker
 
-        # Visual polish: tokens slide between spaces and the dice shuffle on
-        # a roll instead of snapping to their final value. The AI pauses
-        # while either animation is running so a person can follow play.
+        # Visual polish: tokens hop space-by-space after a roll and the dice
+        # shuffle before settling on their real value. The AI pauses while
+        # either animation is running so a person can follow play.
         self.token_px: dict = {}                 # player index -> (x, y) float pixels
+        self.token_pos: dict = {}                # player index -> last-seen board space
+        self.token_route: dict = {}              # player index -> pending waypoint pixels
         self.dice_show = (0, 0)                  # what the UI is currently drawing
         self.dice_anim_remaining_ms = 0          # >0 while the dice shuffle
         self.last_game_dice = (0, 0)             # used to spot a fresh roll
@@ -184,6 +188,8 @@ class MonopolyApp:
         self.message = ""
         # Reset the visuals so the next frame places tokens / dice from scratch.
         self.token_px = {}
+        self.token_pos = {}
+        self.token_route = {}
         self.dice_show = (0, 0)
         self.dice_anim_remaining_ms = 0
         self.last_game_dice = (0, 0)
@@ -253,21 +259,54 @@ class MonopolyApp:
 
         elapsed = self.clock.get_time()
 
-        # Token sliding: each token's drawn pixel position eases toward the
-        # centre of its actual board space. On the first frame after the game
-        # starts the table is empty, so seed each token at its target.
+        # Token hopping: after a roll a token visits every space it passes,
+        # like a physical token counting out the dice. Jumps that are not a
+        # normal forward roll (jail, some cards) slide directly instead. On
+        # the first frame after the game starts, seed each token at its space.
         if not self.token_px:
             for player in self.game.players:
                 self.token_px[player.index] = board_render.token_center(
                     player.position, player.index)
+                self.token_pos[player.index] = player.position
+                self.token_route[player.index] = []
         animating_tokens = False
+        budget = TOKEN_HOP_SPEED * elapsed / 1000.0
         for player in self.game.players:
-            target = board_render.token_center(player.position, player.index)
-            cx, cy = self.token_px[player.index]
-            nx = cx + (target[0] - cx) * 0.22
-            ny = cy + (target[1] - cy) * 0.22
-            self.token_px[player.index] = (nx, ny)
-            if abs(nx - target[0]) > 1.5 or abs(ny - target[1]) > 1.5:
+            idx = player.index
+            if player.position != self.token_pos.get(idx):
+                old = self.token_pos.get(idx, player.position)
+                forward = (player.position - old) % 40
+                if 1 <= forward <= 12:
+                    # A dice roll moves at most 12 spaces, so walk them all.
+                    self.token_route[idx] = [
+                        board_render.token_center((old + step) % 40, idx)
+                        for step in range(1, forward + 1)
+                    ]
+                else:
+                    self.token_route[idx] = [
+                        board_render.token_center(player.position, idx)]
+                self.token_pos[idx] = player.position
+            target = board_render.token_center(player.position, idx)
+            current = self.token_px[idx]
+            route = self.token_route.setdefault(idx, [])
+            remaining = budget
+            # Walk the waypoint queue at constant speed; one frame may finish
+            # several short hops when the frame rate dips.
+            while route and remaining > 0:
+                head = route[0]
+                dx, dy = head[0] - current[0], head[1] - current[1]
+                length = (dx * dx + dy * dy) ** 0.5
+                if length <= remaining:
+                    current = head
+                    route.pop(0)
+                    remaining -= length
+                else:
+                    current = (current[0] + dx / length * remaining,
+                               current[1] + dy / length * remaining)
+                    remaining = 0
+            self.token_px[idx] = current
+            if route or abs(current[0] - target[0]) > 1.5 \
+                    or abs(current[1] - target[1]) > 1.5:
                 animating_tokens = True
 
         # Dice shuffle: when the engine reports a new roll, randomise the
@@ -295,7 +334,7 @@ class MonopolyApp:
     # ------------------------------------------------------------------
     # Input
     # ------------------------------------------------------------------
-    def _handle_click(self, pos) -> None:
+    def _handle_click(self, pos: tuple[int, int]) -> None:
         """Route a left-click to the right handler for the current screen."""
         if self.screen == "setup":
             self._click_setup(pos)
@@ -315,7 +354,7 @@ class MonopolyApp:
             else:
                 self._click_button(pos)
 
-    def _click_button(self, pos) -> bool:
+    def _click_button(self, pos: tuple[int, int]) -> bool:
         """Check the current buttons; act on the first one hit."""
         for button in self.buttons:
             if button.hit(pos):
@@ -323,7 +362,7 @@ class MonopolyApp:
                 return True
         return False
 
-    def _click_setup(self, pos) -> None:
+    def _click_setup(self, pos: tuple[int, int]) -> None:
         """Route a setup-screen click: modal buttons, buttons, or a name box."""
         if self.confirm_new_game:
             self._click_button(pos)          # only the modal Yes/Cancel react
@@ -337,7 +376,7 @@ class MonopolyApp:
                 self.active_field = i
                 return
 
-    def _type_into_name_field(self, event) -> None:
+    def _type_into_name_field(self, event: pygame.event.Event) -> None:
         """Apply one keystroke to the focused setup-screen name box."""
         i = self.active_field
         if i is None:
@@ -351,7 +390,7 @@ class MonopolyApp:
                 and len(self.name_fields[i]) < 14:
             self.name_fields[i] += event.unicode
 
-    def _click_board(self, pos) -> None:
+    def _click_board(self, pos: tuple[int, int]) -> None:
         """In build/sell/mortgage mode, act on the board space clicked."""
         for position in range(40):
             if board_render.space_rect(position).collidepoint(pos):
@@ -366,7 +405,7 @@ class MonopolyApp:
                         self.game.mortgage(position)
                 return
 
-    def _click_trade(self, pos) -> None:
+    def _click_trade(self, pos: tuple[int, int]) -> None:
         """Handle clicks inside the trade-building dialog."""
         if self._click_button(pos):
             return
@@ -382,8 +421,28 @@ class MonopolyApp:
                     return
 
     def _on_button(self, key: str) -> None:
-        """Carry out the action bound to a button `key`."""
-        game = self.game
+        """Carry out the action bound to a button `key`.
+
+        The button keys form disjoint families (setup screen, turn actions,
+        the asset manager, and the trade dialog), so each family lives in its
+        own handler and the first one that recognises the key wins.
+        """
+        if self._on_setup_button(key):
+            return
+        if self._on_turn_button(key):
+            return
+        if self._on_asset_button(key):
+            return
+        if self._on_trade_button(key):
+            return
+        if key == "new_game":
+            self.screen = "setup"
+            self.game = None
+        elif key == "quit":
+            self.running = False
+
+    def _on_setup_button(self, key: str) -> bool:
+        """Handle setup-screen controls; True if `key` belonged here."""
         if key == "humans_down":
             self.human_count = max(1, self.human_count - 1)
         elif key == "humans_up":
@@ -411,7 +470,14 @@ class MonopolyApp:
             saved = load_saved_game()
             if saved is not None:
                 self.start_game(saved)
-        elif key == "roll":
+        else:
+            return False
+        return True
+
+    def _on_turn_button(self, key: str) -> bool:
+        """Handle in-turn actions and auctions; True if `key` belonged here."""
+        game = self.game
+        if key == "roll":
             game.roll_dice()
         elif key == "jail_pay":
             game.pay_jail_fine()
@@ -440,9 +506,14 @@ class MonopolyApp:
             game.auction_bid(game.auction["high_bid"] + step)
         elif key == "pass":
             game.auction_pass()
-        elif key == "trade":
-            self._open_trade()
-        elif key == "assets":
+        else:
+            return False
+        return True
+
+    def _on_asset_button(self, key: str) -> bool:
+        """Handle the title/asset manager; True if `key` belonged here."""
+        game = self.game
+        if key == "assets":
             self._open_assets()
         elif key.startswith("asset_title_"):
             self.asset_position = int(key.rsplit("_", 1)[1])
@@ -458,6 +529,15 @@ class MonopolyApp:
         elif key == "asset_close":
             self.mode = "normal"
             self.message = ""
+        else:
+            return False
+        return True
+
+    def _on_trade_button(self, key: str) -> bool:
+        """Handle the trade dialog; True if `key` belonged here."""
+        game = self.game
+        if key == "trade":
+            self._open_trade()
         elif key == "trade_partner_prev":
             self._cycle_trade_partner(-1)
         elif key == "trade_partner_next":
@@ -481,11 +561,9 @@ class MonopolyApp:
             game.respond_trade(True)
         elif key == "trade_reject":
             game.respond_trade(False)
-        elif key == "new_game":
-            self.screen = "setup"
-            self.game = None
-        elif key == "quit":
-            self.running = False
+        else:
+            return False
+        return True
 
     def _begin_new_game(self) -> None:
         """Create a fresh game from the setup-screen choices."""
@@ -533,7 +611,7 @@ class MonopolyApp:
         self.asset_position = owned[0]
         self.message = ""
 
-    def _manage_asset(self, action: str, operation) -> None:
+    def _manage_asset(self, action: str, operation: Callable[[int], bool]) -> None:
         """Run one engine asset action or show the engine's blocker reason."""
         if self.asset_position is None:
             self.message = "Choose a title first."
@@ -569,7 +647,7 @@ class MonopolyApp:
         cap = self.game.players[idx].cash
         self.trade[side]["cash"] = max(0, min(cap, self.trade[side]["cash"] + delta))
 
-    def _scroll_trade(self, mouse_pos, wheel_dy: int) -> None:
+    def _scroll_trade(self, mouse_pos: tuple[int, int], wheel_dy: int) -> None:
         """Scroll one side of the trade dialog under the mouse cursor.
 
         Wheeling up (`wheel_dy > 0`) moves the visible window UP the list
@@ -611,7 +689,7 @@ class MonopolyApp:
         if action in available:
             self._on_button(action)
 
-    def _hovered_board_space(self, pos) -> int | None:
+    def _hovered_board_space(self, pos: tuple[int, int]) -> int | None:
         """Return the board space under `pos`, if the mouse is on the board."""
         for position in range(40):
             if board_render.space_rect(position).collidepoint(pos):
@@ -641,7 +719,7 @@ class MonopolyApp:
         elif self.screen == "playing":
             self._draw_playing(mouse)
 
-    def _draw_playing(self, mouse) -> None:
+    def _draw_playing(self, mouse: tuple[int, int]) -> None:
         """Draw the board, side panel, action bar and any open dialog."""
         self.window.fill(BG)
 
@@ -741,99 +819,116 @@ class MonopolyApp:
         return self._playing_buttons()
 
     def _playing_buttons(self) -> list:
-        """Build the in-game buttons for the current player and state."""
+        """Build the in-game buttons for the current player and state.
+
+        Each dialog owns a small builder; this dispatcher just picks the one
+        matching the current mode or engine state.
+        """
         game = self.game
         actor = game.players[game.actor()]
         if not actor.is_human:
             return []
-
-        # Trade dialog buttons.
         if self.mode == "trade" and self.trade is not None:
-            panel = ui.trade_layout(game, self.trade)["panel"]
-            return [
-                # Arrows are placed symmetrically and well clear of the
-                # centred "With: NAME" label, however wide the name is.
-                ui.Button((panel.centerx - 200, panel.y + 54, 30, 26), "<",
-                          "trade_partner_prev"),
-                ui.Button((panel.centerx + 170, panel.y + 54, 30, 26), ">",
-                          "trade_partner_next"),
-                # Cash buttons sit directly under each column so the "Give"
-                # pair aligns with the give-side row list (x = panel.x + 30)
-                # and the "Get" pair aligns with the get-side rows
-                # (x = panel.x + 420 in the widened panel).
-                ui.Button((panel.x + 30, panel.bottom - 104, 130, 30), "Give -$50",
-                          "give_cash_down"),
-                ui.Button((panel.x + 170, panel.bottom - 104, 130, 30), "Give +$50",
-                          "give_cash_up"),
-                ui.Button((panel.x + 420, panel.bottom - 104, 130, 30), "Get -$50",
-                          "get_cash_down"),
-                ui.Button((panel.x + 560, panel.bottom - 104, 130, 30), "Get +$50",
-                          "get_cash_up"),
-                ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
-                          "Propose", "trade_propose", color=(46, 116, 78)),
-                ui.Button((panel.centerx + 20, panel.bottom - 56, 190, 40),
-                          "Cancel", "trade_cancel"),
-            ]
-
-        # Asset manager buttons: every title row selects a deed; the action
-        # buttons below use engine-provided availability and blocker reasons.
+            return self._trade_dialog_buttons()
         if self.mode == "assets":
-            layout = ui.asset_layout(game, actor)
-            buttons = []
-            for row, position in layout["title_rows"]:
-                color = (70, 96, 64) if position == self.asset_position else None
-                buttons.append(ui.Button(
-                    row, game.board[position].name[:24], f"asset_title_{position}",
-                    color=color))
-            panel = layout["panel"]
-            actions = (game.asset_actions_for(actor, self.asset_position)
-                       if self.asset_position is not None else {})
-            action_specs = (
-                ("Build", "asset_build", "build", (panel.x + 492, panel.bottom - 154)),
-                ("Sell", "asset_sell", "sell", (panel.x + 654, panel.bottom - 154)),
-                ("Mortgage", "asset_mortgage", "mortgage",
-                 (panel.x + 492, panel.bottom - 104)),
-                ("Lift Mortgage", "asset_unmortgage", "unmortgage",
-                 (panel.x + 654, panel.bottom - 104)),
-            )
-            for label, key, action, (x, y) in action_specs:
-                status = actions.get(action, {"allowed": False})
-                buttons.append(ui.Button((x, y, 148, 38), label, key,
-                                         enabled=bool(status["allowed"])))
-            buttons.append(ui.Button((panel.right - 116, panel.y + 18, 84, 32),
-                                     "Close", "asset_close"))
-            return buttons
-
-        # Trade-response dialog buttons.
+            return self._asset_dialog_buttons(actor)
         if game.awaiting == "trade_response":
-            panel = pygame.Rect(0, 0, 560, 360)
-            panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
-            return [
-                ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
-                          "Accept", "trade_accept", color=(46, 116, 78)),
-                ui.Button((panel.centerx + 20, panel.bottom - 56, 190, 40),
-                          "Reject", "trade_reject", color=(150, 60, 60)),
-            ]
-
-        # Auction dialog buttons.
+            return self._trade_response_buttons()
         if game.awaiting == "auction":
-            panel = pygame.Rect(0, 0, 460, 280)
-            panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
-            step = max(10, game.board[game.auction["position"]].price // 20)
-            can_bid = (game.auction["high_bid"] + step) <= actor.cash
-            return [
-                ui.Button((panel.centerx - 200, panel.bottom - 52, 190, 40),
-                          f"Bid +${step}", "bid", enabled=can_bid,
-                          color=(46, 116, 78)),
-                ui.Button((panel.centerx + 10, panel.bottom - 52, 190, 40),
-                          "Pass", "pass", color=(150, 60, 60)),
-            ]
-
-        # Build / sell / mortgage mode: just a Done button.
+            return self._auction_buttons(actor)
         if self.mode in ("build", "sell", "mortgage"):
+            # Board-click modes need only a way back out.
             return [ui.Button(_bar_rect(0), "Done", "done", color=(46, 116, 78))]
+        return self._action_bar_buttons(actor)
 
-        # Normal action bar.
+    def _trade_dialog_buttons(self) -> list:
+        """Buttons for the trade-building dialog."""
+        game = self.game
+        panel = ui.trade_layout(game, self.trade)["panel"]
+        return [
+            # Arrows are placed symmetrically and well clear of the
+            # centred "With: NAME" label, however wide the name is.
+            ui.Button((panel.centerx - 200, panel.y + 54, 30, 26), "<",
+                      "trade_partner_prev"),
+            ui.Button((panel.centerx + 170, panel.y + 54, 30, 26), ">",
+                      "trade_partner_next"),
+            # Cash buttons sit directly under each column so the "Give"
+            # pair aligns with the give-side row list (x = panel.x + 30)
+            # and the "Get" pair aligns with the get-side rows
+            # (x = panel.x + 420 in the widened panel).
+            ui.Button((panel.x + 30, panel.bottom - 104, 130, 30), "Give -$50",
+                      "give_cash_down"),
+            ui.Button((panel.x + 170, panel.bottom - 104, 130, 30), "Give +$50",
+                      "give_cash_up"),
+            ui.Button((panel.x + 420, panel.bottom - 104, 130, 30), "Get -$50",
+                      "get_cash_down"),
+            ui.Button((panel.x + 560, panel.bottom - 104, 130, 30), "Get +$50",
+                      "get_cash_up"),
+            ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
+                      "Propose", "trade_propose", color=(46, 116, 78)),
+            ui.Button((panel.centerx + 20, panel.bottom - 56, 190, 40),
+                      "Cancel", "trade_cancel"),
+        ]
+
+    def _asset_dialog_buttons(self, actor) -> list:
+        """Asset-manager buttons: every title row selects a deed; the action
+        buttons use engine-provided availability and blocker reasons."""
+        game = self.game
+        layout = ui.asset_layout(game, actor)
+        buttons = []
+        for row, position in layout["title_rows"]:
+            color = (70, 96, 64) if position == self.asset_position else None
+            buttons.append(ui.Button(
+                row, game.board[position].name[:24], f"asset_title_{position}",
+                color=color))
+        panel = layout["panel"]
+        actions = (game.asset_actions_for(actor, self.asset_position)
+                   if self.asset_position is not None else {})
+        action_specs = (
+            ("Build", "asset_build", "build", (panel.x + 492, panel.bottom - 154)),
+            ("Sell", "asset_sell", "sell", (panel.x + 654, panel.bottom - 154)),
+            ("Mortgage", "asset_mortgage", "mortgage",
+             (panel.x + 492, panel.bottom - 104)),
+            ("Lift Mortgage", "asset_unmortgage", "unmortgage",
+             (panel.x + 654, panel.bottom - 104)),
+        )
+        for label, key, action, (x, y) in action_specs:
+            status = actions.get(action, {"allowed": False})
+            buttons.append(ui.Button((x, y, 148, 38), label, key,
+                                     enabled=bool(status["allowed"])))
+        buttons.append(ui.Button((panel.right - 116, panel.y + 18, 84, 32),
+                                 "Close", "asset_close"))
+        return buttons
+
+    def _trade_response_buttons(self) -> list:
+        """Accept/Reject buttons for an incoming trade offer."""
+        panel = pygame.Rect(0, 0, 560, 360)
+        panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+        return [
+            ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
+                      "Accept", "trade_accept", color=(46, 116, 78)),
+            ui.Button((panel.centerx + 20, panel.bottom - 56, 190, 40),
+                      "Reject", "trade_reject", color=(150, 60, 60)),
+        ]
+
+    def _auction_buttons(self, actor) -> list:
+        """Bid/Pass buttons for the auction dialog."""
+        game = self.game
+        panel = pygame.Rect(0, 0, 460, 280)
+        panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+        step = max(10, game.board[game.auction["position"]].price // 20)
+        can_bid = (game.auction["high_bid"] + step) <= actor.cash
+        return [
+            ui.Button((panel.centerx - 200, panel.bottom - 52, 190, 40),
+                      f"Bid +${step}", "bid", enabled=can_bid,
+                      color=(46, 116, 78)),
+            ui.Button((panel.centerx + 10, panel.bottom - 52, 190, 40),
+                      "Pass", "pass", color=(150, 60, 60)),
+        ]
+
+    def _action_bar_buttons(self, actor) -> list:
+        """The normal action bar for pre-roll, buy-or-auction, and post-roll."""
+        game = self.game
         buttons = []
         state = game.awaiting
         can_sell = any(game.can_sell_building(actor, pos)

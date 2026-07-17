@@ -65,6 +65,11 @@ GO_TO_JAIL_POSITION = 30
 # --------------------------------------------------------------------------
 AI_TURN_DELAY_MS = 750        # pause between AI actions so a human can watch
 
+# Tokens hop space-by-space around the board after a dice roll. This is the
+# travel speed in pixels per second; teleports (jail, some cards) slide
+# directly instead of hopping.
+TOKEN_HOP_SPEED = 540.0
+
 
 # --------------------------------------------------------------------------
 # Colours -- plain (red, green, blue) tuples, each channel 0-255

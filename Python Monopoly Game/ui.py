@@ -38,14 +38,21 @@ def make_fonts() -> dict:
 class Button:
     """A clickable rectangle with a label and a string `key` identifying it."""
 
-    def __init__(self, rect, label, key, enabled=True, color=None):
+    def __init__(
+        self,
+        rect: pygame.Rect | tuple[int, int, int, int],
+        label: str,
+        key: str,
+        enabled: bool = True,
+        color: tuple[int, int, int] | None = None,
+    ) -> None:
         self.rect = pygame.Rect(rect)
         self.label = label
         self.key = key            # e.g. "roll", "buy", "end_turn"
         self.enabled = enabled
         self.color = color or (54, 86, 72)
 
-    def draw(self, surface, fonts, mouse) -> None:
+    def draw(self, surface: pygame.Surface, fonts: dict, mouse: tuple[int, int]) -> None:
         """Draw the button, brightening it slightly while hovered."""
         hovered = self.enabled and self.rect.collidepoint(mouse)
         fill = self.color if self.enabled else (44, 52, 48)
@@ -57,7 +64,7 @@ class Button:
         glyph = fonts["small"].render(self.label, True, ink)
         surface.blit(glyph, glyph.get_rect(center=self.rect.center))
 
-    def hit(self, pos) -> bool:
+    def hit(self, pos: tuple[int, int]) -> bool:
         """True if `pos` is inside an enabled button."""
         return self.enabled and self.rect.collidepoint(pos)
 
