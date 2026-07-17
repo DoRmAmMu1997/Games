@@ -32,7 +32,7 @@ from board_render import BoardRenderer
 from settings import SEAT_COLORS
 
 # Player counts whose display layout follows the authentic clockwise rules.
-SUPPORTED_COUNTS = (4,)
+SUPPORTED_COUNTS = (4, 5, 6)
 
 # A step between two consecutive track cells is at most one grid cell plus the
 # occasional corner turn, which measures sqrt(2) cells. 1.6 gives headroom for
@@ -135,7 +135,10 @@ class SeatAlignmentTests(unittest.TestCase):
                 with self.subTest(total_players=count, seat=seat):
                     distances = [distance(cell, display.center) for cell in lane]
                     self.assertEqual(distances, sorted(distances, reverse=True))
-                    self.assertLessEqual(distances[-1], 2.2 * display.cell_size)
+                    # The square lane ends one cell from the center; radial
+                    # lanes end on the hub ring, roughly three cells out. Both
+                    # are far inside the track, which starts 8+ cells away.
+                    self.assertLessEqual(distances[-1], 3.4 * display.cell_size)
 
     def test_seat_zero_sits_at_the_bottom_and_seats_continue_clockwise(self) -> None:
         """Player 1 is the bottom seat; the rest follow in clockwise order."""

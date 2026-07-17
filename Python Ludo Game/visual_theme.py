@@ -173,6 +173,29 @@ def draw_token_pin(
         surface.blit(text, text.get_rect(center=(cx, cy)))
 
 
+def draw_die_face(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    value: int | None,
+    fonts: dict[str, pygame.font.Font] | None = None,
+) -> None:
+    """Draw one rounded white die face showing ``value`` pips.
+
+    ``None`` means no roll has happened yet: the face shows a dash when fonts
+    are available and stays blank otherwise. This is the single die renderer
+    shared by the HUD tray and the radial board hub.
+    """
+
+    pygame.draw.rect(surface, WHITE, rect, border_radius=10)
+    pygame.draw.rect(surface, BOARD_EDGE, rect, 3, border_radius=10)
+    if value is None:
+        if fonts is not None:
+            text = fonts["header"].render("-", True, BOARD_EDGE)
+            surface.blit(text, text.get_rect(center=rect.center))
+        return
+    _draw_pips(surface, rect, value)
+
+
 def draw_dice_tray(
     surface: pygame.Surface,
     rect: pygame.Rect,
@@ -186,13 +209,7 @@ def draw_dice_tray(
     draw_shadowed_rect(surface, rect, HUD_DARK, border=accent, radius=14, shadow_offset=(0, 5))
     die_size = min(rect.height - 18, rect.width // 3)
     die_rect = pygame.Rect(rect.x + 14, rect.centery - die_size // 2, die_size, die_size)
-    pygame.draw.rect(surface, WHITE, die_rect, border_radius=10)
-    pygame.draw.rect(surface, BOARD_EDGE, die_rect, 3, border_radius=10)
-    if value is None:
-        text = fonts["header"].render("-", True, BOARD_EDGE)
-        surface.blit(text, text.get_rect(center=die_rect.center))
-    else:
-        _draw_pips(surface, die_rect, value)
+    draw_die_face(surface, die_rect, value, fonts)
 
 
 def draw_round_icon_button(
