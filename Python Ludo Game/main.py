@@ -32,8 +32,6 @@ from settings import (
     PANEL_WIDTH,
     PANEL_X,
     INK,
-    PLAYER_COLORS,
-    PLAYER_NAMES,
     SAVE_DIR,
     SAVEGAME_PATH,
     SCREEN_HEIGHT,
@@ -43,6 +41,8 @@ from settings import (
     TOKEN_ANIM_SPEED,
     WHITE,
     WINDOW_TITLE,
+    seat_colors,
+    seat_name,
 )
 
 SETUP_CONTROL_X = PANEL_X + 24
@@ -578,7 +578,7 @@ class LudoApp:
             else:
                 # AI names include the color so players can map the sidebar to
                 # the matching yard on the board.
-                players.append((f"AI {ai_number} ({PLAYER_NAMES[index]})", False))
+                players.append((f"AI {ai_number} ({seat_name(self.total_players, index)})", False))
                 ai_number += 1
         self.start_game(LudoGame(players, rules, ai_profile=self.ai_profiles[self.ai_profile_index]))
         save_game(self.game)
@@ -746,7 +746,7 @@ class LudoApp:
             # Name fields are lightweight hand-drawn rectangles. The active
             # one gets a colored border so typing focus is visible.
             rect = _name_rect(index)
-            color = PLAYER_COLORS[index]
+            color = seat_colors(self.total_players)[index]
             pygame.draw.rect(self.window, PANEL_CARD, rect, border_radius=6)
             pygame.draw.rect(self.window, color if self.active_field == index else PANEL_EDGE, rect, 2, border_radius=6)
             ui.draw_text(self.window, self.fonts["body"], self.name_fields[index], (rect.x + 10, rect.y + 4), WHITE)
@@ -1026,7 +1026,7 @@ def _make_icon() -> pygame.Surface:
 
     icon = pygame.Surface((64, 64), pygame.SRCALPHA)
     pygame.draw.rect(icon, (238, 232, 209), (4, 4, 56, 56), border_radius=12)
-    for index, color in enumerate(PLAYER_COLORS[:4]):
+    for index, color in enumerate(seat_colors(4)):
         x = 22 + (index % 2) * 20
         y = 22 + (index // 2) * 20
         pygame.draw.circle(icon, color, (x, y), 9)
@@ -1046,7 +1046,7 @@ def _draw_preview_board(surface: pygame.Surface) -> None:
             angle = -math.pi / 2 + math.tau * index / sides
             points.append((int(cx + math.cos(angle) * radius * 0.42), int(cy + math.sin(angle) * radius * 0.42)))
         pygame.draw.polygon(surface, (238, 232, 209), points)
-        pygame.draw.polygon(surface, PLAYER_COLORS[sides - 4], points, 4)
+        pygame.draw.polygon(surface, seat_colors(sides)[0], points, 4)
         ui.draw_text(surface, pygame.font.SysFont("arial", 24, bold=True), f"{sides}P", (cx, cy), WHITE, center=True)
 
 

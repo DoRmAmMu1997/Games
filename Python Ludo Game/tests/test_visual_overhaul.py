@@ -19,7 +19,7 @@ import pygame
 
 from board_render import BoardRenderer
 from game import LudoGame, LudoRules
-from settings import PANEL_X, PLAYER_COLORS, SCREEN_HEIGHT, SCREEN_WIDTH
+from settings import PANEL_X, SCREEN_HEIGHT, SCREEN_WIDTH, seat_colors
 
 
 def make_game(total_players: int) -> LudoGame:
@@ -113,7 +113,7 @@ class VisualOverhaulTests(unittest.TestCase):
                 BoardRenderer(game.layout).draw(surface, game, self.fonts)
 
                 self.assertGreater(count_near_color(surface, visual_theme.WALLPAPER_BLUE), 140)
-                for color in PLAYER_COLORS[:total_players]:
+                for color in seat_colors(total_players):
                     self.assertGreater(count_near_color(surface, color), 20)
 
     def test_radial_boards_use_arm_grids_instead_of_single_track_lines(self) -> None:

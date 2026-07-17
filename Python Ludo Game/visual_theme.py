@@ -11,7 +11,7 @@ import math
 
 import pygame
 
-from settings import INK, PLAYER_COLORS, WHITE
+from settings import INK, WHITE
 
 
 WALLPAPER_BLUE = (30, 123, 197)

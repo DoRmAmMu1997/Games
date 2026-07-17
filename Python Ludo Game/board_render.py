@@ -9,14 +9,16 @@ import pygame
 
 import visual_theme as theme
 from models import Move
-from settings import GOLD, INK, PLAYER_COLORS, WHITE
+from settings import GOLD, INK, WHITE, seat_colors
 
 
 Point = tuple[float, float]
+Color = tuple[int, int, int]
+GRID_CELLS = 15
 SQUARE_CELL = 42
 SQUARE_LEFT = 135
 SQUARE_TOP = 105
-SQUARE_SIZE = SQUARE_CELL * 15
+SQUARE_SIZE = SQUARE_CELL * GRID_CELLS
 RADIAL_CENTER = (450.0, 410.0)
 RADIAL_RADIUS = 245.0
 RADIAL_INNER_DISTANCE = 78.0
@@ -38,18 +40,21 @@ class DisplayCell:
 class DisplayLayout:
     """Screen coordinates used by the renderer for one board shape.
 
-    The rules engine keeps its compact step indexes. This display layout lets
-    the four-player game look like a traditional square board while the five-
-    and six-player games keep the generalized radial coordinates.
+    The rules engine keeps its compact step indexes. This display layout maps
+    every index onto the screen: a traditional square cross for four players
+    and compact radial boards for five and six players. ``track_positions``
+    is index-aligned with the engine's track, so its ordering alone decides
+    the on-screen movement direction (clockwise).
     """
 
     total_players: int
-    polygon_sides: int
+    seat_colors: tuple[Color, ...]
     track_positions: tuple[Point, ...]
     home_lanes: tuple[tuple[Point, ...], ...]
     yard_positions: tuple[tuple[Point, ...], ...]
     center: Point
     radius: float
+    cell_size: float
     track_cells: tuple[DisplayCell, ...] = ()
     home_lane_cells: tuple[tuple[DisplayCell, ...], ...] = ()
     arm_backplates: tuple[tuple[Point, ...], ...] = ()
@@ -146,7 +151,7 @@ class BoardRenderer:
 
         for player_index, yard in enumerate(_square_home_rects()):
             positions = self.display.yard_positions[player_index]
-            color = PLAYER_COLORS[player_index]
+            color = self.display.seat_colors[player_index]
             theme.draw_shadowed_rect(surface, yard, color, border=theme.BOARD_EDGE, radius=8)
             inner = yard.inflate(-92, -92)
             pygame.draw.rect(surface, WHITE, inner, border_radius=5)
@@ -159,7 +164,7 @@ class BoardRenderer:
 
         cx, cy = self.display.center
         for player_index, positions in enumerate(self.display.yard_positions):
-            color = PLAYER_COLORS[player_index]
+            color = self.display.seat_colors[player_index]
             yard_center = _average_point(positions)
             outward = _normal((yard_center[0] - cx, yard_center[1] - cy))
             tangent = (-outward[1], outward[0])
@@ -206,10 +211,15 @@ class BoardRenderer:
     ) -> None:
         """Draw the player's name tag near their home area."""
 
-        color = PLAYER_COLORS[player_index]
+        color = self.display.seat_colors[player_index]
         name = game.players[player_index].name[:16]
         if point is None:
-            label_y = yard.bottom + 10 if yard.centery < self.display.center[1] else yard.y - 34
+            # Banners live on the outer edge of the board: above the two top
+            # yards and below the two bottom yards, never over track cells.
+            if yard.centery < self.display.center[1]:
+                label_y = yard.y - 24
+            else:
+                label_y = yard.bottom + 24
             rect = pygame.Rect(0, 0, 150, 28)
             rect.center = (yard.centerx, label_y)
         else:
@@ -230,7 +240,7 @@ class BoardRenderer:
             fill = WHITE
             border = theme.BOARD_EDGE
             if owner is not None:
-                fill = theme.brighten(PLAYER_COLORS[owner], 8)
+                fill = theme.brighten(self.display.seat_colors[owner], 8)
             if self.display.track_cells:
                 self._draw_display_cell(surface, self.display.track_cells[index], fill, border)
             else:
@@ -248,13 +258,13 @@ class BoardRenderer:
         next_index = (self.layout.start_indices[player_index] + 1) % self.layout.track_length
         next_point = self.display.track_positions[next_index]
         angle = math.atan2(next_point[1] - point[1], next_point[0] - point[0])
-        theme.draw_arrow(surface, point, angle, PLAYER_COLORS[player_index], length=22)
+        theme.draw_arrow(surface, point, angle, self.display.seat_colors[player_index], length=22)
 
     def _draw_home_lanes(self, surface: pygame.Surface) -> None:
         """Draw each player's private colored path into the center."""
 
         for player_index, lane in enumerate(self.display.home_lanes):
-            color = PLAYER_COLORS[player_index]
+            color = self.display.seat_colors[player_index]
             for lane_index, point in enumerate(lane):
                 if self.display.home_lane_cells:
                     self._draw_display_cell(
@@ -297,7 +307,7 @@ class BoardRenderer:
             for step in range(8):
                 angle = start + (end - start) * step / 7
                 points.append(_ipoint((cx + math.cos(angle) * radius, cy + math.sin(angle) * radius)))
-            pygame.draw.polygon(surface, PLAYER_COLORS[player_index], points)
+            pygame.draw.polygon(surface, self.display.seat_colors[player_index], points)
         pygame.draw.circle(surface, theme.HUD_DARK, _ipoint(self.display.center), 38)
         pygame.draw.circle(surface, theme.WALLPAPER_BLUE, _ipoint(self.display.center), 28)
         pygame.draw.circle(surface, WHITE, _ipoint(self.display.center), 7)
@@ -308,20 +318,17 @@ class BoardRenderer:
 
         center_rect = _square_center_rect()
         cx, cy = center_rect.center
-        corners = [
-            center_rect.topleft,
-            center_rect.topright,
-            center_rect.bottomright,
-            center_rect.bottomleft,
-        ]
+        # Each finish wedge points at the seat that owns it: seat 0 arrives
+        # from the bottom edge, then clockwise seats 1..3 arrive from the
+        # left, top, and right edges.
         wedges = [
-            [corners[0], corners[1], (cx, cy)],
-            [corners[1], corners[2], (cx, cy)],
-            [corners[2], corners[3], (cx, cy)],
-            [corners[3], corners[0], (cx, cy)],
+            [center_rect.bottomleft, center_rect.bottomright, (cx, cy)],
+            [center_rect.topleft, center_rect.bottomleft, (cx, cy)],
+            [center_rect.topleft, center_rect.topright, (cx, cy)],
+            [center_rect.topright, center_rect.bottomright, (cx, cy)],
         ]
         for player_index, points in enumerate(wedges):
-            pygame.draw.polygon(surface, PLAYER_COLORS[player_index], points)
+            pygame.draw.polygon(surface, self.display.seat_colors[player_index], points)
             pygame.draw.polygon(surface, theme.BOARD_EDGE, points, 2)
         pygame.draw.circle(surface, theme.HUD_DARK, (cx, cy), 24)
         pygame.draw.circle(surface, theme.WALLPAPER_BLUE, (cx, cy), 17)
@@ -370,38 +377,70 @@ def _display_layout_for(layout) -> DisplayLayout:
     return _radial_display_layout(layout)
 
 
+# One quarter of the classic 15x15 cross, written for seat 0 (Player 1, blue,
+# bottom-left yard). Cell 0 is the seat's colored start square, directly beside
+# its yard, and the cells continue CLOCKWISE around the board: up the bottom
+# arm's left column, west along the west arm's bottom row, then up the west
+# tip. Rotating this template 90 degrees clockwise per seat builds the full
+# 52-cell loop, which keeps every seat's start square, home column, and yard
+# aligned by construction.
+SQUARE_QUARTER_TRACK: tuple[tuple[int, int], ...] = (
+    (6, 13), (6, 12), (6, 11), (6, 10), (6, 9),
+    (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8),
+    (0, 7), (0, 6),
+)
+
+# Seat 0's private home column: entered from the bottom edge, climbing the
+# middle column toward the center. The final cell sits inside the 3x3 center
+# square, underneath that seat's colored finish wedge.
+SQUARE_HOME_LANE: tuple[tuple[int, int], ...] = (
+    (7, 13), (7, 12), (7, 11), (7, 10), (7, 9), (7, 8),
+)
+
+
+def _rotate_cell_cw(cell: tuple[int, int], quarter_turns: int) -> tuple[int, int]:
+    """Rotate a 15x15 grid cell clockwise by 90-degree steps around the center."""
+
+    col, row = cell
+    for _ in range(quarter_turns % 4):
+        col, row = GRID_CELLS - 1 - row, col
+    return col, row
+
+
 def _square_display_layout(layout) -> DisplayLayout:
     """Build classic 15-by-15 Ludo coordinates for the four-player board."""
 
-    # These grid cells trace the standard outer cross path. Rotating by one
-    # segment places player 1 at the top, then the other players clockwise.
-    base_track = [
-        (6, 1), (6, 2), (6, 3), (6, 4), (6, 5), (5, 6), (4, 6), (3, 6), (2, 6), (1, 6), (0, 6), (0, 7), (0, 8),
-        (1, 8), (2, 8), (3, 8), (4, 8), (5, 8), (6, 9), (6, 10), (6, 11), (6, 12), (6, 13), (6, 14), (7, 14), (8, 14),
-        (8, 13), (8, 12), (8, 11), (8, 10), (8, 9), (9, 8), (10, 8), (11, 8), (12, 8), (13, 8), (14, 8), (14, 7), (14, 6),
-        (13, 6), (12, 6), (11, 6), (10, 6), (9, 6), (8, 5), (8, 4), (8, 3), (8, 2), (8, 1), (8, 0), (7, 0), (6, 0),
+    track_cells = [
+        _rotate_cell_cw(cell, seat)
+        for seat in range(layout.total_players)
+        for cell in SQUARE_QUARTER_TRACK
     ]
-    rotated = base_track[13:] + base_track[:13]
-    home_lanes = (
-        tuple(_grid_center(7, row) for row in range(1, 7)),
-        tuple(_grid_center(col, 7) for col in range(13, 7, -1)),
-        tuple(_grid_center(7, row) for row in range(13, 7, -1)),
-        tuple(_grid_center(col, 7) for col in range(1, 7)),
+    home_lanes = tuple(
+        tuple(_grid_center(*_rotate_cell_cw(cell, seat)) for cell in SQUARE_HOME_LANE)
+        for seat in range(layout.total_players)
     )
-    yard_grids = (
-        ((2, 2), (4, 2), (2, 4), (4, 4)),
-        ((10, 2), (12, 2), (10, 4), (12, 4)),
-        ((10, 10), (12, 10), (10, 12), (12, 12)),
-        ((2, 10), (4, 10), (2, 12), (4, 12)),
-    )
+    yard_positions = tuple(_square_yard_slots(yard) for yard in _square_home_rects())
     return DisplayLayout(
         total_players=layout.total_players,
-        polygon_sides=layout.polygon_sides,
-        track_positions=tuple(_grid_center(col, row) for col, row in rotated),
+        seat_colors=seat_colors(layout.total_players),
+        track_positions=tuple(_grid_center(col, row) for col, row in track_cells),
         home_lanes=home_lanes,
-        yard_positions=tuple(tuple(_grid_center(col, row) for col, row in group) for group in yard_grids),
+        yard_positions=yard_positions,
         center=_grid_center(7, 7),
         radius=SQUARE_SIZE / 2,
+        cell_size=SQUARE_CELL,
+    )
+
+
+def _square_yard_slots(yard: pygame.Rect) -> tuple[Point, ...]:
+    """Return four token parking spots centered inside one corner yard."""
+
+    spread = 36
+    return (
+        (yard.centerx - spread, yard.centery - spread),
+        (yard.centerx + spread, yard.centery - spread),
+        (yard.centerx - spread, yard.centery + spread),
+        (yard.centerx + spread, yard.centery + spread),
     )
 
 
@@ -441,12 +480,13 @@ def _radial_display_layout(layout) -> DisplayLayout:
 
     return DisplayLayout(
         total_players=layout.total_players,
-        polygon_sides=layout.polygon_sides,
+        seat_colors=seat_colors(layout.total_players),
         track_positions=tuple(track_positions),
         home_lanes=tuple(home_lanes),
         yard_positions=tuple(yard_positions),
         center=center,
         radius=radius,
+        cell_size=RADIAL_CELL_SIZE,
         track_cells=tuple(track_cells),
         home_lane_cells=tuple(home_lane_cells),
         arm_backplates=tuple(arm_backplates),
@@ -463,14 +503,18 @@ def _grid_center(col: int, row: int) -> Point:
 
 
 def _square_home_rects() -> tuple[pygame.Rect, ...]:
-    """Return the four large corner yards for the square board."""
+    """Return the four large corner yards, in clockwise seat order.
+
+    Seat 0 (Player 1) owns the bottom-left corner, then seats continue
+    clockwise: top-left, top-right, bottom-right.
+    """
 
     cell = SQUARE_CELL
     return (
+        pygame.Rect(SQUARE_LEFT, SQUARE_TOP + cell * 9, cell * 6, cell * 6),
         pygame.Rect(SQUARE_LEFT, SQUARE_TOP, cell * 6, cell * 6),
         pygame.Rect(SQUARE_LEFT + cell * 9, SQUARE_TOP, cell * 6, cell * 6),
         pygame.Rect(SQUARE_LEFT + cell * 9, SQUARE_TOP + cell * 9, cell * 6, cell * 6),
-        pygame.Rect(SQUARE_LEFT, SQUARE_TOP + cell * 9, cell * 6, cell * 6),
     )
 
 

@@ -67,16 +67,43 @@ SUCCESS = (110, 205, 140)
 DANGER = (224, 84, 84)
 DISABLED = (88, 98, 102)
 
-PLAYER_COLORS = [
-    (215, 55, 55),    # red
-    (46, 101, 218),   # blue
-    (52, 162, 88),    # green
-    (224, 173, 48),   # yellow
-    (155, 86, 206),   # purple
-    (236, 118, 54),   # orange
-]
+# Base token colours. Individual boards pick from these via the seat tables
+# below instead of indexing one shared list, because the classic colour wheel
+# differs between the 4-, 5-, and 6-player reference boards.
+COLOR_BLUE = (46, 101, 218)
+COLOR_RED = (215, 55, 55)
+COLOR_GREEN = (52, 162, 88)
+COLOR_YELLOW = (224, 173, 48)
+COLOR_PURPLE = (155, 86, 206)
+COLOR_ORANGE = (236, 118, 54)
 
-PLAYER_NAMES = ["Red", "Blue", "Green", "Yellow", "Purple", "Orange"]
+# Seat 0 is always Player 1 and always sits at the bottom of the screen
+# (bottom-left on the square board). The remaining seats proceed clockwise,
+# matching the classic Ludo apps this UI is modelled on. Tokens also travel
+# clockwise, so seating order and movement direction agree everywhere.
+SEAT_COLORS: dict[int, tuple[tuple[int, int, int], ...]] = {
+    4: (COLOR_BLUE, COLOR_RED, COLOR_GREEN, COLOR_YELLOW),
+    5: (COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, COLOR_RED, COLOR_YELLOW),
+    6: (COLOR_BLUE, COLOR_YELLOW, COLOR_PURPLE, COLOR_RED, COLOR_GREEN, COLOR_ORANGE),
+}
+
+SEAT_COLOR_NAMES: dict[int, tuple[str, ...]] = {
+    4: ("Blue", "Red", "Green", "Yellow"),
+    5: ("Blue", "Orange", "Green", "Red", "Yellow"),
+    6: ("Blue", "Yellow", "Purple", "Red", "Green", "Orange"),
+}
+
+
+def seat_colors(total_players: int) -> tuple[tuple[int, int, int], ...]:
+    """Return the clockwise seat colours for one supported player count."""
+
+    return SEAT_COLORS[total_players]
+
+
+def seat_name(total_players: int, seat: int) -> str:
+    """Return the colour name for one seat, used in default AI player names."""
+
+    return SEAT_COLOR_NAMES[total_players][seat]
 
 
 # ---------------------------------------------------------------------------
