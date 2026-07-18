@@ -63,6 +63,10 @@ FRICTION = 0.035
 WALL_BOUNCE = 0.22
 WALL_FRICTION = 0.28
 SOLVER_ITERATIONS = 8
+# How much of a detected overlap the solver corrects per iteration. Full
+# correction (1.0) can feel too sharp with a simple solver; slightly under
+# lets stacks settle softly instead of popping apart.
+POSITION_CORRECTION_SOFTNESS = 0.92
 
 # Player input and launcher tuning.
 # These values shape how aiming feels.
@@ -86,6 +90,9 @@ LAUNCH_SPEED = 520.0
 MERGE_ARM_TIME = 0.18
 POST_MERGE_LOCK = 0.08
 MERGE_CONTACT_SLOP = 4.0
+# The merged body keeps this fraction of the two parents' combined velocity,
+# so chain merges stay exciting but readable instead of ricocheting.
+MERGE_VELOCITY_DAMP = 0.42
 
 # Combo scoring: merges that happen within this many seconds of the previous
 # merge build an escalating score multiplier (see `_apply_merges` in game.py).
@@ -104,6 +111,12 @@ FAIL_GRACE = 2.4
 FAIL_DECAY = 1.6
 FAIL_AGE_GATE = 0.75
 STRESS_PREVIEW_RANGE = 280.0
+
+# The HUD stress meter is split into two phases that add up to 1.0:
+# stack height drives the first share, and once the fail line is actually
+# crossed, the countdown timer drives the remaining share.
+STRESS_PREVIEW_SHARE = 0.78
+STRESS_TIMER_SHARE = 0.22
 
 # Miscellaneous gameplay limits.
 # `IMPACT_EVENT_SPEED` controls how hard a collision must be before it creates

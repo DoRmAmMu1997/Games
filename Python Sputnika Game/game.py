@@ -50,6 +50,8 @@ from settings import (
     SPAWN_WEIGHTS,
     SPAWN_Y,
     STRESS_PREVIEW_RANGE,
+    STRESS_PREVIEW_SHARE,
+    STRESS_TIMER_SHARE,
     TIERS,
     WARNING,
     WINDOW_TITLE,
@@ -627,12 +629,12 @@ class OrbitalOrchardGame:
             # Reset the beep timer so the next danger spell starts fresh.
             self._next_warning_beep = 0.0
 
-        # Split the stress bar into two phases:
-        # - up to 78% from live stack height,
-        # - final 22% from the true fail countdown once the line is crossed.
+        # Split the stress bar into two phases: live stack height fills the
+        # preview share, then the true fail countdown fills the timer share
+        # once the line is crossed (shares are defined in settings.py).
         timer_ratio = self.fail_timer / FAIL_GRACE if FAIL_GRACE > 0.0 else 0.0
-        preview_stress = preview_ratio * 0.78
-        danger_stress = 0.78 + timer_ratio * 0.22 if warning else 0.0
+        preview_stress = preview_ratio * STRESS_PREVIEW_SHARE
+        danger_stress = STRESS_PREVIEW_SHARE + timer_ratio * STRESS_TIMER_SHARE if warning else 0.0
         self.container_stress = max(preview_stress, danger_stress)
         if self.fail_timer >= FAIL_GRACE:
             self._trigger_game_over()

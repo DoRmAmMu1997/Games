@@ -33,6 +33,7 @@ from settings import (
     ORBITAL_PULL,
     PHYSICS_MAX_SUBSTEP,
     PLAYFIELD_CENTER,
+    POSITION_CORRECTION_SOFTNESS,
     RESTITUTION,
     SPAWN_Y,
     SOLVER_ITERATIONS,
@@ -330,11 +331,9 @@ class PhysicsWorld:
                     continue
 
                 # Move both bodies apart proportionally to their inverse masses.
-                # Lighter bodies move more than heavier bodies.
-                #
-                # `0.92` is a slight softness factor. Full correction can
-                # sometimes feel too sharp with a simple solver.
-                correction = normal * (penetration / total_inv_mass) * 0.92
+                # Lighter bodies move more than heavier bodies. The softness
+                # factor is explained where it is defined in settings.py.
+                correction = normal * (penetration / total_inv_mass) * POSITION_CORRECTION_SOFTNESS
                 first.position -= correction * first.inv_mass
                 second.position += correction * second.inv_mass
 
