@@ -13,9 +13,21 @@ import pygame
 import board_data
 from cards import format_card_text
 from settings import (
-    BG, DANGER, GOLD, GROUP_COLORS, HIGHLIGHT, INK, PANEL_BG, PANEL_CARD,
-    PANEL_WIDTH, PANEL_X, SCREEN_HEIGHT, SCREEN_WIDTH, SOFT, SUCCESS,
-    TOKEN_COLORS, TOKEN_NAMES, WHITE,
+    BG,
+    DANGER,
+    GOLD,
+    GROUP_COLORS,
+    HIGHLIGHT,
+    INK,
+    PANEL_BG,
+    PANEL_CARD,
+    PANEL_WIDTH,
+    PANEL_X,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    SOFT,
+    SUCCESS,
+    WHITE,
 )
 
 
@@ -38,26 +50,33 @@ def make_fonts() -> dict:
 class Button:
     """A clickable rectangle with a label and a string `key` identifying it."""
 
-    def __init__(self, rect, label, key, enabled=True, color=None):
+    def __init__(
+        self,
+        rect: pygame.Rect | tuple[int, int, int, int],
+        label: str,
+        key: str,
+        enabled: bool = True,
+        color: tuple[int, int, int] | None = None,
+    ) -> None:
         self.rect = pygame.Rect(rect)
         self.label = label
         self.key = key            # e.g. "roll", "buy", "end_turn"
         self.enabled = enabled
         self.color = color or (54, 86, 72)
 
-    def draw(self, surface, fonts, mouse) -> None:
+    def draw(self, surface: pygame.Surface, fonts: dict, mouse: tuple[int, int]) -> None:
         """Draw the button, brightening it slightly while hovered."""
         hovered = self.enabled and self.rect.collidepoint(mouse)
         fill = self.color if self.enabled else (44, 52, 48)
         if hovered:
-            fill = tuple(min(255, c + 28) for c in fill)
+            fill = (min(255, fill[0] + 28), min(255, fill[1] + 28), min(255, fill[2] + 28))
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
         pygame.draw.rect(surface, INK, self.rect, 2, border_radius=8)
         ink = WHITE if self.enabled else SOFT
         glyph = fonts["small"].render(self.label, True, ink)
         surface.blit(glyph, glyph.get_rect(center=self.rect.center))
 
-    def hit(self, pos) -> bool:
+    def hit(self, pos: tuple[int, int]) -> bool:
         """True if `pos` is inside an enabled button."""
         return self.enabled and self.rect.collidepoint(pos)
 
@@ -556,7 +575,7 @@ def trade_layout(game, trade) -> dict:
     panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
     human = game.players[trade["from"]]
     partner = game.players[trade["to"]]
-    layout = {
+    layout: dict = {
         "panel": panel,
         "give_rows": [],
         "get_rows": [],
@@ -589,7 +608,6 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     panel = layout["panel"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
-    human = game.players[trade["from"]]
     partner = game.players[trade["to"]]
 
     _text(surface, fonts, "big", "PROPOSE A TRADE",

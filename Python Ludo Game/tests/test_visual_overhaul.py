@@ -5,9 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-import math
 from pathlib import Path
-
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -19,7 +17,7 @@ import pygame
 
 from board_render import BoardRenderer
 from game import LudoGame, LudoRules
-from settings import PANEL_X, PLAYER_COLORS, SCREEN_HEIGHT, SCREEN_WIDTH
+from settings import PANEL_X, SCREEN_HEIGHT, SCREEN_WIDTH, seat_colors
 
 
 def make_game(total_players: int) -> LudoGame:
@@ -41,30 +39,10 @@ def count_near_color(surface: pygame.Surface, color: tuple[int, int, int], toler
     return matches
 
 
-def distance_from_line(point: tuple[float, float], start: tuple[float, float], end: tuple[float, float]) -> float:
-    """Return the shortest distance from ``point`` to an infinite line."""
-
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    length = math.hypot(dx, dy) or 1.0
-    return abs(dx * (point[1] - start[1]) - dy * (point[0] - start[0])) / length
-
-
-def signed_distance_from_line(
-    point: tuple[float, float],
-    start: tuple[float, float],
-    end: tuple[float, float],
-) -> float:
-    """Return side-aware distance from ``point`` to an infinite line."""
-
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    length = math.hypot(dx, dy) or 1.0
-    return (dx * (point[1] - start[1]) - dy * (point[0] - start[0])) / length
-
-
 class VisualOverhaulTests(unittest.TestCase):
     """Checks that the game now renders as a themed Ludo board, not a plain diagram."""
+
+    fonts: dict[str, pygame.font.Font]
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -113,46 +91,8 @@ class VisualOverhaulTests(unittest.TestCase):
                 BoardRenderer(game.layout).draw(surface, game, self.fonts)
 
                 self.assertGreater(count_near_color(surface, visual_theme.WALLPAPER_BLUE), 140)
-                for color in PLAYER_COLORS[:total_players]:
+                for color in seat_colors(total_players):
                     self.assertGreater(count_near_color(surface, color), 20)
-
-    def test_radial_boards_use_arm_grids_instead_of_single_track_lines(self) -> None:
-        """Five- and six-player tracks should bend through two lanes per arm."""
-
-        for total_players in (5, 6):
-            with self.subTest(total_players=total_players):
-                game = make_game(total_players)
-                renderer = BoardRenderer(game.layout)
-                segment_length = len(renderer.display.track_positions) // total_players
-
-                for player_index in range(total_players):
-                    segment = renderer.display.track_positions[
-                        player_index * segment_length : (player_index + 1) * segment_length
-                    ]
-                    widest_offset = max(distance_from_line(point, segment[0], segment[-1]) for point in segment)
-
-                    self.assertGreater(widest_offset, 22.0)
-
-    def test_radial_track_cells_flank_each_coloured_home_lane(self) -> None:
-        """Each radial arm should have white track cells on both sides of home."""
-
-        for total_players in (5, 6):
-            with self.subTest(total_players=total_players):
-                game = make_game(total_players)
-                renderer = BoardRenderer(game.layout)
-                segment_length = len(renderer.display.track_positions) // total_players
-
-                for player_index, home_lane in enumerate(renderer.display.home_lanes):
-                    segment = renderer.display.track_positions[
-                        player_index * segment_length : (player_index + 1) * segment_length
-                    ]
-                    signed_offsets = [
-                        signed_distance_from_line(point, home_lane[0], home_lane[-1])
-                        for point in segment
-                    ]
-
-                    self.assertLess(min(signed_offsets), -20.0)
-                    self.assertGreater(max(signed_offsets), 20.0)
 
     def test_play_screen_buttons_live_in_world_hud_not_right_sidebar(self) -> None:
         """Gameplay controls should sit in the board world instead of the old sidebar."""

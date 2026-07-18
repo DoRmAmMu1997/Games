@@ -6,7 +6,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
@@ -67,7 +66,9 @@ class EngineRuleTests(unittest.TestCase):
 
         game = make_game()
         game.players[0].tokens[0].steps = 0
-        game.players[1].tokens[0].steps = game.layout.steps_to_reach(1, game.layout.track_index(0, 3))
+        landing = game.layout.track_index(0, 3)
+        assert landing is not None
+        game.players[1].tokens[0].steps = game.layout.steps_to_reach(1, landing)
 
         result = game.apply_move(game.legal_moves(3)[0])
 

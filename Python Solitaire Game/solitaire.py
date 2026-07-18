@@ -7,6 +7,7 @@ The code is split into:
 2. A tkinter app that draws the cards and handles input.
 """
 
+import contextlib
 import json
 import os
 import random
@@ -15,8 +16,7 @@ import time
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import messagebox
-from typing import List, Optional, Tuple
-
+from typing import Any
 
 # Card size in pixels.
 CARD_WIDTH = 88
@@ -158,7 +158,7 @@ class Selection:
     source_type: str
     pile_index: int
     card_index: int
-    cards: List[Card]
+    cards: list[Card]
 
 
 @dataclass
@@ -168,7 +168,7 @@ class HintMove:
     source_type: str
     source_index: int
     source_card_index: int
-    cards: List[Card]
+    cards: list[Card]
     destination_type: str
     destination_index: int
     stock_clicks: int
@@ -179,9 +179,9 @@ class HintMove:
 class AnimationState:
     """Information needed to draw cards moving between two positions."""
 
-    cards: List[Card]
-    start_positions: List[Tuple[float, float]]
-    end_positions: List[Tuple[float, float]]
+    cards: list[Card]
+    start_positions: list[tuple[float, float]]
+    end_positions: list[tuple[float, float]]
     destination_type: str
     destination_index: int
     completion_message: str
@@ -211,10 +211,10 @@ class KlondikeGame:
 
         # These values are reset for each new deal.
         self.score = 0
-        self.stock: List[Card] = []
-        self.waste: List[Card] = []
-        self.foundations: List[List[Card]] = [[] for _ in range(FOUNDATION_COUNT)]
-        self.tableau: List[List[Card]] = [[] for _ in range(TABLEAU_COLUMNS)]
+        self.stock: list[Card] = []
+        self.waste: list[Card] = []
+        self.foundations: list[list[Card]] = [[] for _ in range(FOUNDATION_COUNT)]
+        self.tableau: list[list[Card]] = [[] for _ in range(TABLEAU_COLUMNS)]
         self.won = False
         self.lost = False
 
@@ -252,7 +252,7 @@ class KlondikeGame:
         for card in self.stock:
             card.face_up = False
 
-    def create_shuffled_deck(self) -> List[Card]:
+    def create_shuffled_deck(self) -> list[Card]:
         """Create a normal 52-card deck and shuffle it in place."""
         deck = [Card(suit=suit, rank=rank) for suit in FOUNDATION_SUITS for rank in range(1, 14)]
         random.shuffle(deck)
@@ -261,7 +261,7 @@ class KlondikeGame:
     def load_saved_data(self) -> dict:
         """Read saved high score and statistics from JSON, if possible."""
         try:
-            with open(self.high_score_path, "r", encoding="utf-8") as file:
+            with open(self.high_score_path, encoding="utf-8") as file:
                 data = json.load(file)
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             # If the file is missing or broken, silently start from zeros.
@@ -347,7 +347,7 @@ class KlondikeGame:
         self.tableau = [self.deserialize_cards(column) for column in snapshot["tableau"]]
         self.save_high_score()
 
-    def serialize_cards(self, cards: List[Card]) -> List[dict]:
+    def serialize_cards(self, cards: list[Card]) -> list[dict]:
         """Turn Card objects into plain dictionaries that JSON can store."""
         return [
             {
@@ -358,7 +358,7 @@ class KlondikeGame:
             for card in cards
         ]
 
-    def deserialize_cards(self, serialized_cards: List[dict]) -> List[Card]:
+    def deserialize_cards(self, serialized_cards: list[dict]) -> list[Card]:
         """Rebuild Card objects from saved dictionaries."""
         return [
             Card(
@@ -389,26 +389,26 @@ class KlondikeGame:
         # No cards anywhere means no draw action is possible.
         return "empty"
 
-    def selection_from_waste(self) -> Optional[Selection]:
+    def selection_from_waste(self) -> Selection | None:
         """Return the selectable top waste card, if one exists."""
         if not self.waste:
             return None
         return Selection("waste", 0, len(self.waste) - 1, [self.waste[-1]])
 
-    def selection_from_foundation(self, foundation_index: int) -> Optional[Selection]:
+    def selection_from_foundation(self, foundation_index: int) -> Selection | None:
         """Return the top card of a foundation as a Selection."""
         pile = self.foundations[foundation_index]
         if not pile:
             return None
         return Selection("foundation", foundation_index, len(pile) - 1, [pile[-1]])
 
-    def selection_from_tableau(self, column_index: int, card_index: int) -> Optional[Selection]:
+    def selection_from_tableau(self, column_index: int, card_index: int) -> Selection | None:
         """Build a selection from the real tableau currently on the board."""
         return self.selection_from_tableau_cards(self.tableau, column_index, card_index)
 
     def selection_from_tableau_cards(
-        self, tableau: List[List[Card]], column_index: int, card_index: int
-    ) -> Optional[Selection]:
+        self, tableau: list[list[Card]], column_index: int, card_index: int
+    ) -> Selection | None:
         """
         Build a movable tableau stack from any supplied tableau-like board.
 
@@ -427,7 +427,7 @@ class KlondikeGame:
             return None
         return Selection("tableau", column_index, card_index, list(stack))
 
-    def selection_from_hint(self, move: HintMove) -> Optional[Selection]:
+    def selection_from_hint(self, move: HintMove) -> Selection | None:
         """Translate a stored hint back into a live selectable stack."""
         if move.source_type == "waste":
             return self.selection_from_waste()
@@ -437,7 +437,7 @@ class KlondikeGame:
             return self.selection_from_tableau(move.source_index, move.source_card_index)
         return None
 
-    def is_valid_tableau_stack(self, cards: List[Card]) -> bool:
+    def is_valid_tableau_stack(self, cards: list[Card]) -> bool:
         """Check the red-black descending order required in tableau stacks."""
         if not cards or not all(card.face_up for card in cards):
             return False
@@ -450,11 +450,11 @@ class KlondikeGame:
                 return False
         return True
 
-    def can_move_to_tableau(self, cards: List[Card], column_index: int) -> bool:
+    def can_move_to_tableau(self, cards: list[Card], column_index: int) -> bool:
         """Convenience wrapper that checks a move against one real tableau column."""
         return self.can_move_to_tableau_cards(cards, self.tableau[column_index])
 
-    def can_move_to_tableau_cards(self, cards: List[Card], destination: List[Card]) -> bool:
+    def can_move_to_tableau_cards(self, cards: list[Card], destination: list[Card]) -> bool:
         """Check the standard tableau rule for any destination pile."""
         if not cards:
             return False
@@ -477,7 +477,7 @@ class KlondikeGame:
         self,
         card: Card,
         foundation_index: int,
-        foundations: List[List[Card]],
+        foundations: list[list[Card]],
     ) -> bool:
         """Check whether a card can be placed on a given foundation pile."""
         expected_suit = FOUNDATION_SUITS[foundation_index]
@@ -513,7 +513,7 @@ class KlondikeGame:
         self.add_score(self.FOUNDATION_POINTS)
         return True
 
-    def remove_selection(self, selection: Selection) -> List[Card]:
+    def remove_selection(self, selection: Selection) -> list[Card]:
         """
         Remove the selected cards from their source pile and return them.
 
@@ -545,7 +545,7 @@ class KlondikeGame:
         """Auto-solve begins only after no hidden tableau cards remain."""
         return all(card.face_up for column in self.tableau for card in column)
 
-    def next_auto_foundation_move(self) -> Optional[Tuple[Selection, int]]:
+    def next_auto_foundation_move(self) -> tuple[Selection, int] | None:
         """
         Return the next direct move to a foundation for auto-complete mode.
 
@@ -571,7 +571,35 @@ class KlondikeGame:
 
         return None
 
-    def find_best_move(self) -> Optional[HintMove]:
+    # ------------------------------------------------------------------
+    # The hint engine
+    # ------------------------------------------------------------------
+    # Everything from here to `follow_up_creates_concrete_progress` is one
+    # subsystem: the hint engine that also powers loss detection. It is a
+    # pipeline of four stages:
+    #
+    #   1. GENERATE  - `current_legal_moves` lists every legal move on the
+    #      board right now; `future_waste_moves` simulates clicking through
+    #      the stock to find waste cards that become playable later.
+    #   2. FILTER    - `is_meaningful_move` throws away legal-but-pointless
+    #      shuffles (ace diversions, king shuffles between empty columns,
+    #      redundant transfers, unproductive foundation returns).
+    #   3. RANK      - `hint_sort_key` / `hint_priority` order what survived;
+    #      the lowest priority number wins.
+    #   4. DESCRIBE  - `describe_hint` turns the winning move into the text
+    #      the player reads.
+    #
+    # Naming convention: many checks exist twice, as a thin wrapper that
+    # reads the REAL board (`is_redundant_tableau_transfer`) plus an
+    # `..._on_board` version that takes tableau/foundations as parameters so
+    # the same rule can run against SIMULATED "what if" boards. When editing
+    # a rule, edit the `_on_board` version - the wrapper only forwards.
+    #
+    # If no move survives the pipeline (and the stock look-ahead), the game
+    # declares the deal lost - so a filter that is too aggressive can cause
+    # false "no more moves" verdicts. The filters deliberately allow any
+    # move that reveals a hidden card or unlocks a foundation play.
+    def find_best_move(self) -> HintMove | None:
         """
         Find the best move for the hint system and loss detection.
 
@@ -591,9 +619,9 @@ class KlondikeGame:
 
         return None
 
-    def current_legal_moves(self) -> List[HintMove]:
+    def current_legal_moves(self) -> list[HintMove]:
         """Collect all useful moves that can be made immediately."""
-        moves: List[HintMove] = []
+        moves: list[HintMove] = []
 
         if self.waste:
             # The player may only move the top waste card.
@@ -671,15 +699,17 @@ class KlondikeGame:
 
         return [move for move in moves if self.is_meaningful_move(move)]
 
-    def future_waste_moves(self) -> List[HintMove]:
+    def future_waste_moves(self) -> list[HintMove]:
         """
         Simulate future stock clicks and collect useful waste-based moves.
 
         This helps the hint system say things like "click the stock twice,
         then move 5♥ to the Hearts foundation."
         """
-        future_moves: List[HintMove] = []
-        best_seen = {}
+        future_moves: list[HintMove] = []
+        # Keyed by (suit, rank, destination type, destination index); the
+        # value is the cheapest (fewest stock clicks) move for that card.
+        best_seen: dict[tuple[str, int, str, int], HintMove] = {}
 
         # Work on copies so the real game state is not changed.
         simulated_stock = list(self.stock)
@@ -743,9 +773,9 @@ class KlondikeGame:
         source_index: int,
         source_card_index: int,
         stock_clicks: int,
-    ) -> List[HintMove]:
+    ) -> list[HintMove]:
         """Build every one-card move available for a given card."""
-        moves: List[HintMove] = []
+        moves: list[HintMove] = []
 
         if source_type != "foundation":
             # Cards already on a foundation are not suggested back to another foundation.
@@ -786,7 +816,7 @@ class KlondikeGame:
         source_type: str,
         source_index: int,
         source_card_index: int,
-        cards: List[Card],
+        cards: list[Card],
         destination_type: str,
         destination_index: int,
         stock_clicks: int,
@@ -811,11 +841,14 @@ class KlondikeGame:
             description=description,
         )
 
+    # ------------------------------------------------------------------
+    # Hint engine stage 4: player-facing descriptions
+    # ------------------------------------------------------------------
     def describe_hint(
         self,
         source_type: str,
         source_index: int,
-        cards: List[Card],
+        cards: list[Card],
         destination_type: str,
         destination_index: int,
         stock_clicks: int,
@@ -825,10 +858,7 @@ class KlondikeGame:
         target_text = self.describe_destination(destination_type, destination_index)
 
         if source_type == "future_waste":
-            if stock_clicks == 1:
-                prefix = "Click the stock once"
-            else:
-                prefix = f"Click the stock {stock_clicks} times"
+            prefix = "Click the stock once" if stock_clicks == 1 else f"Click the stock {stock_clicks} times"
             return f"Hint: {prefix}, then move {card_text} to {target_text}."
 
         source_text = self.describe_source(source_type, source_index)
@@ -850,13 +880,16 @@ class KlondikeGame:
             return f"the {suit_name} foundation"
         return f"tableau column {destination_index + 1}"
 
-    def describe_cards(self, cards: List[Card]) -> str:
+    def describe_cards(self, cards: list[Card]) -> str:
         """Describe either one card or the front card of a moving stack."""
         if len(cards) == 1:
             return cards[0].label()
         return f"{len(cards)} cards starting with {cards[0].label()}"
 
-    def hint_sort_key(self, move: HintMove) -> Tuple[int, int, int, int]:
+    # ------------------------------------------------------------------
+    # Hint engine stage 3: ranking
+    # ------------------------------------------------------------------
+    def hint_sort_key(self, move: HintMove) -> tuple[int, int, int, int]:
         """Build the sort key that decides which hint move is shown.
 
         Python sorts tuples item by item, so this orders moves by priority
@@ -924,6 +957,9 @@ class KlondikeGame:
             return False
         return not self.tableau[move.source_index][move.source_card_index - 1].face_up
 
+    # ------------------------------------------------------------------
+    # Hint engine stage 2: meaningfulness filters
+    # ------------------------------------------------------------------
     def is_meaningful_move(self, move: HintMove) -> bool:
         """
         Filter out technically legal moves that are strategically pointless.
@@ -937,9 +973,7 @@ class KlondikeGame:
             return False
         if self.is_redundant_tableau_transfer(move):
             return False
-        if self.is_unproductive_foundation_return(move):
-            return False
-        return True
+        return not self.is_unproductive_foundation_return(move)
 
     def is_tableau_ace_diversion(self, move: HintMove) -> bool:
         """Never prefer moving a tableau Ace to another tableau."""
@@ -974,10 +1008,10 @@ class KlondikeGame:
         self,
         source_index: int,
         source_card_index: int,
-        cards: List[Card],
+        cards: list[Card],
         destination_index: int,
-        tableau: List[List[Card]],
-        foundations: List[List[Card]],
+        tableau: list[list[Card]],
+        foundations: list[list[Card]],
     ) -> bool:
         """
         Detect tableau shuffles that do not create new opportunities.
@@ -1013,13 +1047,10 @@ class KlondikeGame:
         if len(equivalent_destinations) < 2:
             return False
 
-        if any(
+        return not any(
             self.tableau_top_can_move_to_foundation_on_board(column_index, tableau, foundations)
             for column_index in equivalent_destinations
-        ):
-            return False
-
-        return True
+        )
 
     def is_equivalent_anchor_loop(self, move: HintMove) -> bool:
         """Wrapper for detecting reversible stack swaps between equal anchors."""
@@ -1036,8 +1067,8 @@ class KlondikeGame:
         source_index: int,
         source_card_index: int,
         destination_index: int,
-        tableau: List[List[Card]],
-        foundations: List[List[Card]],
+        tableau: list[list[Card]],
+        foundations: list[list[Card]],
     ) -> bool:
         """
         Detect moving a tableau stack from one equivalent anchor to another.
@@ -1062,10 +1093,7 @@ class KlondikeGame:
         if self.card_can_move_to_any_foundation_in_piles(source_anchor, foundations):
             return False
 
-        if self.card_can_move_to_any_foundation_in_piles(destination_anchor, foundations):
-            return False
-
-        return True
+        return not self.card_can_move_to_any_foundation_in_piles(destination_anchor, foundations)
 
     def cards_are_equivalent_anchors(self, first: Card, second: Card) -> bool:
         """Two anchors are equivalent when rank and color match."""
@@ -1080,8 +1108,8 @@ class KlondikeGame:
     def tableau_top_can_move_to_foundation_on_board(
         self,
         column_index: int,
-        tableau: List[List[Card]],
-        foundations: List[List[Card]],
+        tableau: list[list[Card]],
+        foundations: list[list[Card]],
     ) -> bool:
         """Check whether the top tableau card can move to any foundation."""
         column = tableau[column_index]
@@ -1094,7 +1122,7 @@ class KlondikeGame:
         return self.card_can_move_to_any_foundation_in_piles(card, self.foundations)
 
     def card_can_move_to_any_foundation_in_piles(
-        self, card: Card, foundations: List[List[Card]]
+        self, card: Card, foundations: list[list[Card]]
     ) -> bool:
         """Return True if this card fits on at least one foundation pile."""
         return any(
@@ -1106,7 +1134,7 @@ class KlondikeGame:
         self,
         source_index: int,
         source_card_index: int,
-        tableau: List[List[Card]],
+        tableau: list[list[Card]],
     ) -> bool:
         """Version of the reveal check that works on a simulated tableau."""
         if source_card_index == 0:
@@ -1123,10 +1151,10 @@ class KlondikeGame:
         self,
         source_index: int,
         source_card_index: int,
-        cards: List[Card],
+        cards: list[Card],
         destination_index: int,
-        tableau: List[List[Card]],
-        foundations: List[List[Card]],
+        tableau: list[list[Card]],
+        foundations: list[list[Card]],
     ) -> bool:
         """Check whether a simulated tableau transfer would still be useful."""
         if source_index == destination_index:
@@ -1135,16 +1163,9 @@ class KlondikeGame:
             return False
         if source_card_index == 0 and cards[0].rank == 13 and not tableau[destination_index]:
             return False
-        if self.is_redundant_tableau_transfer_on_board(
-            source_index,
-            source_card_index,
-            cards,
-            destination_index,
-            tableau,
-            foundations,
-        ):
-            return False
-        return True
+        return not self.is_redundant_tableau_transfer_on_board(
+            source_index, source_card_index, cards, destination_index, tableau, foundations
+        )
 
     def foundation_return_enables_tableau_follow_up(self, move: HintMove) -> bool:
         """
@@ -1203,9 +1224,9 @@ class KlondikeGame:
         self,
         source_index: int,
         source_card_index: int,
-        cards: List[Card],
-        tableau: List[List[Card]],
-        foundations: List[List[Card]],
+        cards: list[Card],
+        tableau: list[list[Card]],
+        foundations: list[list[Card]],
     ) -> bool:
         """Check whether a follow-up move creates immediate visible progress."""
         if self.move_reveals_hidden_on_board(source_index, source_card_index, tableau):
@@ -1216,10 +1237,7 @@ class KlondikeGame:
         source_after = list(tableau[source_index])
         del source_after[source_card_index:]
 
-        if source_after and self.card_can_move_to_any_foundation_in_piles(source_after[-1], foundations):
-            return True
-
-        return False
+        return bool(source_after and self.card_can_move_to_any_foundation_in_piles(source_after[-1], foundations))
 
 
 class SolitaireApp:
@@ -1242,21 +1260,19 @@ class SolitaireApp:
 
         # Load the custom window icon when it is available.
         if os.path.exists(icon_path):
-            try:
+            with contextlib.suppress(tk.TclError):
                 self.root.iconbitmap(icon_path)
-            except tk.TclError:
-                pass
 
         # Create the game logic object.
         self.game = KlondikeGame(high_score_path)
 
         # Selection/hint/animation state belongs to the UI layer.
-        self.selection: Optional[Selection] = None
-        self.hint_move: Optional[HintMove] = None
-        self.animation: Optional[AnimationState] = None
+        self.selection: Selection | None = None
+        self.hint_move: HintMove | None = None
+        self.animation: AnimationState | None = None
         self.auto_solving = False
-        self.auto_solve_seen_states = set()
-        self.history: List[dict] = []
+        self.auto_solve_seen_states: set = set()
+        self.history: list[dict] = []
 
         # tkinter StringVar objects let labels update automatically.
         self.score_var = tk.StringVar()
@@ -1290,7 +1306,9 @@ class SolitaireApp:
         top_frame = tk.Frame(self.root, bg=BACKGROUND_COLOR, padx=12, pady=10)
         top_frame.pack(fill="x")
 
-        label_style = {
+        # `Any` values let the same dict splat into every tk.Label call below
+        # without fighting tkinter's very specific per-option stub types.
+        label_style: dict[str, Any] = {
             "bg": BACKGROUND_COLOR,
             "fg": "white",
             "font": ("Arial", 12, "bold"),
@@ -1399,11 +1417,10 @@ class SolitaireApp:
         """Deal a fresh game and clear all UI-only state."""
         # Guard an in-progress game: a non-empty history with no win/loss yet
         # means real moves would be discarded. Covers the button and Ctrl+N.
-        if self.history and not self.game.won and not self.game.lost:
-            if not messagebox.askyesno(
-                    "New Game",
-                    "Start a new game? Your current progress will be lost."):
-                return
+        if self.history and not self.game.won and not self.game.lost and not messagebox.askyesno(
+                "New Game",
+                "Start a new game? Your current progress will be lost."):
+            return
         self.game.new_game()
         self.selection = None
         self.hint_move = None
@@ -1435,7 +1452,7 @@ class SolitaireApp:
         if len(self.history) > UNDO_HISTORY_LIMIT:
             self.history = self.history[-UNDO_HISTORY_LIMIT:]
 
-    def undo_last_action(self, event: Optional[tk.Event] = None) -> None:
+    def undo_last_action(self, event: tk.Event | None = None) -> None:
         """Restore the most recent saved snapshot."""
         if self.animation is not None:
             self.status_var.set("Please wait for the card animation to finish.")
@@ -1556,7 +1573,7 @@ class SolitaireApp:
                 )
                 return
 
-    def _selection_under_point(self, x: int, y: int) -> Optional[Selection]:
+    def _selection_under_point(self, x: int, y: int) -> Selection | None:
         """Return a Selection for the card under a click, or None if there is none.
 
         Used by the double-click shortcut to find which card was clicked. Only
@@ -1622,7 +1639,7 @@ class SolitaireApp:
             )
             self.redraw()
 
-    def handle_tableau_click(self, column_index: int, card_index: Optional[int]) -> None:
+    def handle_tableau_click(self, column_index: int, card_index: int | None) -> None:
         """Handle selection, deselection, and placement inside the tableau."""
         if self.selection is not None:
             current_selection = self.selection
@@ -1862,7 +1879,7 @@ class SolitaireApp:
         self.status_var.set("Auto-solve stopped because no direct foundation move is available.")
         self.check_for_loss()
 
-    def auto_solve_state_key(self) -> Tuple:
+    def auto_solve_state_key(self) -> tuple:
         """Build a hashable summary of the board for loop detection.
 
         Auto-solve cycles the stock looking for cards it can send to a
@@ -2428,13 +2445,14 @@ class SolitaireApp:
             self.animation.cards,
             self.animation.start_positions,
             self.animation.end_positions,
+            strict=True,
         ):
             x = start[0] + (end[0] - start[0]) * eased_progress
             y = start[1] + (end[1] - start[1]) * eased_progress
             y -= (1.0 - eased_progress) * 6
             self.draw_card(x, y, card, face_up=card.face_up, selected=False)
 
-    def visible_foundation_pile(self, foundation_index: int) -> List[Card]:
+    def visible_foundation_pile(self, foundation_index: int) -> list[Card]:
         """Hide destination cards that are being animated on top of a foundation."""
         pile = self.game.foundations[foundation_index]
         hidden_count = self.animation_hidden_count("foundation", foundation_index)
@@ -2442,7 +2460,7 @@ class SolitaireApp:
             return pile
         return pile[:-hidden_count]
 
-    def visible_tableau_column(self, column_index: int) -> List[Card]:
+    def visible_tableau_column(self, column_index: int) -> list[Card]:
         """Hide destination cards that are being animated on top of a tableau."""
         column = self.game.tableau[column_index]
         hidden_count = self.animation_hidden_count("tableau", column_index)
@@ -2477,7 +2495,7 @@ class SolitaireApp:
             return False
         return card_index >= self.selection.card_index
 
-    def selection_positions(self, selection: Selection) -> List[Tuple[float, float]]:
+    def selection_positions(self, selection: Selection) -> list[tuple[float, float]]:
         """Find the on-screen positions of the currently selected cards."""
         if selection.source_type == "waste":
             x1, y1, _, _ = self.waste_rect()
@@ -2493,10 +2511,10 @@ class SolitaireApp:
 
     def destination_positions(
         self,
-        cards: List[Card],
+        cards: list[Card],
         destination_type: str,
         destination_index: int,
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         """Compute where each moving card should end up after a move."""
         if destination_type == "foundation":
             x1, y1, _, _ = self.foundation_rect(destination_index)
@@ -2515,21 +2533,21 @@ class SolitaireApp:
 
         return [(x, start_y + FACE_UP_SPACING * offset) for offset in range(len(cards))]
 
-    def point_in_rect(self, x: int, y: int, rect: Tuple[int, int, int, int]) -> bool:
+    def point_in_rect(self, x: int, y: int, rect: tuple[int, int, int, int]) -> bool:
         """Basic hit-test helper for rectangular areas."""
         x1, y1, x2, y2 = rect
         return x1 <= x <= x2 and y1 <= y <= y2
 
-    def stock_rect(self) -> Tuple[int, int, int, int]:
+    def stock_rect(self) -> tuple[int, int, int, int]:
         """Return the stock pile rectangle."""
         return (MARGIN_X, TOP_ROW_Y, MARGIN_X + CARD_WIDTH, TOP_ROW_Y + CARD_HEIGHT)
 
-    def waste_rect(self) -> Tuple[int, int, int, int]:
+    def waste_rect(self) -> tuple[int, int, int, int]:
         """Return the waste pile rectangle."""
         x = MARGIN_X + TABLEAU_STEP
         return (x, TOP_ROW_Y, x + CARD_WIDTH, TOP_ROW_Y + CARD_HEIGHT)
 
-    def foundation_rect(self, foundation_index: int) -> Tuple[int, int, int, int]:
+    def foundation_rect(self, foundation_index: int) -> tuple[int, int, int, int]:
         """Return the rectangle for one foundation pile."""
         x = FOUNDATION_START_X + foundation_index * TABLEAU_STEP
         return (x, TOP_ROW_Y, x + CARD_WIDTH, TOP_ROW_Y + CARD_HEIGHT)
@@ -2538,11 +2556,11 @@ class SolitaireApp:
         """Return the left x-position of a tableau column."""
         return MARGIN_X + column_index * TABLEAU_STEP
 
-    def tableau_positions(self, column_index: int) -> List[int]:
+    def tableau_positions(self, column_index: int) -> list[int]:
         """Return every y-position in one real tableau column."""
         return self.tableau_positions_for_cards(self.game.tableau[column_index])
 
-    def tableau_positions_for_cards(self, cards: List[Card]) -> List[int]:
+    def tableau_positions_for_cards(self, cards: list[Card]) -> list[int]:
         """Return stacked y-positions for any supplied list of cards.
 
         Face-down cards can overlap more tightly because nothing on them needs
@@ -2550,14 +2568,14 @@ class SolitaireApp:
         and suit still show at the top edge. That is why two different
         spacings (FACE_UP_SPACING and FACE_DOWN_SPACING) are used here.
         """
-        y_positions: List[int] = []
+        y_positions: list[int] = []
         y = TABLEAU_Y
         for card in cards:
             y_positions.append(y)
             y += FACE_UP_SPACING if card.face_up else FACE_DOWN_SPACING
         return y_positions
 
-    def find_tableau_hit(self, x: int, y: int) -> Tuple[Optional[int], Optional[int]]:
+    def find_tableau_hit(self, x: int, y: int) -> tuple[int | None, int | None]:
         """
         Figure out which tableau column/card a mouse click landed on.
 
@@ -2584,10 +2602,7 @@ class SolitaireApp:
             # Walk backward so the topmost visible card wins the hit test.
             for card_index in range(len(column) - 1, -1, -1):
                 top = positions[card_index]
-                if card_index == len(column) - 1:
-                    bottom = top + CARD_HEIGHT
-                else:
-                    bottom = positions[card_index + 1]
+                bottom = top + CARD_HEIGHT if card_index == len(column) - 1 else positions[card_index + 1]
 
                 if top <= y <= bottom:
                     return column_index, card_index
@@ -2606,7 +2621,7 @@ class SolitaireApp:
             and self.selection.card_index == other.card_index
         )
 
-    def describe_cards(self, cards: List[Card]) -> str:
+    def describe_cards(self, cards: list[Card]) -> str:
         """Small UI wrapper around the model helper."""
         return self.game.describe_cards(cards)
 

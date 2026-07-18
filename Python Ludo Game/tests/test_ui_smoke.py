@@ -7,7 +7,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 GAME_DIR = Path(__file__).resolve().parents[1]
@@ -16,9 +15,15 @@ if str(GAME_DIR) not in sys.path:
 
 import pygame
 
-import main as ludo_main
 from game import LudoGame, LudoRules
-from main import LudoApp, _name_rect
+from main import (
+    LudoApp,
+    _fit_window_size,
+    _logical_to_window_point,
+    _name_rect,
+    _setup_option_row,
+    _window_to_logical_point,
+)
 
 
 class UiSmokeTests(unittest.TestCase):
@@ -53,9 +58,6 @@ class UiSmokeTests(unittest.TestCase):
     def test_setup_option_rows_keep_labels_values_and_buttons_aligned(self) -> None:
         """Setup option labels, values, and buttons should share row geometry."""
 
-        row_helper = getattr(ludo_main, "_setup_option_row", None)
-        self.assertIsNotNone(row_helper)
-
         app = LudoApp()
         try:
             buttons = {button.key: button for button in app.setup_buttons()}
@@ -66,7 +68,7 @@ class UiSmokeTests(unittest.TestCase):
             ]
             for offset, (row_index, left_key, right_key) in enumerate(rows):
                 with self.subTest(row=row_index):
-                    row = row_helper(row_index)
+                    row = _setup_option_row(row_index)
                     left_button = buttons[left_key].rect
                     right_button = buttons[right_key].rect
 
@@ -77,7 +79,7 @@ class UiSmokeTests(unittest.TestCase):
                     self.assertEqual(row.value_center[1], right_button.centery)
 
                     if offset + 1 < len(rows):
-                        next_row = row_helper(row_index + 1)
+                        next_row = _setup_option_row(row_index + 1)
                         self.assertLessEqual(left_button.bottom, next_row.label_y)
                         self.assertLessEqual(right_button.bottom, next_row.label_y)
         finally:
@@ -107,10 +109,7 @@ class UiSmokeTests(unittest.TestCase):
     def test_scaled_window_size_fits_short_work_area(self) -> None:
         """The real window should shrink when the desktop is shorter than the logical layout."""
 
-        fit_window = getattr(ludo_main, "_fit_window_size", None)
-        self.assertIsNotNone(fit_window)
-
-        window_size = fit_window((1536, 816), (0, 0))
+        window_size = _fit_window_size((1536, 816), (0, 0))
 
         self.assertLessEqual(window_size[0], 1536)
         self.assertLessEqual(window_size[1], 816)
@@ -119,21 +118,14 @@ class UiSmokeTests(unittest.TestCase):
     def test_scaled_mouse_coordinates_can_reach_bottom_buttons(self) -> None:
         """Scaled display clicks should map back to logical bottom-button rectangles."""
 
-        fit_window = getattr(ludo_main, "_fit_window_size", None)
-        logical_to_window = getattr(ludo_main, "_logical_to_window_point", None)
-        window_to_logical = getattr(ludo_main, "_window_to_logical_point", None)
-        self.assertIsNotNone(fit_window)
-        self.assertIsNotNone(logical_to_window)
-        self.assertIsNotNone(window_to_logical)
-
-        display_size = fit_window((1536, 816), (0, 0))
+        display_size = _fit_window_size((1536, 816), (0, 0))
         app = LudoApp()
         try:
             setup_buttons = {button.key: button for button in app.setup_buttons()}
             for key in ("resume", "start"):
                 with self.subTest(screen="setup", button=key):
-                    window_point = logical_to_window(setup_buttons[key].rect.center, display_size)
-                    logical_point = window_to_logical(window_point, display_size)
+                    window_point = _logical_to_window_point(setup_buttons[key].rect.center, display_size)
+                    logical_point = _window_to_logical_point(window_point, display_size)
                     self.assertTrue(setup_buttons[key].rect.collidepoint(logical_point))
 
             app.screen = "playing"
@@ -142,8 +134,8 @@ class UiSmokeTests(unittest.TestCase):
             play_buttons = {button.key: button for button in app._buttons_for_screen()}
             for key in ("save_quit", "new_game"):
                 with self.subTest(screen="playing", button=key):
-                    window_point = logical_to_window(play_buttons[key].rect.center, display_size)
-                    logical_point = window_to_logical(window_point, display_size)
+                    window_point = _logical_to_window_point(play_buttons[key].rect.center, display_size)
+                    logical_point = _window_to_logical_point(window_point, display_size)
                     self.assertTrue(play_buttons[key].rect.collidepoint(logical_point))
         finally:
             app.running = False

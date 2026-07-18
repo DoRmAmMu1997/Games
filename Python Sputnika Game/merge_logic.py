@@ -12,10 +12,14 @@ Beginner note:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pygame
 
-from settings import MERGE_CONTACT_SLOP, TIERS
+from settings import MERGE_CONTACT_SLOP, MERGE_VELOCITY_DAMP, TIERS
+
+if TYPE_CHECKING:
+    from entities import CelestialBody
 
 
 @dataclass(slots=True)
@@ -53,7 +57,7 @@ def find_merge_events(bodies, now: float) -> list[MergeEvent]:
     # - relative speed squared,
     # - first body,
     # - second body.
-    candidates: list[tuple[int, float, float, object, object]] = []
+    candidates: list[tuple[int, float, float, CelestialBody, CelestialBody]] = []
     total_tiers = len(TIERS)
 
     for index, first in enumerate(bodies):
@@ -110,7 +114,7 @@ def find_merge_events(bodies, now: float) -> list[MergeEvent]:
         position = (first.position * first.mass + second.position * second.mass) / total_mass
 
         # Damp the combined velocity so chain merges stay exciting but readable.
-        velocity = (first.velocity + second.velocity) * 0.42
+        velocity = (first.velocity + second.velocity) * MERGE_VELOCITY_DAMP
 
         # `score_gain` is taken from the resulting tier, not the consumed tier.
         # That makes higher evolutions dramatically more rewarding.

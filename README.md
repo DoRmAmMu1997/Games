@@ -11,7 +11,7 @@ keeps its progress under `%APPDATA%` so saves survive moving the executable.
 | `Python Sputnika Game/` | **[Orbital Orchard](Python%20Sputnika%20Game/README.md)** — a Suika-style merge puzzle. Drop celestial bodies into a bubble, bounce and merge them up to a Quasar Crown. | pygame |
 | `Python Solitaire Game/` | **[Klondike Solitaire](Python%20Solitaire%20Game/README.md)** — the classic single-player card game with hints, auto-solve, undo, and a confetti win celebration. | tkinter |
 | `Python Monopoly Game/` | **[Monopoly](Python%20Monopoly%20Game/README.md)** — full standard rules, 1-4 humans + AI to fill out four players, thirteen themed boards, auctions, trading, and autosave + resume. | pygame |
-| `Python Ludo Game/` | **[Ludo](Python%20Ludo%20Game/README.md)** — classic competitive Ludo for 4-6 total players, 1-6 humans, heuristic AI, and square/pentagonal/hexagonal boards. | pygame |
+| `Python Ludo Game/` | **[Ludo](Python%20Ludo%20Game/README.md)** — classic competitive Ludo for 4-6 total players, 1-6 humans, heuristic AI, clockwise token movement, and a classic square board (4P) plus compact radial boards (5P/6P). | pygame |
 
 Click into a folder for the full per-game README with rules, controls,
 features and build notes.
@@ -29,6 +29,22 @@ python main.py                     # python solitaire.py for the Solitaire game
 ```
 
 Python 3.11 or newer is recommended for all four.
+
+## Tests
+
+Every game has a headless test suite under its own `tests/` folder. Run one
+from inside that game's folder:
+
+```bash
+cd "Python Ludo Game"              # or another game's folder
+python -m unittest discover -s tests
+```
+
+The pygame games read `SDL_VIDEODRIVER=dummy` for fully headless runs, and
+each has an autotest mode (`LUDO_AUTOTEST=1`, `MONOPOLY_AUTOTEST=1`,
+`ORBITAL_ORCHARD_AUTOTEST=1`) that plays a short hidden-window session as a
+smoke test. Solitaire's rules model never touches tkinter, so its suite needs
+no display at all.
 
 ## Build a standalone .exe
 

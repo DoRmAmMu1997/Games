@@ -7,9 +7,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
 import random
+from dataclasses import dataclass
 
 import pygame
 
@@ -289,5 +289,5 @@ class EffectsManager:
                 height = max(1, int(base.get_height() * popup.scale))
                 base = pygame.transform.smoothscale(base, (width, height))
             base.set_alpha(alpha)
-            rect = base.get_rect(center=(int(popup.position.x + camera_offset.x), int(popup.position.y + camera_offset.y)))
-            target.blit(base, rect)
+            center = (int(popup.position.x + camera_offset.x), int(popup.position.y + camera_offset.y))
+            target.blit(base, base.get_rect(center=center))

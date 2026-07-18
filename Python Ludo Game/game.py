@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 
 from board import BoardLayout
 from models import Move, MoveResult, PlayerState
-from settings import PLAYER_COLORS, TOKENS_PER_PLAYER
+from settings import TOKENS_PER_PLAYER, seat_colors
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ class LudoGame:
 
     def __init__(
         self,
-        players: list[tuple[str, bool]] | list[PlayerState],
+        players: Sequence[tuple[str, bool] | PlayerState],
         rules: LudoRules,
         seed: int | None = None,
         ai_profile: str = "tactical",
@@ -57,11 +58,12 @@ class LudoGame:
         self.seed = seed
         self.ai_profile = ai_profile
 
+        colors = seat_colors(rules.total_players)
         self.players: list[PlayerState] = []
         for index, player in enumerate(players):
             if isinstance(player, PlayerState):
-                # Restored games already have token positions, counters, and
-                # colors, so keep those objects instead of creating new ones.
+                # Restored games already have token positions and counters, so
+                # keep those objects instead of creating new ones.
                 self.players.append(player)
             else:
                 name, is_human = player
@@ -69,9 +71,13 @@ class LudoGame:
                     PlayerState(
                         name=name,
                         is_human=is_human,
-                        color=PLAYER_COLORS[index],
+                        color=colors[index],
                     )
                 )
+        for index, player_state in enumerate(self.players):
+            # Seat colours are authoritative: they always match the painted
+            # board, even for saves written before a palette change.
+            player_state.color = colors[index]
 
         self.current = 0
         # ``awaiting`` is the small state machine the UI and AI both follow:
@@ -297,7 +303,7 @@ class LudoGame:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "LudoGame":
+    def from_dict(cls, data: dict) -> LudoGame:
         """Rebuild a game from save-file data."""
 
         rules = LudoRules(**data["rules"])
@@ -395,8 +401,8 @@ class LudoGame:
     def _mark_finished_tokens(self) -> None:
         """Teach token helper properties what this layout's finish step is."""
 
-        for player in self.players:
-            for token in player.tokens:
+        for player_state in self.players:
+            for token in player_state.tokens:
                 token._finished_steps = self.layout.finish_steps
 
     def _note(self, message: str) -> None:

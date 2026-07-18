@@ -26,8 +26,14 @@ import board_data
 import cards as cards_module
 from player import Player
 from settings import (
-    BANK_HOTELS, BANK_HOUSES, GO_SALARY, INCOME_TAX, JAIL_FINE, JAIL_POSITION,
-    LUXURY_TAX, MAX_JAIL_TURNS, STARTING_CASH,
+    BANK_HOTELS,
+    BANK_HOUSES,
+    GO_SALARY,
+    INCOME_TAX,
+    JAIL_FINE,
+    JAIL_POSITION,
+    LUXURY_TAX,
+    MAX_JAIL_TURNS,
 )
 
 # Rent a railroad charges for 1/2/3/4 railroads owned by the same player.
@@ -245,9 +251,8 @@ class MonopolyGame:
         while player.cash < target:
             best = None
             for pos in self.properties_of(player):
-                if self.houses.get(pos, 0) > 0:
-                    if best is None or self.houses[pos] > self.houses[best]:
-                        best = pos
+                if self.houses.get(pos, 0) > 0 and (best is None or self.houses[pos] > self.houses[best]):
+                    best = pos
             if best is None:
                 break
             self.sell_house(best, forced=True)
@@ -668,6 +673,7 @@ class MonopolyGame:
     def _advance_auction(self) -> None:
         """Move the auction to the next bidder, or finish it if it is settled."""
         auction = self.auction
+        assert auction is not None, "only called while an auction is running"
         high_bidder = auction["high_bidder"]
         # Find the next active bidder who is not already the high bidder.
         contenders = [idx for idx in auction["active"] if idx != high_bidder]
@@ -690,6 +696,7 @@ class MonopolyGame:
     def _finish_auction(self) -> None:
         """Award the auctioned property and return play to the current player."""
         auction = self.auction
+        assert auction is not None, "only called while an auction is running"
         position = auction["position"]
         winner_index = auction["high_bidder"]
         if winner_index is not None and auction["high_bid"] > 0:
@@ -815,7 +822,7 @@ class MonopolyGame:
             return blocker
         if position not in self.mortgaged:
             return "This title is not mortgaged."
-        cost = int(round(self.board[position].mortgage * 1.1))
+        cost = round(self.board[position].mortgage * 1.1)
         if player.cash < cost:
             return f"Need ${cost} to lift this mortgage."
         return None
@@ -889,7 +896,7 @@ class MonopolyGame:
         player = self.current_player
         if not self.can_unmortgage(player, position):
             return False
-        cost = int(round(self.board[position].mortgage * 1.1))
+        cost = round(self.board[position].mortgage * 1.1)
         if player.cash < cost:
             return False
         player.cash -= cost
@@ -1031,7 +1038,7 @@ class MonopolyGame:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "MonopolyGame":
+    def from_dict(cls, data: dict) -> MonopolyGame:
         """Rebuild a game from a `to_dict()` snapshot (used to resume a game)."""
         save_version = int(data.get("save_version", 1))
         if save_version not in (1, SAVE_VERSION):

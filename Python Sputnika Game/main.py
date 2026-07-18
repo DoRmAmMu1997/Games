@@ -14,6 +14,7 @@ Beginner note:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -59,11 +60,9 @@ def main() -> None:
         # the game should still open normally instead of crashing at startup.
         icon_path = _resource_path("orbital_orchard_icon.png")
         if icon_path.exists():
-            try:
+            # Icon-loading failures are cosmetic, so we ignore them safely.
+            with contextlib.suppress(pygame.error):
                 pygame.display.set_icon(pygame.image.load(str(icon_path)))
-            except pygame.error:
-                # Icon-loading failures are cosmetic, so we ignore them safely.
-                pass
 
         # Build the main game object, which owns the window, world state, and loop.
         # From this point on, almost all interesting game behavior lives in that object.

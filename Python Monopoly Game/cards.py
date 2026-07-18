@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from board_data import RAILROAD_POSITIONS, UTILITY_POSITIONS
 
-
 # --------------------------------------------------------------------------
 # Card definitions -- the standard 16 Chance and 16 Community Chest cards
 # --------------------------------------------------------------------------

@@ -13,9 +13,9 @@ Beginner note:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import math
 import random
+from dataclasses import dataclass, field
 
 import pygame
 
@@ -175,7 +175,8 @@ class CelestialBody:
             (max(12, int(self.radius * scale * 2.0)), max(8, int(self.radius * scale * 0.72))),
             pygame.SRCALPHA,
         )
-        shadow_rect = shadow_surface.get_rect(center=(round(draw_pos.x), round(draw_pos.y + self.radius * scale * 0.78)))
+        shadow_center = (round(draw_pos.x), round(draw_pos.y + self.radius * scale * 0.78))
+        shadow_rect = shadow_surface.get_rect(center=shadow_center)
         pygame.draw.ellipse(
             shadow_surface,
             (4, 8, 18, 58 + int(self.radius * 0.45)),
@@ -243,8 +244,10 @@ class CelestialBody:
             # Closed eyes are drawn as short lines.
             line_y = int(eye_y)
             line_half = max(3, int(radius * 0.09))
-            pygame.draw.line(target, eye_color, (int(cx - eye_dx - line_half), line_y), (int(cx - eye_dx + line_half), line_y), 2)
-            pygame.draw.line(target, eye_color, (int(cx + eye_dx - line_half), line_y), (int(cx + eye_dx + line_half), line_y), 2)
+            for eye_x in (cx - eye_dx, cx + eye_dx):
+                start = (int(eye_x - line_half), line_y)
+                end = (int(eye_x + line_half), line_y)
+                pygame.draw.line(target, eye_color, start, end, 2)
         else:
             # Open eyes use a white sclera, dark pupil, and highlight.
             # Slightly taller eyes help the expressions read more clearly.
@@ -260,7 +263,8 @@ class CelestialBody:
                     int(eye_y + eyelid_drop + gaze.y),
                 )
                 pygame.draw.circle(target, eye_color, pupil_center, pupil_radius)
-                pygame.draw.circle(target, WHITE, (pupil_center[0] - 1, pupil_center[1] - 1), max(1, pupil_radius // 3))
+                glint_center = (pupil_center[0] - 1, pupil_center[1] - 1)
+                pygame.draw.circle(target, WHITE, glint_center, max(1, pupil_radius // 3))
 
         self._draw_brows(target, center, radius, expression)
 
@@ -281,7 +285,8 @@ class CelestialBody:
         elif expression["delighted"]:
             happy_rect = mouth_rect.inflate(int(radius * 0.08), int(radius * 0.06))
             pygame.draw.arc(target, mouth_color, happy_rect, 0.0, math.pi, 3)
-            pygame.draw.circle(target, (*WHITE, 90), (int(cx - radius * 0.08), int(cy + radius * 0.2)), max(1, int(radius * 0.035)))
+            sparkle_center = (int(cx - radius * 0.08), int(cy + radius * 0.2))
+            pygame.draw.circle(target, (*WHITE, 90), sparkle_center, max(1, int(radius * 0.035)))
         # Different tiers use different mouth shapes so they feel like distinct characters.
         elif mood in {"cheery", "smile", "spark", "bright"}:
             pygame.draw.arc(target, mouth_color, mouth_rect, 0.1, math.pi - 0.1, 3)
@@ -373,21 +378,27 @@ class CelestialBody:
         brow_half = radius * 0.13
         brow_color = shade(self.info.accent, 0.42)
 
+        # Brow endpoints: the outer/inner x positions are shared by every
+        # expression; only the y tilt of each end changes per mood.
+        left_x0 = cx - brow_dx - brow_half
+        left_x1 = cx - brow_dx + brow_half
+        right_x0 = cx + brow_dx - brow_half
+        right_x1 = cx + brow_dx + brow_half
         if expression["sleepy"]:
-            left = ((cx - brow_dx - brow_half), brow_y, (cx - brow_dx + brow_half), brow_y + radius * 0.02)
-            right = ((cx + brow_dx - brow_half), brow_y + radius * 0.02, (cx + brow_dx + brow_half), brow_y)
+            left = (left_x0, brow_y, left_x1, brow_y + radius * 0.02)
+            right = (right_x0, brow_y + radius * 0.02, right_x1, brow_y)
         elif expression["startled"]:
-            left = ((cx - brow_dx - brow_half), brow_y + radius * 0.02, (cx - brow_dx + brow_half), brow_y - radius * 0.06)
-            right = ((cx + brow_dx - brow_half), brow_y - radius * 0.06, (cx + brow_dx + brow_half), brow_y + radius * 0.02)
+            left = (left_x0, brow_y + radius * 0.02, left_x1, brow_y - radius * 0.06)
+            right = (right_x0, brow_y - radius * 0.06, right_x1, brow_y + radius * 0.02)
         elif expression["worried"]:
-            left = ((cx - brow_dx - brow_half), brow_y - radius * 0.02, (cx - brow_dx + brow_half), brow_y + radius * 0.07)
-            right = ((cx + brow_dx - brow_half), brow_y + radius * 0.07, (cx + brow_dx + brow_half), brow_y - radius * 0.02)
+            left = (left_x0, brow_y - radius * 0.02, left_x1, brow_y + radius * 0.07)
+            right = (right_x0, brow_y + radius * 0.07, right_x1, brow_y - radius * 0.02)
         elif expression["focused"]:
-            left = ((cx - brow_dx - brow_half), brow_y + radius * 0.03, (cx - brow_dx + brow_half), brow_y - radius * 0.05)
-            right = ((cx + brow_dx - brow_half), brow_y - radius * 0.05, (cx + brow_dx + brow_half), brow_y + radius * 0.03)
+            left = (left_x0, brow_y + radius * 0.03, left_x1, brow_y - radius * 0.05)
+            right = (right_x0, brow_y - radius * 0.05, right_x1, brow_y + radius * 0.03)
         else:
-            left = ((cx - brow_dx - brow_half), brow_y, (cx - brow_dx + brow_half), brow_y - radius * 0.03)
-            right = ((cx + brow_dx - brow_half), brow_y - radius * 0.03, (cx + brow_dx + brow_half), brow_y)
+            left = (left_x0, brow_y, left_x1, brow_y - radius * 0.03)
+            right = (right_x0, brow_y - radius * 0.03, right_x1, brow_y)
 
         pygame.draw.line(target, brow_color, left[:2], left[2:], max(2, int(radius * 0.05)))
         pygame.draw.line(target, brow_color, right[:2], right[2:], max(2, int(radius * 0.05)))

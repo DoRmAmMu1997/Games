@@ -13,9 +13,9 @@ Beginner note:
 
 from __future__ import annotations
 
-from array import array
 import math
 import random
+from array import array
 
 import pygame
 
@@ -230,12 +230,12 @@ class AssetLibrary:
             ((860, 320), 220, (102, 225, 255, 18)),
             ((760, 980), 320, (255, 190, 120, 12)),
         ]
-        for center, radius, color in nebulae:
+        for nebula_center, nebula_radius, nebula_color in nebulae:
             # Several translucent circles layered together make a soft nebula blob.
             for ring in range(5, 0, -1):
-                alpha = max(0, color[3] - ring * 2)
-                draw_radius = radius - ring * 18
-                pygame.draw.circle(cloud, (*color[:3], alpha), center, draw_radius)
+                alpha = max(0, nebula_color[3] - ring * 2)
+                draw_radius = nebula_radius - ring * 18
+                pygame.draw.circle(cloud, (*nebula_color[:3], alpha), nebula_center, draw_radius)
 
         # Add a few distant decorative planets so the world feels bigger than
         # the single puzzle container on screen.
@@ -360,9 +360,12 @@ class AssetLibrary:
 
         # Large top highlight plus a smaller specular dot give the "toy-like"
         # shine typical of charming merge-game art.
-        pygame.draw.circle(surface, shade(info.color, 1.11), center - pygame.Vector2(radius * 0.25, radius * 0.30), int(radius * 0.68))
-        pygame.draw.circle(surface, (*SOFT_WHITE, 76), center - pygame.Vector2(radius * 0.40, radius * 0.44), int(radius * 0.35))
-        pygame.draw.circle(surface, (*WHITE, 118), center - pygame.Vector2(radius * 0.24, radius * 0.33), max(3, int(radius * 0.09)))
+        highlight_center = center - pygame.Vector2(radius * 0.25, radius * 0.30)
+        pygame.draw.circle(surface, shade(info.color, 1.11), highlight_center, int(radius * 0.68))
+        soft_center = center - pygame.Vector2(radius * 0.40, radius * 0.44)
+        pygame.draw.circle(surface, (*SOFT_WHITE, 76), soft_center, int(radius * 0.35))
+        specular_center = center - pygame.Vector2(radius * 0.24, radius * 0.33)
+        pygame.draw.circle(surface, (*WHITE, 118), specular_center, max(3, int(radius * 0.09)))
         pygame.draw.circle(surface, shade(info.accent, 0.82), center, radius, width=3)
 
         # A thin rim light around the upper-left edge helps separate the body
@@ -400,20 +403,26 @@ class AssetLibrary:
             for ox, oy in offsets:
                 crater_center = center + pygame.Vector2(radius * ox, radius * oy)
                 pygame.draw.circle(surface, dark, crater_center, max(4, int(radius * 0.16)))
-                pygame.draw.circle(surface, shade(info.color, 0.92), crater_center + pygame.Vector2(-2, -2), max(2, int(radius * 0.08)))
+                inner_center = crater_center + pygame.Vector2(-2, -2)
+                pygame.draw.circle(surface, shade(info.color, 0.92), inner_center, max(2, int(radius * 0.08)))
         elif info.icon == "ocean":
             # Ocean worlds use repeating arc bands as stylized waves.
             for row in range(3):
                 wave_rect = pygame.Rect(0, 0, int(radius * 1.1), int(radius * 0.5))
                 wave_rect.center = (center.x, center.y + radius * (-0.18 + row * 0.22))
                 pygame.draw.arc(surface, accent, wave_rect, 0.35, math.pi - 0.35, 3)
-            pygame.draw.circle(surface, (*WHITE, 36), center - pygame.Vector2(radius * 0.08, radius * 0.02), int(radius * 0.78), width=2)
+            glow_center = center - pygame.Vector2(radius * 0.08, radius * 0.02)
+            pygame.draw.circle(surface, (*WHITE, 36), glow_center, int(radius * 0.78), width=2)
         elif info.icon == "continent":
             # Earth-like worlds get simple landmass blobs.
             blobs = [(-0.24, -0.05, 0.24), (0.18, 0.16, 0.2), (-0.02, 0.28, 0.15)]
             for ox, oy, scale in blobs:
-                pygame.draw.circle(surface, accent, center + pygame.Vector2(radius * ox, radius * oy), int(radius * scale))
-            pygame.draw.arc(surface, (*WHITE, 32), pygame.Rect(center.x - radius * 0.76, center.y - radius * 0.54, radius * 1.2, radius * 0.7), 0.2, 2.6, 2)
+                blob_center = center + pygame.Vector2(radius * ox, radius * oy)
+                pygame.draw.circle(surface, accent, blob_center, int(radius * scale))
+            cloud_rect = pygame.Rect(
+                center.x - radius * 0.76, center.y - radius * 0.54, radius * 1.2, radius * 0.7
+            )
+            pygame.draw.arc(surface, (*WHITE, 32), cloud_rect, 0.2, 2.6, 2)
         elif info.icon == "ring":
             # Gas giants use ellipses to fake a ring system.
             ring_rect = pygame.Rect(0, 0, int(radius * 2.2), int(radius * 0.72))

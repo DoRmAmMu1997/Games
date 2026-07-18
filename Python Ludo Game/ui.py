@@ -1,4 +1,4 @@
-"""Pygame UI helpers for buttons, labels, panels, and dice."""
+"""Pygame UI helpers for buttons, text labels, and log colors."""
 
 from __future__ import annotations
 
@@ -87,19 +87,6 @@ def draw_text(
     surface.blit(image, rect)
 
 
-def draw_panel(
-    surface: pygame.Surface,
-    rect: pygame.Rect,
-    *,
-    border: tuple[int, int, int] = PANEL_EDGE,
-    fill: tuple[int, int, int] = PANEL_CARD,
-) -> None:
-    """Draw a rounded rectangular panel used behind sidebar content."""
-
-    pygame.draw.rect(surface, fill, rect, border_radius=10)
-    pygame.draw.rect(surface, border, rect, 2, border_radius=10)
-
-
 def draw_wrapped(
     surface: pygame.Surface,
     font: pygame.font.Font,
@@ -136,46 +123,6 @@ def draw_wrapped(
             break
         draw_text(surface, font, line, (rect.x, y), color)
         y += font.get_height() + line_gap
-
-
-def draw_dice(surface: pygame.Surface, fonts: dict[str, pygame.font.Font], value: int | None, rect: pygame.Rect) -> None:
-    """Draw one die face.
-
-    ``None`` means no roll is visible yet, so the center shows a dash instead
-    of pips.
-    """
-
-    pygame.draw.rect(surface, WHITE, rect, border_radius=12)
-    pygame.draw.rect(surface, INK, rect, 3, border_radius=12)
-    if value is None:
-        draw_text(surface, fonts["header"], "-", rect.center, INK, center=True)
-        return
-
-    spots = _pip_offsets(value)
-    radius = max(4, rect.width // 13)
-    for ox, oy in spots:
-        pygame.draw.circle(
-            surface,
-            INK,
-            (rect.centerx + int(ox * rect.width * 0.24), rect.centery + int(oy * rect.height * 0.24)),
-            radius,
-        )
-
-
-def _pip_offsets(value: int) -> list[tuple[int, int]]:
-    """Return normalized pip positions for a die value from 1 to 6."""
-
-    if value == 1:
-        return [(0, 0)]
-    if value == 2:
-        return [(-1, -1), (1, 1)]
-    if value == 3:
-        return [(-1, -1), (0, 0), (1, 1)]
-    if value == 4:
-        return [(-1, -1), (1, -1), (-1, 1), (1, 1)]
-    if value == 5:
-        return [(-1, -1), (1, -1), (0, 0), (-1, 1), (1, 1)]
-    return [(-1, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (1, 1)]
 
 
 def status_color(text: str) -> tuple[int, int, int]:

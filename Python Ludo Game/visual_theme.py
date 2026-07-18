@@ -11,8 +11,7 @@ import math
 
 import pygame
 
-from settings import INK, PLAYER_COLORS, WHITE
-
+from settings import INK, WHITE
 
 WALLPAPER_BLUE = (30, 123, 197)
 WALLPAPER_DEEP = (12, 52, 93)
@@ -34,13 +33,15 @@ def brighten(color: tuple[int, int, int], amount: int) -> tuple[int, int, int]:
     highlight colors easier to read at call sites.
     """
 
-    return tuple(min(255, channel + amount) for channel in color)
+    red, green, blue = color
+    return (min(255, red + amount), min(255, green + amount), min(255, blue + amount))
 
 
 def darken(color: tuple[int, int, int], amount: int) -> tuple[int, int, int]:
     """Return ``color`` with every channel pulled toward black."""
 
-    return tuple(max(0, channel - amount) for channel in color)
+    red, green, blue = color
+    return (max(0, red - amount), max(0, green - amount), max(0, blue - amount))
 
 
 def draw_ludo_wallpaper(surface: pygame.Surface) -> None:
@@ -173,6 +174,29 @@ def draw_token_pin(
         surface.blit(text, text.get_rect(center=(cx, cy)))
 
 
+def draw_die_face(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    value: int | None,
+    fonts: dict[str, pygame.font.Font] | None = None,
+) -> None:
+    """Draw one rounded white die face showing ``value`` pips.
+
+    ``None`` means no roll has happened yet: the face shows a dash when fonts
+    are available and stays blank otherwise. This is the single die renderer
+    shared by the HUD tray and the radial board hub.
+    """
+
+    pygame.draw.rect(surface, WHITE, rect, border_radius=10)
+    pygame.draw.rect(surface, BOARD_EDGE, rect, 3, border_radius=10)
+    if value is None:
+        if fonts is not None:
+            text = fonts["header"].render("-", True, BOARD_EDGE)
+            surface.blit(text, text.get_rect(center=rect.center))
+        return
+    _draw_pips(surface, rect, value)
+
+
 def draw_dice_tray(
     surface: pygame.Surface,
     rect: pygame.Rect,
@@ -186,13 +210,7 @@ def draw_dice_tray(
     draw_shadowed_rect(surface, rect, HUD_DARK, border=accent, radius=14, shadow_offset=(0, 5))
     die_size = min(rect.height - 18, rect.width // 3)
     die_rect = pygame.Rect(rect.x + 14, rect.centery - die_size // 2, die_size, die_size)
-    pygame.draw.rect(surface, WHITE, die_rect, border_radius=10)
-    pygame.draw.rect(surface, BOARD_EDGE, die_rect, 3, border_radius=10)
-    if value is None:
-        text = fonts["header"].render("-", True, BOARD_EDGE)
-        surface.blit(text, text.get_rect(center=die_rect.center))
-    else:
-        _draw_pips(surface, die_rect, value)
+    draw_die_face(surface, die_rect, value, fonts)
 
 
 def draw_round_icon_button(
@@ -261,7 +279,11 @@ def _draw_pips(surface: pygame.Surface, rect: pygame.Rect, value: int) -> None:
 def _blend(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
     """Mix two colors by ``amount`` where 0 is all ``a`` and 1 is all ``b``."""
 
-    return tuple(int(a[i] + (b[i] - a[i]) * amount) for i in range(3))
+    return (
+        int(a[0] + (b[0] - a[0]) * amount),
+        int(a[1] + (b[1] - a[1]) * amount),
+        int(a[2] + (b[2] - a[2]) * amount),
+    )
 
 
 def _is_light(color: tuple[int, int, int]) -> bool:

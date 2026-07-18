@@ -13,6 +13,7 @@ Orbital Orchard is a desktop Python puzzle game built with `pygame-ce`. You drop
 - `effects.py` handles particles, score popups, ring pulses, and screen shake.
 - `ui.py` draws panels, buttons, overlays, and the container HUD.
 - `assets.py` generates placeholder art, background stars, fonts, and simple procedural sounds.
+- `tests/` holds the headless engine test suite (merge rules, physics, data tables).
 - `requirements.txt` lists the runtime dependency.
 
 ## Beginner Reading Notes
@@ -37,6 +38,16 @@ python main.py
 ```
 
 The game saves your high score and lifetime stats to `%APPDATA%\Orbital Orchard\save_data.json`. This per-user location is used whether you run the script or a compiled `.exe`, so progress survives across sessions, even if you move the `.exe` elsewhere.
+
+## Tests
+
+The merge rules, physics guarantees, and data tables have a headless test suite that never opens a window:
+
+```bash
+python -m unittest discover -s tests
+```
+
+For a quick full-app smoke test (engine + rendering together), set `ORBITAL_ORCHARD_AUTOTEST=1` and run `python main.py`; the game plays a few frames in a hidden window and exits.
 
 ## Build a Standalone .exe
 
