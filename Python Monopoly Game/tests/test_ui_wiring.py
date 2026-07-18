@@ -22,21 +22,27 @@ from main import MonopolyApp
 
 
 class UiWiringTests(unittest.TestCase):
+    """Buttons and app plumbing stay reachable as the UI evolves."""
+
     @classmethod
     def setUpClass(cls) -> None:
+        """Initialize pygame once for the headless UI checks."""
         pygame.init()
 
     @classmethod
     def tearDownClass(cls) -> None:
+        """Release pygame after the UI checks finish."""
         pygame.quit()
 
     def test_setup_buttons_include_ai_profile_stepper(self) -> None:
+        """The setup screen exposes the AI-difficulty stepper."""
         keys = {button.key for button in ui.setup_buttons(has_save=False)}
 
         self.assertIn("ai_profile_prev", keys)
         self.assertIn("ai_profile_next", keys)
 
     def test_human_with_buildings_gets_sell_button_in_action_bar(self) -> None:
+        """Owning a developed street unlocks the Sell Buildings button."""
         app = MonopolyApp()
         game = MonopolyGame(
             [("Human", True), ("Iris", False), ("Knox", False), ("Mira", False)],
@@ -52,6 +58,7 @@ class UiWiringTests(unittest.TestCase):
         self.assertIn("sell", keys)
 
     def test_asset_manager_opens_and_dispatches_engine_actions(self) -> None:
+        """The Assets dialog opens, builds via the engine, and closes cleanly."""
         app = MonopolyApp()
         game = MonopolyGame(
             [("Human", True), ("Iris", False), ("Knox", False), ("Mira", False)],

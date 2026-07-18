@@ -16,6 +16,7 @@ from settings import GO_SALARY
 
 
 def make_game() -> MonopolyGame:
+    """Create a deterministic four-player game with one human."""
     return MonopolyGame(
         [("P1", True), ("P2", False), ("P3", False), ("P4", False)],
         seed=3,
@@ -23,12 +24,16 @@ def make_game() -> MonopolyGame:
 
 
 def rig_rolls(game: MonopolyGame, *rolls: int) -> None:
+    """Force the next dice values so a test can land on chosen spaces."""
     pending = list(rolls)
     game.rng.randint = lambda _start, _end: pending.pop(0)
 
 
 class EngineRegressionTests(unittest.TestCase):
+    """Core turn-flow, rent, mortgage, save, and bankruptcy rules."""
+
     def test_turn_flow_pauses_to_buy_then_advances_after_end_turn(self) -> None:
+        """Landing on an unowned title waits for buy/auction before moving on."""
         game = make_game()
         rig_rolls(game, 1, 2)
 
@@ -43,6 +48,7 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertEqual(game.awaiting, "pre_roll")
 
     def test_rent_transfers_cash_on_owned_unmortgaged_property(self) -> None:
+        """Landing on an opponent's title moves rent from payer to owner."""
         game = make_game()
         game.current_player.position = 39
         game.owners[1] = 1
@@ -59,6 +65,7 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertEqual(game.players[1].cash, owner_before + game.board[1].rent[0])
 
     def test_mortgage_and_unmortgage_round_trip_uses_interest(self) -> None:
+        """Lifting a mortgage costs the mortgage value plus 10% interest."""
         game = make_game()
         game.owners[5] = 0
         player = game.current_player
@@ -77,6 +84,7 @@ class EngineRegressionTests(unittest.TestCase):
         )
 
     def test_save_load_round_trip_keeps_property_state_and_ai_profile(self) -> None:
+        """Serialising and restoring a game preserves ownership and settings."""
         game = MonopolyGame(
             [("P1", True), ("P2", False), ("P3", False), ("P4", False)],
             ai_profile="sharp",
@@ -94,6 +102,7 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertEqual(restored.mortgaged, game.mortgaged)
 
     def test_bankruptcy_win_check_names_last_solvent_player(self) -> None:
+        """When only one player remains solvent, the game ends with them winning."""
         game = make_game()
         for player in game.players[1:]:
             player.bankrupt = True

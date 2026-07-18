@@ -9,6 +9,7 @@ auto-solve, undo, and a confetti win celebration along the way.
 
 - `solitaire.py` is the whole game. The rules model (`KlondikeGame`) and the
   tkinter interface (`SolitaireApp`) both live in this single file.
+- `tests/` holds the headless rules test suite for `KlondikeGame`.
 - `solitaire_icon.ico` is the window and executable icon.
 - `Solitaire Game.spec` is the PyInstaller build recipe for the `.exe`.
 
@@ -23,6 +24,15 @@ auto-solve, undo, and a confetti win celebration along the way.
 
 ```bash
 python solitaire.py
+```
+
+## Tests
+
+The rules model (`KlondikeGame`) is independent of tkinter, so the test
+suite runs headless without opening a window:
+
+```bash
+python -m unittest discover -s tests
 ```
 
 ## How to Play

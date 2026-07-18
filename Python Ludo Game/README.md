@@ -1,8 +1,10 @@
 # Ludo
 
 A desktop **Ludo** game built in Python with `pygame-ce`. It supports 4 to 6
-total players, 1 to 6 local human players, AI seats for the rest, and generated
-square, pentagonal, or hexagonal boards.
+total players, 1 to 6 local human players, and AI seats for the rest. Four
+players get the classic square cross board; five and six players get compact
+radial boards with yard triangles between the arms. Tokens travel clockwise,
+hopping cell by cell like the popular mobile Ludo apps.
 
 ## Project Structure
 
@@ -15,7 +17,7 @@ square, pentagonal, or hexagonal boards.
 - `board_render.py` - procedural board and token drawing.
 - `ui.py` - buttons, labels, panels, wrapped text, and dice drawing.
 - `simulation.py` - seeded all-AI runs for tuning.
-- `tests/` - engine, AI, layout, save/load, and Pygame smoke coverage.
+- `tests/` - engine, AI, board-geometry, save/load, and Pygame smoke coverage.
 - `requirements.txt`, `Ludo Game.spec` - dependency and PyInstaller recipe.
 
 ## Requirements
@@ -38,9 +40,11 @@ python main.py
 ## How to Play
 
 On the setup screen, choose the total player count, human player count, AI
-profile, and optional house-rule toggles. The board shape follows the total
-player count: 4 players use a square board, 5 players use a pentagonal board,
-and 6 players use a hexagonal board.
+profile, and optional house-rule toggles. The preview thumbnails show the real
+board for each count: 4 players use the classic 15x15 square cross, while 5
+and 6 players use compact radial boards whose arms meet at a central hub.
+Player 1 always sits at the bottom (blue) and seats continue clockwise, the
+same direction the tokens move.
 
 Classic competitive rules are enabled by default:
 
@@ -116,5 +120,8 @@ The finished executable is written to `dist\Ludo Game.exe`.
 
 ## Notes
 
-All visuals are procedural. The 5- and 6-player boards generalize Ludo into
-13 track cells per player segment and 6 home-lane cells per player.
+All visuals are procedural. Every board keeps the same engine numbers -- 13
+track cells per player segment and 6 home-lane cells per player -- so the
+rules are identical whichever board shape is on screen. The geometry test
+suite locks the visual layout to those rules: track continuity, clockwise
+movement, and start/yard/home alignment are all asserted per player count.
