@@ -9,8 +9,9 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    # Bundle the icon so the running window can load it via _resource_path.
-    datas=[('ludo_icon.ico', '.')],
+    # No runtime data: the window icon is drawn procedurally, and the .ico
+    # below is consumed by PyInstaller itself for the .exe file icon.
+    datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -304,7 +304,7 @@ class LudoApp:
         self.window_size = _fit_window_size(_desktop_work_area_size(), _window_chrome_size())
         self.screen_surface = pygame.display.set_mode(self.window_size)
         pygame.display.set_caption(WINDOW_TITLE)
-        pygame.display.set_icon(_load_icon())
+        pygame.display.set_icon(_make_icon())
         self.window = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT)).convert()
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
@@ -1077,34 +1077,14 @@ def _toggle_label(label: str, enabled: bool) -> str:
     return f"{label}: {'On' if enabled else 'Off'}"
 
 
-def _resource_path(name: str) -> Path:
-    """Return the path to a bundled read-only resource file, such as the icon.
-
-    PyInstaller unpacks bundled data into ``sys._MEIPASS`` at runtime; running
-    from source the file simply sits next to this script.
-    """
-
-    base = getattr(sys, "_MEIPASS", None)
-    if base:
-        return Path(base) / name
-    return Path(__file__).resolve().parent / name
-
-
-def _load_icon() -> pygame.Surface:
-    """Load the window icon, falling back to a procedural one.
-
-    The .ico file gives Windows a crisp multi-resolution icon; the drawn
-    fallback keeps source checkouts working even if the file goes missing.
-    """
-
-    try:
-        return pygame.image.load(str(_resource_path("ludo_icon.ico")))
-    except (OSError, pygame.error):
-        return _make_icon()
-
-
 def _make_icon() -> pygame.Surface:
-    """Create a tiny procedural window icon as a fallback."""
+    """Create the in-window icon by drawing it.
+
+    ``ludo_icon.ico`` is NOT loaded here: SDL_image cannot decode this file
+    ("Unsupported ICO bitmap format"), so a runtime load would always fail
+    into this function anyway. The .ico is still used, by PyInstaller, for
+    the executable's own file and taskbar icon (see the spec's ``icon=``).
+    """
 
     icon = pygame.Surface((64, 64), pygame.SRCALPHA)
     pygame.draw.rect(icon, (238, 232, 209), (4, 4, 56, 56), border_radius=12)
