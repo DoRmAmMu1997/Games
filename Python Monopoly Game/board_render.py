@@ -10,11 +10,22 @@ from __future__ import annotations
 
 import pygame
 
-import board_data
 from settings import (
-    BOARD_MARGIN, BOARD_SIZE, CORNER_SIZE, GROUP_COLORS, HIGHLIGHT, INK,
-    RAIL_COLOR, TAX_COLOR, TILE_FACE, BOARD_FACE, UTILITY_COLOR, WHITE,
-    TOKEN_COLORS, HOUSE_COLOR, HOTEL_COLOR, SOFT,
+    BOARD_FACE,
+    BOARD_MARGIN,
+    BOARD_SIZE,
+    CORNER_SIZE,
+    GROUP_COLORS,
+    HIGHLIGHT,
+    HOTEL_COLOR,
+    HOUSE_COLOR,
+    INK,
+    RAIL_COLOR,
+    TAX_COLOR,
+    TILE_FACE,
+    TOKEN_COLORS,
+    UTILITY_COLOR,
+    WHITE,
 )
 
 # Pre-computed board geometry (the board never moves or resizes).
@@ -185,6 +196,7 @@ class BoardRenderer:
         """
         if self._base is None:
             self.build_base(fonts)
+        assert self._base is not None  # build_base always fills the cache
         target.blit(self._base, (_OX, _OY))
 
         # Ownership: a thin border in the owner's colour, plus mortgage shading.

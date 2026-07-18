@@ -13,9 +13,21 @@ import pygame
 import board_data
 from cards import format_card_text
 from settings import (
-    BG, DANGER, GOLD, GROUP_COLORS, HIGHLIGHT, INK, PANEL_BG, PANEL_CARD,
-    PANEL_WIDTH, PANEL_X, SCREEN_HEIGHT, SCREEN_WIDTH, SOFT, SUCCESS,
-    TOKEN_COLORS, TOKEN_NAMES, WHITE,
+    BG,
+    DANGER,
+    GOLD,
+    GROUP_COLORS,
+    HIGHLIGHT,
+    INK,
+    PANEL_BG,
+    PANEL_CARD,
+    PANEL_WIDTH,
+    PANEL_X,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    SOFT,
+    SUCCESS,
+    WHITE,
 )
 
 
@@ -57,7 +69,7 @@ class Button:
         hovered = self.enabled and self.rect.collidepoint(mouse)
         fill = self.color if self.enabled else (44, 52, 48)
         if hovered:
-            fill = tuple(min(255, c + 28) for c in fill)
+            fill = (min(255, fill[0] + 28), min(255, fill[1] + 28), min(255, fill[2] + 28))
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
         pygame.draw.rect(surface, INK, self.rect, 2, border_radius=8)
         ink = WHITE if self.enabled else SOFT
@@ -563,7 +575,7 @@ def trade_layout(game, trade) -> dict:
     panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
     human = game.players[trade["from"]]
     partner = game.players[trade["to"]]
-    layout = {
+    layout: dict = {
         "panel": panel,
         "give_rows": [],
         "get_rows": [],
@@ -596,7 +608,6 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     panel = layout["panel"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
-    human = game.players[trade["from"]]
     partner = game.players[trade["to"]]
 
     _text(surface, fonts, "big", "PROPOSE A TRADE",

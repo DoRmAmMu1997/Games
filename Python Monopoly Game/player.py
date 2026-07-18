@@ -60,7 +60,7 @@ class Player:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Player":
+    def from_dict(cls, data: dict) -> Player:
         """Rebuild a Player from a `to_dict()` snapshot (used when resuming)."""
         return cls(
             index=int(data["index"]),

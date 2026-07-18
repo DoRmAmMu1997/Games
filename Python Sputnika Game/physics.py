@@ -16,8 +16,8 @@ Beginner note:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pygame
@@ -35,8 +35,8 @@ from settings import (
     PLAYFIELD_CENTER,
     POSITION_CORRECTION_SOFTNESS,
     RESTITUTION,
-    SPAWN_Y,
     SOLVER_ITERATIONS,
+    SPAWN_Y,
     WALL_BOUNCE,
     WALL_FRICTION,
 )
@@ -55,8 +55,8 @@ class CollisionEvent:
     """Information about one impactful contact that the rest of the game can react to."""
 
     # `body_b` is optional because wall hits have only one real body involved.
-    body_a: "CelestialBody"
-    body_b: "CelestialBody | None"
+    body_a: CelestialBody
+    body_b: CelestialBody | None
     point: pygame.Vector2
     normal: pygame.Vector2
     impact_speed: float
@@ -74,7 +74,7 @@ class PhysicsWorld:
         # `time` lets gravity/orbit math use smooth oscillation over time.
         self.time = 0.0
 
-    def step(self, bodies: list["CelestialBody"], dt: float) -> list[CollisionEvent]:
+    def step(self, bodies: list[CelestialBody], dt: float) -> list[CollisionEvent]:
         """Advance the physics simulation by one frame.
 
         The order is:
@@ -110,7 +110,7 @@ class PhysicsWorld:
 
         return events
 
-    def _step_once(self, bodies: list["CelestialBody"], dt: float) -> list[CollisionEvent]:
+    def _step_once(self, bodies: list[CelestialBody], dt: float) -> list[CollisionEvent]:
         """Run one small slice of the simulation.
 
         `step()` may call this once or multiple times per visible frame.
@@ -147,7 +147,7 @@ class PhysicsWorld:
 
         return events
 
-    def keep_inside(self, body: "CelestialBody") -> None:
+    def keep_inside(self, body: CelestialBody) -> None:
         """Clamp one body back inside the circular container immediately."""
         # This is mainly used after spawning a merged result so it does not end
         # up slightly outside the bubble because of rounding or overlap math.
@@ -171,7 +171,8 @@ class PhysicsWorld:
 
         # From the circle equation x^2 + y^2 = r^2, if we know `y` we can solve
         # for the maximum `x` still inside the circle.
-        horizontal = max(0.0, math.sqrt(max(0.0, self.radius * self.radius - spawn_offset * spawn_offset)) - radius - 18.0)
+        chord_half = math.sqrt(max(0.0, self.radius * self.radius - spawn_offset * spawn_offset))
+        horizontal = max(0.0, chord_half - radius - 18.0)
         return self.center.x - horizontal, self.center.x + horizontal
 
     def preview_trajectory(
@@ -230,7 +231,7 @@ class PhysicsWorld:
 
         return points
 
-    def _gravity_for(self, body: "CelestialBody") -> pygame.Vector2:
+    def _gravity_for(self, body: CelestialBody) -> pygame.Vector2:
         """Build the final acceleration vector applied to one body."""
         return self._gravity_at(body.position, body.seed, self.time)
 
@@ -262,7 +263,7 @@ class PhysicsWorld:
             acceleration += tangent * orbit_amount * math.sin(world_time * 0.85 + seed * math.tau)
         return acceleration
 
-    def _solve_boundaries(self, bodies: list["CelestialBody"], emit_events: bool) -> list[CollisionEvent]:
+    def _solve_boundaries(self, bodies: list[CelestialBody], emit_events: bool) -> list[CollisionEvent]:
         """Resolve collisions between bodies and the circular wall."""
         events: list[CollisionEvent] = []
         for body in bodies:
@@ -299,7 +300,7 @@ class PhysicsWorld:
                     )
         return events
 
-    def _solve_pairs(self, bodies: list["CelestialBody"], emit_events: bool) -> list[CollisionEvent]:
+    def _solve_pairs(self, bodies: list[CelestialBody], emit_events: bool) -> list[CollisionEvent]:
         """Resolve body-vs-body overlaps and collision impulses."""
         events: list[CollisionEvent] = []
         count = len(bodies)

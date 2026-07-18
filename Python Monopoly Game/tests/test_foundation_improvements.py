@@ -7,7 +7,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
@@ -71,6 +70,7 @@ class OfficialRuleFoundationTests(unittest.TestCase):
 
         self.assertTrue(player.bankrupt)
         self.assertEqual(game.awaiting, "auction")
+        assert game.auction is not None
         self.assertEqual(game.auction["position"], 1)
         self.assertEqual(game.auction["context"], "bankruptcy")
         self.assertIn("Bank bankruptcy auction", game.auction_context_message())
@@ -89,6 +89,7 @@ class OfficialRuleFoundationTests(unittest.TestCase):
             game.auction_pass()
 
         self.assertEqual(game.awaiting, "auction")
+        assert game.auction is not None
         self.assertEqual(game.auction["position"], 3)
 
     def test_mortgaged_trade_property_charges_transfer_interest_immediately(self) -> None:

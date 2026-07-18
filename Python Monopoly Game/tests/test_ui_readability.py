@@ -6,7 +6,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))

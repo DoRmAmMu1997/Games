@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 
 from board import BoardLayout
@@ -42,7 +43,7 @@ class LudoGame:
 
     def __init__(
         self,
-        players: list[tuple[str, bool]] | list[PlayerState],
+        players: Sequence[tuple[str, bool] | PlayerState],
         rules: LudoRules,
         seed: int | None = None,
         ai_profile: str = "tactical",
@@ -302,7 +303,7 @@ class LudoGame:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "LudoGame":
+    def from_dict(cls, data: dict) -> LudoGame:
         """Rebuild a game from save-file data."""
 
         rules = LudoRules(**data["rules"])
@@ -400,8 +401,8 @@ class LudoGame:
     def _mark_finished_tokens(self) -> None:
         """Teach token helper properties what this layout's finish step is."""
 
-        for player in self.players:
-            for token in player.tokens:
+        for player_state in self.players:
+            for token in player_state.tokens:
                 token._finished_steps = self.layout.finish_steps
 
     def _note(self, message: str) -> None:

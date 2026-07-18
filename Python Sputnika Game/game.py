@@ -40,8 +40,8 @@ from settings import (
     FPS,
     KEYBOARD_AIM_SPEED,
     LAUNCH_SPEED,
-    MAX_LAUNCH_ANGLE,
     MAX_BODIES,
+    MAX_LAUNCH_ANGLE,
     MOUSE_WHEEL_ANGLE_STEP,
     SAVE_DATA_DIR,
     SAVE_DATA_PATH,
@@ -442,8 +442,10 @@ class OrbitalOrchardGame:
 
     def _update(self, dt: float) -> None:
         """Advance one frame of non-drawing game logic."""
-        # Mouse-driven background drift adds a small amount of depth.
-        logical_mouse = self._current_canvas_mouse()
+        # Mouse-driven background drift adds a small amount of depth. With
+        # clamping on, the helper never actually returns None; the fallback
+        # here just repeats its own center default for the type checker.
+        logical_mouse = self._current_canvas_mouse() or (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
         drift = pygame.Vector2(logical_mouse) - pygame.Vector2(self.world.center.x, SCREEN_HEIGHT / 2)
         self.background_drift = drift * 0.06
 
@@ -560,7 +562,7 @@ class OrbitalOrchardGame:
                 self._combo_count = 1
             self._last_merge_time = self.now
             combo_multiplier = min(3.0, 1.0 + 0.5 * (self._combo_count - 1))
-            gained = int(round(event.score_gain * combo_multiplier))
+            gained = round(event.score_gain * combo_multiplier)
 
             # Reward the player and fire appropriate celebratory effects.
             self.score += gained
@@ -676,10 +678,7 @@ class OrbitalOrchardGame:
     def _load_progress(self) -> dict:
         """Read the saved high score and lifetime stats, falling back safely."""
         try:
-            if SAVE_DATA_PATH.exists():
-                data = json.loads(SAVE_DATA_PATH.read_text(encoding="utf-8"))
-            else:
-                data = {}
+            data = json.loads(SAVE_DATA_PATH.read_text(encoding="utf-8")) if SAVE_DATA_PATH.exists() else {}
             return {
                 "high_score": max(0, int(data.get("high_score", 0))),
                 "games_played": max(0, int(data.get("games_played", 0))),
@@ -950,9 +949,8 @@ class OrbitalOrchardGame:
         """
         if self.render_rect.width <= 0 or self.render_rect.height <= 0:
             return None
-        if not self.render_rect.collidepoint(position):
-            if not keep_inside:
-                return None
+        if not self.render_rect.collidepoint(position) and not keep_inside:
+            return None
 
         # Convert to percentages inside the render rectangle, then scale that
         # percentage into internal 1024x1280 coordinates.

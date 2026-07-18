@@ -9,8 +9,7 @@ import pygame
 
 import visual_theme as theme
 from models import Move
-from settings import GOLD, INK, WHITE, seat_colors
-
+from settings import GOLD, WHITE, seat_colors
 
 Point = tuple[float, float]
 Color = tuple[int, int, int]
@@ -165,7 +164,8 @@ class BoardRenderer:
         """
 
         if steps < 0:
-            return self.display.yard_positions[player_index][token_index % len(self.display.yard_positions[player_index])]
+            slots = self.display.yard_positions[player_index]
+            return slots[token_index % len(slots)]
         track_index = self.layout.track_index(player_index, steps)
         if track_index is not None:
             return self.display.track_positions[track_index]
@@ -300,10 +300,7 @@ class BoardRenderer:
 
         color = self.display.seat_colors[player_index]
         name = game.players[player_index].name[:16]
-        if yard.centery < self.display.center[1]:
-            label_y = yard.y - 24
-        else:
-            label_y = yard.bottom + 24
+        label_y = yard.y - 24 if yard.centery < self.display.center[1] else yard.bottom + 24
         rect = pygame.Rect(0, 0, 150, 28)
         rect.center = (yard.centerx, label_y)
         theme.draw_player_banner(surface, rect, color, name, fonts)
@@ -564,12 +561,10 @@ def _radial_display_layout(layout) -> DisplayLayout:
         # the hub. The +tangent side faces this seat's own yard wedge.
         arm: list[DisplayCell] = []
         for step in range(home_length):
-            arm.append(
-                _radial_cell(center, outward, tangent, spec.inner_radius + step * spec.cell_step, -spec.lane_offset, spec.cell_size)
-            )
-        arm.append(
-            _radial_cell(center, outward, tangent, spec.inner_radius + home_length * spec.cell_step, 0.0, spec.cell_size)
-        )
+            distance = spec.inner_radius + step * spec.cell_step
+            arm.append(_radial_cell(center, outward, tangent, distance, -spec.lane_offset, spec.cell_size))
+        tip_distance = spec.inner_radius + home_length * spec.cell_step
+        arm.append(_radial_cell(center, outward, tangent, tip_distance, 0.0, spec.cell_size))
         for step in range(home_length):
             arm.append(
                 _radial_cell(

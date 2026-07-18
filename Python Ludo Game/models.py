@@ -17,6 +17,11 @@ class TokenState:
     """
 
     steps: int = -1
+    # The board length depends on the player count, so the game stamps the
+    # current layout's finish step onto each token (see
+    # ``LudoGame._mark_finished_tokens``) before ``finished`` is used. It is
+    # not serialized; loading a save re-stamps it.
+    _finished_steps: int | None = None
 
     @property
     def in_yard(self) -> bool:
@@ -26,14 +31,9 @@ class TokenState:
 
     @property
     def finished(self) -> bool:
-        """True when the token has reached the final home cell.
+        """True when the token has reached the final home cell."""
 
-        ``TokenState`` does not know the board length by itself, so the game
-        stores the current layout's finish step on the token before this
-        property is used.
-        """
-
-        return getattr(self, "_finished_steps", None) == self.steps
+        return self._finished_steps is not None and self._finished_steps == self.steps
 
     def to_dict(self) -> dict:
         """Serialize just the token fields that belong in save files."""
@@ -41,7 +41,7 @@ class TokenState:
         return {"steps": self.steps}
 
     @classmethod
-    def from_dict(cls, data: dict) -> "TokenState":
+    def from_dict(cls, data: dict) -> TokenState:
         """Rebuild a token from saved JSON data."""
 
         return cls(steps=int(data.get("steps", -1)))
@@ -90,7 +90,7 @@ class PlayerState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "PlayerState":
+    def from_dict(cls, data: dict) -> PlayerState:
         """Rebuild a player and all four tokens from saved JSON data."""
 
         return cls(

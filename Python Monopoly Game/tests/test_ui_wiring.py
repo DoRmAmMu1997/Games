@@ -7,7 +7,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 GAME_DIR = Path(__file__).resolve().parents[1]

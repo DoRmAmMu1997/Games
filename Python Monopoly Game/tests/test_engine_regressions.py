@@ -6,7 +6,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
@@ -26,7 +25,8 @@ def make_game() -> MonopolyGame:
 def rig_rolls(game: MonopolyGame, *rolls: int) -> None:
     """Force the next dice values so a test can land on chosen spaces."""
     pending = list(rolls)
-    game.rng.randint = lambda _start, _end: pending.pop(0)
+    # Deliberate monkeypatch of the game's RNG; tests own this game object.
+    game.rng.randint = lambda _start, _end: pending.pop(0)  # type: ignore[method-assign, assignment]
 
 
 class EngineRegressionTests(unittest.TestCase):
@@ -80,7 +80,7 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertEqual(
             player.cash,
             cash_before + game.board[5].mortgage
-            - int(round(game.board[5].mortgage * 1.1)),
+            - round(game.board[5].mortgage * 1.1),
         )
 
     def test_save_load_round_trip_keeps_property_state_and_ai_profile(self) -> None:

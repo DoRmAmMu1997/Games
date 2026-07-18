@@ -7,14 +7,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import pygame
 
 from settings import (
     CONTAINER_RADIUS,
-    FAIL_GRACE,
     FAIL_LINE_Y,
     GLOW,
     PLAYFIELD_CENTER,
@@ -178,7 +177,8 @@ def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, war
     # area feels like a distinct chamber rather than just empty screen space.
     interior = pygame.Surface(bubble.get_size(), pygame.SRCALPHA)
     pygame.draw.circle(interior, (8, 16, 36, 88), local_center, CONTAINER_RADIUS - 3)
-    pygame.draw.circle(interior, (255, 255, 255, 18), local_center - pygame.Vector2(CONTAINER_RADIUS * 0.22, CONTAINER_RADIUS * 0.28), int(CONTAINER_RADIUS * 0.48))
+    glow_center = local_center - pygame.Vector2(CONTAINER_RADIUS * 0.22, CONTAINER_RADIUS * 0.28)
+    pygame.draw.circle(interior, (255, 255, 255, 18), glow_center, int(CONTAINER_RADIUS * 0.48))
     pygame.draw.ellipse(
         interior,
         (22, 48, 92, 42),
@@ -283,8 +283,9 @@ def draw_hud(surface: pygame.Surface, game, assets) -> None:
     current_hint = assets.tiny_font.render("Current", True, GLOW)
     surface.blit(current_hint, current_hint.get_rect(center=(queue_rect.centerx, queue_rect.y + 196)))
 
-    draw_preview_backplate(surface, (queue_rect.centerx, queue_rect.y + 228), 54, shade(GLOW, 0.88))
-    assets.draw_preview_orb(surface, game.next_tier, (queue_rect.centerx, queue_rect.y + 228), game.now, scale=0.82, alpha=215)
+    next_orb_center = (queue_rect.centerx, queue_rect.y + 228)
+    draw_preview_backplate(surface, next_orb_center, 54, shade(GLOW, 0.88))
+    assets.draw_preview_orb(surface, game.next_tier, next_orb_center, game.now, scale=0.82, alpha=215)
     next_name = assets.small_font.render(game.next_body_name, True, SOFT_WHITE)
     surface.blit(next_name, next_name.get_rect(center=(queue_rect.centerx, queue_rect.y + 264)))
     next_hint = assets.tiny_font.render("Next", True, GLOW)
@@ -352,7 +353,8 @@ def draw_menu_overlay(
     surface.blit(title, title.get_rect(center=(modal.centerx, modal.y + 88)))
     surface.blit(title2, title2.get_rect(center=(modal.centerx, modal.y + 164)))
 
-    subtitle = assets.small_font.render("Drop, bounce, and merge celestial cuties into a Quasar Crown.", True, SOFT_WHITE)
+    subtitle_text = "Drop, bounce, and merge celestial cuties into a Quasar Crown."
+    subtitle = assets.small_font.render(subtitle_text, True, SOFT_WHITE)
     surface.blit(subtitle, subtitle.get_rect(center=(modal.centerx, modal.y + 228)))
 
     tips = [

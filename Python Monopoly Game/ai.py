@@ -128,7 +128,7 @@ def property_value(game: MonopolyGame, player: Player, position: int,
     elif space.kind == "utility":
         value *= UTILITY_PAIR_MULT if game.count_utilities(player) else UTILITY_SINGLE_MULT
 
-    return max(space.mortgage, int(round(value * profile.value_scale)))
+    return max(space.mortgage, round(value * profile.value_scale))
 
 
 # --------------------------------------------------------------------------
@@ -241,7 +241,7 @@ def _best_unmortgage(game: MonopolyGame, player: Player) -> int | None:
         return None
     mortgaged.sort(key=lambda pos: not _in_monopoly(game, player, pos))
     for pos in mortgaged:
-        cost = int(round(game.board[pos].mortgage * 1.1))
+        cost = round(game.board[pos].mortgage * 1.1)
         if player.cash - cost >= _profile(game).cash_cushion:
             return pos
     return None
@@ -253,6 +253,7 @@ def _best_unmortgage(game: MonopolyGame, player: Player) -> int | None:
 def _do_buy_decision(game: MonopolyGame, player: Player) -> None:
     """Decide whether to buy the space just landed on, or send it to auction."""
     position = game.pending_purchase
+    assert position is not None, "buy decisions only happen with a pending purchase"
     if _wants_to_buy(game, player, position):
         _trace(game, player, f"buys {game.board[position].name}; value wins.")
         game.buy_property()
@@ -289,6 +290,7 @@ def _wants_to_buy(game: MonopolyGame, player: Player, position: int) -> bool:
 def _do_auction(game: MonopolyGame, player: Player) -> None:
     """Place one bid or pass in the current auction."""
     auction = game.auction
+    assert auction is not None, "only called while an auction is running"
     position = auction["position"]
     high = auction["high_bid"]
     ceiling = _auction_ceiling(game, player, position)
@@ -348,8 +350,8 @@ def _missing_one(game: MonopolyGame, player: Player, group: str) -> int | None:
 
 def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int) -> dict | None:
     """Build an offer to win `wanted` that both `player` and `partner` accept."""
-    give = {"props": [], "cash": 0, "jail": 0}
-    get = {"props": [wanted], "cash": 0, "jail": 0}
+    give: dict = {"props": [], "cash": 0, "jail": 0}
+    get: dict = {"props": [wanted], "cash": 0, "jail": 0}
     # The best sweetener is a property that completes a monopoly for the
     # partner -- but never one from the group the AI is itself completing,
     # or the AI would trade away the very tile it is bargaining for.
@@ -470,7 +472,7 @@ def _owns_some_of_group(game: MonopolyGame, player: Player, position: int) -> bo
 def _in_monopoly(game: MonopolyGame, player: Player, position: int) -> bool:
     """True if `position` is part of a colour group `player` fully owns."""
     group = _group_of(game, position)
-    return bool(group) and game.has_monopoly(player, group)
+    return group is not None and game.has_monopoly(player, group)
 
 
 def _completes_group(game: MonopolyGame, player: Player, position: int) -> bool:

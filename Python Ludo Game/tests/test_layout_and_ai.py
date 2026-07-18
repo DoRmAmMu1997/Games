@@ -6,7 +6,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
@@ -59,6 +58,7 @@ class AiChoiceTests(unittest.TestCase):
 
         move = choose_move(game, "tactical", 1)
 
+        assert move is not None
         self.assertEqual(move.token_index, 0)
 
     def test_ai_prefers_capture_over_neutral_progress(self) -> None:
@@ -69,10 +69,12 @@ class AiChoiceTests(unittest.TestCase):
         game.players[1].tokens[0].steps = 0
         game.players[1].tokens[1].steps = 10
         landing = game.layout.track_index(1, 4)
+        assert landing is not None
         game.players[0].tokens[0].steps = game.layout.steps_to_reach(0, landing)
 
         move = choose_move(game, "aggressive", 4)
 
+        assert move is not None
         self.assertEqual(move.token_index, 0)
 
     def test_ai_choice_is_deterministic_for_same_seed(self) -> None:
@@ -85,10 +87,11 @@ class AiChoiceTests(unittest.TestCase):
             game.players[2].tokens[0].steps = 3
             game.players[2].tokens[1].steps = 3
 
-        self.assertEqual(
-            choose_move(game_a, "defensive", 2).token_index,
-            choose_move(game_b, "defensive", 2).token_index,
-        )
+        move_a = choose_move(game_a, "defensive", 2)
+        move_b = choose_move(game_b, "defensive", 2)
+
+        assert move_a is not None and move_b is not None
+        self.assertEqual(move_a.token_index, move_b.token_index)
 
 
 if __name__ == "__main__":

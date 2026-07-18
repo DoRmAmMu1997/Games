@@ -13,7 +13,6 @@ import pygame
 
 from settings import INK, WHITE
 
-
 WALLPAPER_BLUE = (30, 123, 197)
 WALLPAPER_DEEP = (12, 52, 93)
 WALLPAPER_TEAL = (18, 126, 142)
@@ -34,13 +33,15 @@ def brighten(color: tuple[int, int, int], amount: int) -> tuple[int, int, int]:
     highlight colors easier to read at call sites.
     """
 
-    return tuple(min(255, channel + amount) for channel in color)
+    red, green, blue = color
+    return (min(255, red + amount), min(255, green + amount), min(255, blue + amount))
 
 
 def darken(color: tuple[int, int, int], amount: int) -> tuple[int, int, int]:
     """Return ``color`` with every channel pulled toward black."""
 
-    return tuple(max(0, channel - amount) for channel in color)
+    red, green, blue = color
+    return (max(0, red - amount), max(0, green - amount), max(0, blue - amount))
 
 
 def draw_ludo_wallpaper(surface: pygame.Surface) -> None:
@@ -278,7 +279,11 @@ def _draw_pips(surface: pygame.Surface, rect: pygame.Rect, value: int) -> None:
 def _blend(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
     """Mix two colors by ``amount`` where 0 is all ``a`` and 1 is all ``b``."""
 
-    return tuple(int(a[i] + (b[i] - a[i]) * amount) for i in range(3))
+    return (
+        int(a[0] + (b[0] - a[0]) * amount),
+        int(a[1] + (b[1] - a[1]) * amount),
+        int(a[2] + (b[2] - a[2]) * amount),
+    )
 
 
 def _is_light(color: tuple[int, int, int]) -> bool:

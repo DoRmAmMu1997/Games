@@ -129,7 +129,7 @@ class MoveRuleTests(unittest.TestCase):
         self.game.tableau[0] = [Card("spades", 9, face_up=False), Card("hearts", 1, face_up=True)]
 
         selection = self.game.selection_from_tableau(0, 1)
-        self.assertIsNotNone(selection)
+        assert selection is not None
         moved = self.game.move_selection_to_foundation(selection, hearts)
 
         self.assertTrue(moved)
@@ -187,7 +187,7 @@ class HintEngineTests(unittest.TestCase):
 
         move = self.game.find_best_move()
 
-        self.assertIsNotNone(move)
+        assert move is not None
         self.assertEqual(move.source_type, "tableau")
         self.assertEqual(move.source_index, 0)
         self.assertEqual(move.destination_type, "tableau")
@@ -200,10 +200,10 @@ class HintEngineTests(unittest.TestCase):
 
         move = self.game.find_best_move()
 
-        self.assertIsNotNone(move)
+        assert move is not None
         self.assertEqual(move.destination_type, "foundation")
         selection = self.game.selection_from_hint(move)
-        self.assertIsNotNone(selection)
+        assert selection is not None
         self.assertTrue(
             self.game.can_move_to_foundation(selection.cards[0], move.destination_index)
         )

@@ -13,11 +13,10 @@ Beginner note:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import colorsys
 import os
-
+from dataclasses import dataclass
+from pathlib import Path
 
 # Window and render-space size.
 # The game internally renders to this portrait canvas even when the desktop
@@ -201,7 +200,11 @@ def shade(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
     # Example:
     # - factor > 1.0 makes the color brighter,
     # - factor < 1.0 makes the color darker.
-    return tuple(int(clamp(channel * factor, 0, 255)) for channel in color)
+    return (
+        int(clamp(color[0] * factor, 0, 255)),
+        int(clamp(color[1] * factor, 0, 255)),
+        int(clamp(color[2] * factor, 0, 255)),
+    )
 
 
 def lerp_color(
@@ -213,9 +216,10 @@ def lerp_color(
     # `amount = 0.0` returns `start`,
     # `amount = 1.0` returns `end`,
     # values in between interpolate linearly.
-    return tuple(
-        int(start[idx] + (end[idx] - start[idx]) * amount)
-        for idx in range(3)
+    return (
+        int(start[0] + (end[0] - start[0]) * amount),
+        int(start[1] + (end[1] - start[1]) * amount),
+        int(start[2] + (end[2] - start[2]) * amount),
     )
 
 

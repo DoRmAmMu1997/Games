@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import json
 import math
@@ -20,19 +21,19 @@ import visual_theme as theme
 from board import BoardLayout
 from board_render import BoardRenderer
 from game import LudoGame, LudoRules
+from models import Move
 from settings import (
     AI_TURN_DELAY_MS,
-    BG,
     DICE_ANIM_MS,
     FPS,
     GOLD,
+    INK,
     MAX_PLAYERS,
     PANEL_BG,
     PANEL_CARD,
     PANEL_EDGE,
     PANEL_WIDTH,
     PANEL_X,
-    INK,
     SAVE_DIR,
     SAVEGAME_PATH,
     SCREEN_HEIGHT,
@@ -246,7 +247,10 @@ def load_stats() -> dict:
         defaults.update(data)
         # Older stats files may not have every player-count bucket. Merge them
         # over a full default set so the game-over screen can index safely.
-        defaults["by_player_count"] = {**{"4": 0, "5": 0, "6": 0}, **defaults.get("by_player_count", {})}
+        counts = defaults.get("by_player_count")
+        if not isinstance(counts, dict):
+            counts = {}
+        defaults["by_player_count"] = {**{"4": 0, "5": 0, "6": 0}, **counts}
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         pass
     return defaults
@@ -282,10 +286,8 @@ def has_saved_game() -> bool:
 def clear_saved_game() -> None:
     """Delete the in-progress save after a completed game."""
 
-    try:
+    with contextlib.suppress(OSError):
         SAVEGAME_PATH.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 class LudoApp:
@@ -314,7 +316,7 @@ class LudoApp:
         self.buttons: list[ui.Button] = []
         # ``visible_moves`` is rebuilt each frame for human turns. Click
         # handling uses it so only currently highlighted tokens are clickable.
-        self.visible_moves = []
+        self.visible_moves: list[Move] = []
 
         self.total_players = 4
         self.human_count = 1
@@ -457,14 +459,19 @@ class LudoApp:
                     return
             self.active_field = None
 
-        if self.screen == "playing" and self.game and self.renderer:
-            if self.game.current_player.is_human and self.game.awaiting == "choose_move":
-                # Human token clicks are only accepted when the engine is
-                # waiting for a move after a roll.
-                move = self.renderer.move_at_pos(pos, self.visible_moves)
-                if move is not None:
-                    self._apply_move(move)
-                    return
+        if (
+            self.screen == "playing"
+            and self.game
+            and self.renderer
+            and self.game.current_player.is_human
+            and self.game.awaiting == "choose_move"
+        ):
+            # Human token clicks are only accepted when the engine is
+            # waiting for a move after a roll.
+            move = self.renderer.move_at_pos(pos, self.visible_moves)
+            if move is not None:
+                self._apply_move(move)
+                return
 
         for button in self._buttons_for_screen():
             if button.contains(pos):
@@ -590,18 +597,20 @@ class LudoApp:
                 # the matching yard on the board.
                 players.append((f"AI {ai_number} ({seat_name(self.total_players, index)})", False))
                 ai_number += 1
-        self.start_game(LudoGame(players, rules, ai_profile=self.ai_profiles[self.ai_profile_index]))
-        save_game(self.game)
+        game = LudoGame(players, rules, ai_profile=self.ai_profiles[self.ai_profile_index])
+        self.start_game(game)
+        save_game(game)
 
     def _roll_for_human(self) -> None:
         """Roll for the current human player and handle no-move rolls."""
 
         if self.game is None or self.game.awaiting != "pre_roll":
             return
-        forfeited = self.game.record_roll(self.game.rng.randint(1, 6))
+        die = self.game.rng.randint(1, 6)
+        forfeited = self.game.record_roll(die)
         self.dice_anim_remaining = DICE_ANIM_MS
-        if not forfeited and not self.game.legal_moves(self.game.last_roll):
-            self.game.note_no_move(self.game.last_roll or 1)
+        if not forfeited and not self.game.legal_moves(die):
+            self.game.note_no_move(die)
         self._save_if_turn_completed()
 
     def _apply_move(self, move) -> None:
@@ -791,7 +800,8 @@ class LudoApp:
         ui.draw_wrapped(
             self.window,
             self.fonts["body"],
-            "Classic competitive Ludo for 4 to 6 players. Choose how many seats are human; the remaining seats use heuristic AI.",
+            "Classic competitive Ludo for 4 to 6 players. "
+            "Choose how many seats are human; the remaining seats use heuristic AI.",
             pygame.Rect(170, 138, 560, 80),
             SOFT,
         )
@@ -837,10 +847,7 @@ class LudoApp:
             theme.draw_ludo_wallpaper(canvas)
             renderer = BoardRenderer(BoardLayout.for_player_count(total_players))
             renderer.draw_static(canvas)
-            if total_players == 4:
-                crop = pygame.Rect(120, 90, 660, 660)
-            else:
-                crop = pygame.Rect(95, 55, 710, 710)
+            crop = pygame.Rect(120, 90, 660, 660) if total_players == 4 else pygame.Rect(95, 55, 710, 710)
             board = canvas.subsurface(crop).copy()
             cached = pygame.transform.smoothscale(board, (PREVIEW_SIZE, PREVIEW_SIZE))
             self.preview_cache[total_players] = cached
@@ -849,7 +856,7 @@ class LudoApp:
     def _draw_board_previews(self) -> None:
         """Draw the 4P/5P/6P board thumbnails, highlighting the selection."""
 
-        for count, center in zip((4, 5, 6), PREVIEW_CENTERS):
+        for count, center in zip((4, 5, 6), PREVIEW_CENTERS, strict=True):
             thumb = self._board_preview(count)
             rect = thumb.get_rect(center=center)
             self.window.blit(thumb, rect)
@@ -871,7 +878,8 @@ class LudoApp:
         if self.game is None or self.renderer is None:
             return
         self.visible_moves = []
-        if self.game.current_player.is_human and self.game.awaiting == "choose_move" and self.game.last_roll is not None:
+        choosing = self.game.current_player.is_human and self.game.awaiting == "choose_move"
+        if choosing and self.game.last_roll is not None:
             # Recompute visible moves before drawing so the highlights and
             # click targets always match the latest engine state.
             self.visible_moves = self.game.legal_moves(self.game.last_roll)
@@ -1030,19 +1038,21 @@ class LudoApp:
         ui.draw_text(self.window, self.fonts["header"], "Lifetime Stats", (stats.x + 18, stats.y + 18), WHITE)
         games = max(1, int(self.stats.get("games", 0)))
         average_turns = int(self.stats.get("turn_total", 0)) / games
+        by_count = {**{"4": 0, "5": 0, "6": 0}, **self.stats.get("by_player_count", {})}
         lines = [
             f"Games: {self.stats.get('games', 0)}",
             f"Human wins: {self.stats.get('human_wins', 0)}",
             f"AI wins: {self.stats.get('ai_wins', 0)}",
             f"Average turns: {average_turns:.1f}",
-            f"4P / 5P / 6P: {self.stats.get('by_player_count', {}).get('4', 0)} / {self.stats.get('by_player_count', {}).get('5', 0)} / {self.stats.get('by_player_count', {}).get('6', 0)}",
+            f"4P / 5P / 6P: {by_count['4']} / {by_count['5']} / {by_count['6']}",
         ]
         for offset, line in enumerate(lines):
             ui.draw_text(self.window, self.fonts["body"], line, (stats.x + 18, stats.y + 70 + offset * 42), SOFT)
         ui.draw_wrapped(
             self.window,
             self.fonts["small"],
-            "Captures, exact home rolls, bonus turns, and safe squares all used the same engine rules as the live game.",
+            "Captures, exact home rolls, bonus turns, and safe squares "
+            "all used the same engine rules as the live game.",
             pygame.Rect(stats.x + 18, stats.y + 316, stats.width - 36, 88),
             SOFT,
         )

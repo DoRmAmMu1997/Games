@@ -1,0 +1,79 @@
+# Quality-tooling configuration for the whole repository.
+#
+# There is no [project] build section on purpose: the four games are
+# standalone folders that run from source and ship as PyInstaller
+# executables, not an installable Python distribution.
+#
+# The four game folders use flat module layouts with overlapping module
+# names (each has its own main.py, game.py, settings.py, ...), so mypy must
+# be invoked once per game folder — see the CI workflow and AGENTS.md.
+# Ruff and Bandit handle the whole tree in one pass.
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = [
+    "Python Ludo Game",
+    "Python Monopoly Game",
+    "Python Solitaire Game",
+    "Python Sputnika Game",
+]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests insert the game folder into sys.path before importing game modules,
+# so imports legitimately follow statements (E402). B017/RUF012 are the usual
+# unittest idioms.
+"**/tests/*" = ["B017", "E402", "RUF012"]
+# These two modules are hand-maintained data tables; the dict(kind=..., ...)
+# keyword style keeps their long rows readable, so C408 is noise there.
+"Python Monopoly Game/board_data.py" = ["C408"]
+"Python Monopoly Game/cards.py" = ["C408"]
+
+[tool.ruff.lint.isort]
+# Within one game folder its flat modules are first-party.
+known-first-party = [
+    "ai",
+    "assets",
+    "board",
+    "board_data",
+    "board_render",
+    "cards",
+    "effects",
+    "entities",
+    "game",
+    "main",
+    "merge_logic",
+    "models",
+    "physics",
+    "player",
+    "settings",
+    "simulation",
+    "solitaire",
+    "ui",
+    "visual_theme",
+]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["pygame.*"]
+ignore_missing_imports = true
+
+[tool.bandit]
+# B101: asserts here are type-narrowing invariants (mypy-verified states like
+#       "an auction dict exists while the auction dialog is open"), and the
+#       games are never shipped with `python -O`.
+# B311: the games use `random` for dice, shuffles, and cosmetic jitter —
+#       there is no security context, so the CSPRNG warning is noise here.
+# B110: deliberate try/except/pass fallbacks around save-file logging, where
+#       a failing log write must never crash the game window.
+skips = ["B101", "B311", "B110"]
+exclude_dirs = ["build", "dist", ".git"]

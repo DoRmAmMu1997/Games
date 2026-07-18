@@ -7,7 +7,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 GAME_DIR = Path(__file__).resolve().parents[1]
@@ -42,6 +41,8 @@ def count_near_color(surface: pygame.Surface, color: tuple[int, int, int], toler
 
 class VisualOverhaulTests(unittest.TestCase):
     """Checks that the game now renders as a themed Ludo board, not a plain diagram."""
+
+    fonts: dict[str, pygame.font.Font]
 
     @classmethod
     def setUpClass(cls) -> None:

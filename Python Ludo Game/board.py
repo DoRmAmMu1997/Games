@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from settings import BOARD_CENTER, BOARD_RADIUS, HOME_LENGTH, SEGMENT_LENGTH
 
-
 Point = tuple[float, float]
 
 
@@ -32,7 +31,7 @@ class BoardLayout:
     radius: float
 
     @classmethod
-    def for_player_count(cls, total_players: int) -> "BoardLayout":
+    def for_player_count(cls, total_players: int) -> BoardLayout:
         """Build a square, pentagonal, or hexagonal board.
 
         A standard four-player Ludo board has four repeated arms. The five-
