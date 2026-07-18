@@ -571,6 +571,34 @@ class KlondikeGame:
 
         return None
 
+    # ------------------------------------------------------------------
+    # The hint engine
+    # ------------------------------------------------------------------
+    # Everything from here to `follow_up_creates_concrete_progress` is one
+    # subsystem: the hint engine that also powers loss detection. It is a
+    # pipeline of four stages:
+    #
+    #   1. GENERATE  - `current_legal_moves` lists every legal move on the
+    #      board right now; `future_waste_moves` simulates clicking through
+    #      the stock to find waste cards that become playable later.
+    #   2. FILTER    - `is_meaningful_move` throws away legal-but-pointless
+    #      shuffles (ace diversions, king shuffles between empty columns,
+    #      redundant transfers, unproductive foundation returns).
+    #   3. RANK      - `hint_sort_key` / `hint_priority` order what survived;
+    #      the lowest priority number wins.
+    #   4. DESCRIBE  - `describe_hint` turns the winning move into the text
+    #      the player reads.
+    #
+    # Naming convention: many checks exist twice, as a thin wrapper that
+    # reads the REAL board (`is_redundant_tableau_transfer`) plus an
+    # `..._on_board` version that takes tableau/foundations as parameters so
+    # the same rule can run against SIMULATED "what if" boards. When editing
+    # a rule, edit the `_on_board` version - the wrapper only forwards.
+    #
+    # If no move survives the pipeline (and the stock look-ahead), the game
+    # declares the deal lost - so a filter that is too aggressive can cause
+    # false "no more moves" verdicts. The filters deliberately allow any
+    # move that reveals a hidden card or unlocks a foundation play.
     def find_best_move(self) -> Optional[HintMove]:
         """
         Find the best move for the hint system and loss detection.
@@ -811,6 +839,9 @@ class KlondikeGame:
             description=description,
         )
 
+    # ------------------------------------------------------------------
+    # Hint engine stage 4: player-facing descriptions
+    # ------------------------------------------------------------------
     def describe_hint(
         self,
         source_type: str,
@@ -856,6 +887,9 @@ class KlondikeGame:
             return cards[0].label()
         return f"{len(cards)} cards starting with {cards[0].label()}"
 
+    # ------------------------------------------------------------------
+    # Hint engine stage 3: ranking
+    # ------------------------------------------------------------------
     def hint_sort_key(self, move: HintMove) -> Tuple[int, int, int, int]:
         """Build the sort key that decides which hint move is shown.
 
@@ -924,6 +958,9 @@ class KlondikeGame:
             return False
         return not self.tableau[move.source_index][move.source_card_index - 1].face_up
 
+    # ------------------------------------------------------------------
+    # Hint engine stage 2: meaningfulness filters
+    # ------------------------------------------------------------------
     def is_meaningful_move(self, move: HintMove) -> bool:
         """
         Filter out technically legal moves that are strategically pointless.
