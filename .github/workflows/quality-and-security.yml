@@ -1,0 +1,92 @@
+# Quality & Security gate for the four games.
+#
+# Notes for maintainers (and agents):
+# - The four game folders use flat module layouts with overlapping module
+#   names, so mypy runs once per folder and pytest runs from inside each
+#   folder (which also isolates the tests' sys.path shim).
+# - The pygame games run fully headless via the SDL dummy drivers; the
+#   Solitaire suite only exercises the Tk-free KlondikeGame model.
+# - Coverage floors are per game, measured over the engine modules listed in
+#   each pytest command, and set ~5 points below the measured value when the
+#   floor was introduced. Raise them as coverage grows; never lower them to
+#   make a failing change pass.
+name: Quality & Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    env:
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r "Python Ludo Game/requirements.txt"
+
+      - name: Validate pre-commit config
+        run: pre-commit validate-config
+
+      - name: Ludo tests (coverage floor 75)
+        working-directory: Python Ludo Game
+        run: python -m pytest tests -q --cov=game --cov=board --cov=ai --cov=models --cov-fail-under=75
+
+      - name: Monopoly tests (coverage floor 80)
+        working-directory: Python Monopoly Game
+        run: python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=80
+
+      - name: Orbital Orchard tests (coverage floor 90)
+        working-directory: Python Sputnika Game
+        run: python -m pytest tests -q --cov=merge_logic --cov=physics --cov-fail-under=90
+
+      - name: Solitaire tests (coverage floor 32)
+        working-directory: Python Solitaire Game
+        run: python -m pytest tests -q --cov=solitaire --cov-fail-under=32
+
+      - name: Headless autotests (full app smoke)
+        run: |
+          (cd "Python Ludo Game" && LUDO_AUTOTEST=1 python main.py)
+          (cd "Python Monopoly Game" && MONOPOLY_AUTOTEST=1 python main.py)
+          (cd "Python Sputnika Game" && ORBITAL_ORCHARD_AUTOTEST=1 python main.py)
+
+      - name: Byte-compile everything
+        run: python -m compileall -q .
+
+      - name: Ruff
+        run: python -m ruff check .
+
+      - name: Mypy (one run per game folder)
+        run: |
+          python -m mypy "Python Ludo Game"
+          python -m mypy "Python Monopoly Game"
+          python -m mypy "Python Sputnika Game"
+          python -m mypy "Python Solitaire Game"
+
+      - name: Bandit
+        run: python -m bandit -c pyproject.toml -r . -q
+
+      - name: pip-audit (dev pins + game runtime deps)
+        run: >
+          python -m pip_audit
+          -r requirements-dev.txt
+          -r "Python Ludo Game/requirements.txt"
