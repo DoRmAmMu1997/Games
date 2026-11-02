@@ -30,6 +30,7 @@ from settings import (
     GOLD,
     INK,
     MAX_PLAYERS,
+    MIN_PLAYERS,
     PANEL_BG,
     PANEL_CARD,
     PANEL_EDGE,
@@ -574,10 +575,10 @@ class LudoApp:
         """Handle all setup-screen controls."""
 
         if key == "total_players_prev":
-            self.total_players = max(4, self.total_players - 1)
+            self.total_players = max(MIN_PLAYERS, self.total_players - 1)
             self.human_count = min(self.human_count, self.total_players)
         elif key == "total_players_next":
-            self.total_players = min(6, self.total_players + 1)
+            self.total_players = min(MAX_PLAYERS, self.total_players + 1)
         elif key == "human_count_prev":
             self.human_count = max(1, self.human_count - 1)
         elif key == "human_count_next":

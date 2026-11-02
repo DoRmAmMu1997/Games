@@ -12,12 +12,20 @@ Point = tuple[float, float]
 
 @dataclass(frozen=True)
 class BoardLayout:
-    """All track, home-lane, and yard coordinates for one player count.
+    """Authoritative track indices for one player count, plus fallback pixels.
 
-    The rules engine uses indexes and step counts, while the renderer needs
-    screen coordinates. This object is the translation table between those two
-    worlds. It is immutable so tests, AI, and drawing code can all share it
-    without worrying that one layer will move the board underneath another.
+    The rules engine works in indexes and step counts: where each seat starts,
+    which squares are safe, how long a lap is, and where the home lane begins.
+    This object owns those numbers. It is immutable so tests, AI, and drawing
+    code can all share it without worrying that one layer will move the board
+    underneath another.
+
+    The pixel fields (``track_positions``, ``home_lanes``, ``yard_positions``,
+    ``center``, ``radius``) describe a plain regular polygon. They are only the
+    headless fallback for code that runs without a renderer, such as the
+    shell's animation targets before a ``BoardRenderer`` exists. Every
+    on-screen coordinate the player actually sees comes from
+    ``board_render.DisplayLayout`` instead.
     """
 
     total_players: int

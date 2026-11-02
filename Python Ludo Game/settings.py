@@ -20,7 +20,8 @@ FPS = 60
 
 # The board lives on the left and the control panel lives on the right. Keeping
 # the logical size fixed makes click handling and PyInstaller builds simpler.
-BOARD_RECT = (30, 30, 840, 840)
+# BOARD_CENTER and BOARD_RADIUS shape BoardLayout's plain polygon, which is only
+# the headless fallback; the drawn boards come from board_render.DisplayLayout.
 BOARD_CENTER = (450, 450)
 BOARD_RADIUS = 330
 PANEL_X = 900
@@ -62,11 +63,6 @@ HOME_LENGTH = 6
 # ---------------------------------------------------------------------------
 # Plain RGB tuples are easy to tweak. The palette avoids needing image assets:
 # every board cell, panel, token, and highlight is drawn procedurally.
-BG = (28, 35, 39)
-BOARD_BG = (232, 226, 205)
-BOARD_LINE = (37, 43, 48)
-TRACK_FILL = (247, 245, 235)
-HOME_FILL = (245, 239, 216)
 PANEL_BG = (20, 27, 31)
 PANEL_CARD = (35, 45, 51)
 PANEL_EDGE = (82, 102, 112)

@@ -9,7 +9,7 @@ import pygame
 
 import visual_theme as theme
 from models import Move
-from settings import GOLD, STACK_SPACING, TOKEN_HIT_RADIUS, TOKEN_PIN_RADIUS, WHITE, seat_colors
+from settings import GOLD, HOME_LENGTH, STACK_SPACING, TOKEN_HIT_RADIUS, TOKEN_PIN_RADIUS, WHITE, seat_colors
 
 Point = tuple[float, float]
 Color = tuple[int, int, int]
@@ -115,10 +115,13 @@ class DisplayLayout:
 class BoardRenderer:
     """Draw the Ludo arena without changing the rules engine.
 
-    ``BoardLayout`` still owns the true token coordinates and click targets.
-    This renderer dresses those coordinates in a brighter board-game style:
-    square homes for four players, triangular homes for five and six players,
-    player tabs, safe stars, arrows, and glossy pawn pins.
+    ``BoardLayout`` owns the authoritative track *indices* (start squares,
+    safe squares, and the lap). This renderer's ``DisplayLayout`` owns every
+    on-screen coordinate: the classic square cross for four players and the
+    radial boards for five and six, with token pins and click targets
+    measured in those same coordinates. It dresses them in a bright
+    board-game style: square or triangular yards, player tabs, safe stars,
+    arrows, and glossy pawn pins.
     """
 
     def __init__(self, layout) -> None:
@@ -599,7 +602,7 @@ def _radial_display_layout(layout) -> DisplayLayout:
     total = layout.total_players
     spec = RADIAL_SPECS[total]
     center = RADIAL_CENTER
-    home_length = len(layout.home_lanes[0])
+    home_length = HOME_LENGTH
 
     path_cells: list[DisplayCell] = []
     home_lane_cells: list[tuple[DisplayCell, ...]] = []
@@ -818,13 +821,6 @@ def _square_center_rect() -> pygame.Rect:
     """Return the middle 3-by-3 area where home lanes meet."""
 
     return pygame.Rect(SQUARE_LEFT + SQUARE_CELL * 6, SQUARE_TOP + SQUARE_CELL * 6, SQUARE_CELL * 3, SQUARE_CELL * 3)
-
-
-def _player_outward(player_index: int, total_players: int) -> Point:
-    """Return the direction from the hub toward one radial player base."""
-
-    angle = -math.pi / 2 + math.tau * player_index / total_players
-    return math.cos(angle), math.sin(angle)
 
 
 def _radial_cell(

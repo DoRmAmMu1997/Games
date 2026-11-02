@@ -27,6 +27,7 @@ from main import (
     _setup_option_row,
     _window_to_logical_point,
 )
+from settings import MAX_PLAYERS, MIN_PLAYERS
 
 
 class UiSmokeTests(unittest.TestCase):
@@ -106,6 +107,31 @@ class UiSmokeTests(unittest.TestCase):
                                 f"Player {index + 1} name field {name_rect} overlaps "
                                 f"{button.key} button {button.rect}.",
                             )
+        finally:
+            app.running = False
+
+    def test_setup_player_count_stays_within_supported_bounds(self) -> None:
+        """The total-players stepper stops at MIN_PLAYERS and MAX_PLAYERS."""
+
+        app = LudoApp()
+        try:
+            for _ in range(5):
+                app._on_setup_button("total_players_prev")
+            self.assertEqual(app.total_players, MIN_PLAYERS)
+            for _ in range(5):
+                app._on_setup_button("total_players_next")
+            self.assertEqual(app.total_players, MAX_PLAYERS)
+        finally:
+            app.running = False
+
+    def test_token_position_falls_back_to_board_layout_without_a_renderer(self) -> None:
+        """Before a renderer exists, animation targets come from BoardLayout's pixels."""
+
+        app = LudoApp()
+        try:
+            app.game = LudoGame([(f"P{i + 1}", i == 0) for i in range(5)], LudoRules(total_players=5), seed=2)
+            app.renderer = None
+            self.assertEqual(app._token_position(2, 7, 0), app.game.layout.position_for(2, 7, 0))
         finally:
             app.running = False
 
