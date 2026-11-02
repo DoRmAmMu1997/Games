@@ -652,10 +652,11 @@ class LudoApp:
 
         if self.game is None or self.game.awaiting != "pre_roll":
             return
-        die = self.game.rng.randint(1, 6)
-        forfeited = self.game.record_roll(die)
+        die = self.game.roll_die()
         self.dice_anim_remaining = DICE_ANIM_MS
-        if not forfeited and not self.game.legal_moves(die):
+        # A forfeited third 6 has already passed the turn (awaiting is back to
+        # pre_roll), so only a roll that is waiting for a move can be a no-move.
+        if self.game.awaiting == "choose_move" and not self.game.legal_moves(die):
             self.game.note_no_move(die)
         self._refresh_visible_moves()
         self._save_if_turn_completed()
@@ -718,11 +719,10 @@ class LudoApp:
         if self.game is None:
             return
         if self.game.awaiting == "pre_roll":
-            die = self.game.rng.randint(1, 6)
-            forfeited = self.game.record_roll(die)
+            # A forfeited third 6 passes the turn, so the move step below is
+            # skipped because the engine is no longer awaiting a move.
+            self.game.roll_die()
             self.dice_anim_remaining = DICE_ANIM_MS
-            if forfeited:
-                return
         if self.game.awaiting == "choose_move" and self.game.last_roll is not None:
             move = ai.choose_move(self.game, self.game.ai_profile, self.game.last_roll)
             if move is None:

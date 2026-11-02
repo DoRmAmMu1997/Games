@@ -135,6 +135,25 @@ class UiSmokeTests(unittest.TestCase):
         finally:
             app.running = False
 
+    def test_human_and_ai_rolls_go_through_the_engine_roll_die(self) -> None:
+        """The shell never rolls dice itself; both seat kinds call LudoGame.roll_die."""
+
+        app = LudoApp()
+        try:
+            players = [("Human", True)] + [(f"AI {index}", False) for index in range(1, 4)]
+            game = LudoGame(players, LudoRules(total_players=4), seed=4)
+            app.start_game(game)
+            with mock.patch.object(game, "roll_die", wraps=game.roll_die) as roll_die, \
+                    mock.patch.object(main, "save_game"):
+                app._roll_for_human()
+                self.assertEqual(roll_die.call_count, 1)
+                game.current = 1
+                game.awaiting = "pre_roll"
+                app._perform_ai_step()
+                self.assertEqual(roll_die.call_count, 2)
+        finally:
+            app.running = False
+
     def test_scaled_window_size_fits_short_work_area(self) -> None:
         """The real window should shrink when the desktop is shorter than the logical layout."""
 

@@ -81,6 +81,9 @@ Run seeded all-AI batches from this folder:
 python simulation.py --games 5 --players 4 --profile tactical --seed 1
 ```
 
+Add `--blockades`, `--no-capture-bonus`, `--no-home-bonus`, or
+`--no-three-sixes` to simulate the same house rules the setup screen offers.
+
 ## Save Data
 
 The game stores data in:
