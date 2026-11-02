@@ -46,6 +46,7 @@ Games/
 ├── requirements-dev.txt         -- exact-pinned dev/CI toolchain
 ├── .pre-commit-config.yaml      -- check-only hooks (never rewrite files)
 ├── .github/workflows/quality-and-security.yml
+├── .github/dependabot.yaml      -- weekly version-update PRs (pip, pre-commit, actions)
 └── Python <Name> Game/          -- one self-contained game per folder
     ├── main.py                  -- entry point (Solitaire: solitaire.py)
     ├── game.py                  -- UI-free rules engine (pygame games)
@@ -147,7 +148,9 @@ Hard rules:
 - If you change a CI command, change the identical command here in §6 in the
   same commit.
 - Tool versions are pinned in `requirements-dev.txt` and mirrored in
-  `.pre-commit-config.yaml` (the ruff rev) — bump them together.
+  `.pre-commit-config.yaml` (the ruff rev) — bump them together. Dependabot's
+  `dev-toolchain` multi-ecosystem group already does this in one PR; keep
+  both entries in that group if you edit `.github/dependabot.yaml`.
 - Pre-commit hooks are check-only; never add hooks that rewrite files.
 
 ## 7. Windows / PowerShell gotchas
