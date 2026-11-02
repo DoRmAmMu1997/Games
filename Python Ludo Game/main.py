@@ -462,6 +462,13 @@ class LudoApp:
                     return
             self.active_field = None
 
+        # Buttons win over tokens: a click inside a button always runs that
+        # button, even if a token's generous hit circle reaches under it.
+        for button in self._buttons_for_screen():
+            if button.contains(pos):
+                self._on_button(button.key)
+                return
+
         if (
             self.screen == "playing"
             and self.game
@@ -474,12 +481,6 @@ class LudoApp:
             move = self.renderer.move_at_pos(pos, self.visible_moves)
             if move is not None:
                 self._apply_move(move)
-                return
-
-        for button in self._buttons_for_screen():
-            if button.contains(pos):
-                self._on_button(button.key)
-                return
 
     def _handle_key(self, event: pygame.event.Event) -> None:
         """Route keyboard shortcuts for setup typing and human turns."""
@@ -614,6 +615,7 @@ class LudoApp:
         self.dice_anim_remaining = DICE_ANIM_MS
         if not forfeited and not self.game.legal_moves(die):
             self.game.note_no_move(die)
+        self._refresh_visible_moves()
         self._save_if_turn_completed()
 
     def _apply_move(self, move) -> None:
@@ -623,7 +625,23 @@ class LudoApp:
             return
         result = self.game.apply_move(move)
         self.message = result.message
+        self._refresh_visible_moves()
         self._save_if_turn_completed()
+
+    def _refresh_visible_moves(self) -> None:
+        """Rebuild the clickable move list from the engine's current state.
+
+        Beginner note: several key presses can arrive in one frame, before the
+        next redraw. Rebuilding the list after every roll or move means key 2
+        always refers to the CURRENT roll's second move, never a leftover one
+        from the roll before.
+        """
+
+        self.visible_moves = []
+        if self.game is None or self.game.last_roll is None:
+            return
+        if self.game.current_player.is_human and self.game.awaiting == "choose_move":
+            self.visible_moves = self.game.legal_moves(self.game.last_roll)
 
     def _update(self, autotest: bool) -> None:
         """Advance animations, game-over bookkeeping, and AI turns."""
@@ -649,6 +667,7 @@ class LudoApp:
             return
         self.ai_timer = 0
         self._perform_ai_step()
+        self._refresh_visible_moves()
         self._save_if_turn_completed()
 
     def _perform_ai_step(self) -> None:
@@ -880,12 +899,9 @@ class LudoApp:
 
         if self.game is None or self.renderer is None:
             return
-        self.visible_moves = []
-        choosing = self.game.current_player.is_human and self.game.awaiting == "choose_move"
-        if choosing and self.game.last_roll is not None:
-            # Recompute visible moves before drawing so the highlights and
-            # click targets always match the latest engine state.
-            self.visible_moves = self.game.legal_moves(self.game.last_roll)
+        # Recompute visible moves before drawing so the highlights and click
+        # targets always match the latest engine state.
+        self._refresh_visible_moves()
         self.renderer.draw(self.window, self.game, self.fonts, self.visible_moves, self.token_pixels)
 
         self._draw_world_hud()

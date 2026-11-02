@@ -195,11 +195,14 @@ class LudoGame:
 
         The method validates the move against the current legal-move list
         before mutating anything. That keeps tests and UI clicks honest: they
-        must pass a move the engine itself already approved.
+        must pass a move the engine itself already approved, for the die that
+        was actually rolled this turn.
         """
 
         if self.phase == "game_over":
             raise ValueError("game is already over")
+        if self.awaiting != "choose_move" or move.die != self.last_roll:
+            raise ValueError("move does not match the die rolled this turn")
         if move.player_index != self.current:
             raise ValueError("move does not belong to the current player")
         legal = self.legal_moves(move.die, move.player_index)

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import random
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -15,6 +17,7 @@ if str(GAME_DIR) not in sys.path:
 
 import pygame
 
+import main
 from game import LudoGame, LudoRules
 from main import (
     LudoApp,
@@ -146,6 +149,52 @@ class UiSmokeTests(unittest.TestCase):
         app = LudoApp()
         try:
             app.run(max_frames=3)
+        finally:
+            app.running = False
+
+
+
+class StaleMoveTests(unittest.TestCase):
+    """Keyboard input must always act on the engine's current legal moves."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the stale-move checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the stale-move checks."""
+
+        pygame.quit()
+
+    def test_move_roll_move_keys_in_one_frame_do_not_replay_a_stale_move(self) -> None:
+        """Pressing 1, R, 2 before the next redraw never plays the old roll's move.
+
+        After a 6 every yard token may enter. Key 1 enters token 1 and earns a
+        bonus roll; R rolls a 2 (seed 1), which only token 1 can use. Key 2
+        must not replay the old "enter token 2 with a 6" move from the
+        previous roll's list.
+        """
+
+        app = LudoApp()
+        try:
+            players = [("Human", True)] + [(f"AI {index}", False) for index in range(1, 4)]
+            game = LudoGame(players, LudoRules(total_players=4), seed=1)
+            app.start_game(game)
+            game.record_roll(6)
+            game.rng = random.Random(1)  # the next roll is a 2, never a 6
+            with mock.patch.object(main, "save_game"):
+                app._draw()  # one real frame builds the visible move list
+                self.assertEqual(len(app.visible_moves), 4)
+                for key, text in ((pygame.K_1, "1"), (pygame.K_r, "r"), (pygame.K_2, "2")):
+                    app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=key, unicode=text, mod=0))
+
+            self.assertEqual(game.last_roll, 2)
+            self.assertEqual([token.steps for token in game.players[0].tokens], [0, -1, -1, -1])
+            self.assertEqual(game.awaiting, "choose_move")
+            self.assertEqual([move.token_index for move in app.visible_moves], [0])
         finally:
             app.running = False
 

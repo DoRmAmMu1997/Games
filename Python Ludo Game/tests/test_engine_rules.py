@@ -30,6 +30,7 @@ class EngineRuleTests(unittest.TestCase):
 
         game = make_game()
 
+        game.record_roll(6)
         moves = game.legal_moves(6)
         self.assertEqual(len(moves), 4)
 
@@ -57,6 +58,7 @@ class EngineRuleTests(unittest.TestCase):
         game.players[0].tokens[0].steps = game.layout.finish_steps - 2
 
         self.assertEqual(game.legal_moves(3), [])
+        game.record_roll(2)
         moves = game.legal_moves(2)
         result = game.apply_move(moves[0])
 
@@ -72,6 +74,7 @@ class EngineRuleTests(unittest.TestCase):
         assert landing is not None
         game.players[1].tokens[0].steps = game.layout.steps_to_reach(1, landing)
 
+        game.record_roll(3)
         result = game.apply_move(game.legal_moves(3)[0])
 
         self.assertTrue(result.capture)
@@ -87,6 +90,7 @@ class EngineRuleTests(unittest.TestCase):
         game.players[0].tokens[0].steps = game.layout.steps_to_reach(0, game.layout.previous_index(safe_index, 2))
         game.players[1].tokens[0].steps = game.layout.steps_to_reach(1, safe_index)
 
+        game.record_roll(2)
         result = game.apply_move(game.legal_moves(2)[0])
 
         self.assertFalse(result.capture)
@@ -130,6 +134,28 @@ class EngineRuleTests(unittest.TestCase):
                 game.note_no_move(6)
                 self.assertEqual(game.current, 0)
                 self.assertEqual(game.awaiting, "pre_roll")
+
+    def test_apply_move_rejects_a_move_before_any_roll(self) -> None:
+        """A move offered by legal_moves cannot be played until the die is rolled."""
+
+        game = make_game()
+        move = game.legal_moves(6)[0]
+
+        with self.assertRaises(ValueError):
+            game.apply_move(move)
+        self.assertEqual(game.players[0].tokens[0].steps, -1)
+
+    def test_apply_move_rejects_a_move_for_a_different_die(self) -> None:
+        """A move computed for another die value is refused, even if legal for that die."""
+
+        game = make_game()
+        game.players[0].tokens[0].steps = 0
+        game.record_roll(3)
+        stale = next(move for move in game.legal_moves(6) if move.enters_board)
+
+        with self.assertRaises(ValueError):
+            game.apply_move(stale)
+        self.assertEqual(game.players[0].tokens[stale.token_index].steps, -1)
 
     def test_blockade_on_the_start_square_stops_yard_entry(self) -> None:
         """An opponent pair on a player's start square blocks tokens leaving the yard.
