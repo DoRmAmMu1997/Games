@@ -693,5 +693,39 @@ class SetupIntroTests(unittest.TestCase):
         self.assertLess(plate.bottom + 2 * LINE_HEIGHT_SLACK * len(lines), preview_top)
 
 
+class PillButtonTests(unittest.TestCase):
+    """Save/New pill labels contrast with the pill they sit on, light or dark."""
+
+    fonts: dict[str, pygame.font.Font]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame and the app fonts once for the pill checks."""
+
+        pygame.init()
+        cls.fonts = ui.make_fonts()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the pill checks."""
+
+        pygame.quit()
+
+    def test_pill_labels_beat_the_contrast_target_on_every_fill(self) -> None:
+        """Gold Save and every seat-coloured New pill, idle or hovered, get a readable label."""
+
+        bases = {GOLD} | {color for count in (4, 5, 6) for color in seat_colors(count)}
+        colors = bases | {theme.brighten(color, main.PLAY_PILL_HOVER_BRIGHTEN) for color in bases}
+        for color in colors:
+            with self.subTest(color=color):
+                surface = pygame.Surface((200, 80))
+                rect = pygame.Rect(20, 20, 136, 38)
+                recorder = RecordingFont(self.fonts["button"])
+                theme.draw_round_icon_button(surface, rect, color, "Save", {"button": cast(pygame.font.Font, recorder)})
+                fill = rgb(surface.get_at((rect.x + 10, rect.centery)))
+                self.assertEqual(len(recorder.colors), 1)
+                self.assertGreaterEqual(theme.contrast_ratio(recorder.colors[0], fill), LABEL_CONTRAST_TARGET)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -116,6 +116,7 @@ SETUP_RESUME_Y = SETUP_NAME_SECTION_BOTTOM + SETUP_ACTION_GAP
 SETUP_START_Y = SETUP_RESUME_Y + SETUP_ACTION_HEIGHT + SETUP_ACTION_BUTTON_GAP
 WINDOW_FIT_PADDING = 8
 PLAY_SAVE_RECT = pygame.Rect(34, 794, 136, 38)
+PLAY_PILL_HOVER_BRIGHTEN = 28  # a hovered Save/New pill lights up by this much
 PLAY_NEW_RECT = pygame.Rect(34, 842, 136, 34)
 PLAY_DICE_TRAY_RECT = pygame.Rect(214, 790, 430, 86)
 PLAY_ROLL_RECT = pygame.Rect(510, 818, 112, 38)
@@ -1128,7 +1129,7 @@ class LudoApp:
             # after the adaptive window scaling shrinks the game.
             color = GOLD if button.key == "save_quit" else current_color
             if hovered:
-                color = theme.brighten(color, 28)
+                color = theme.brighten(color, PLAY_PILL_HOVER_BRIGHTEN)
             theme.draw_round_icon_button(self.window, button.rect, color, button.text, self.fonts)
             return
 

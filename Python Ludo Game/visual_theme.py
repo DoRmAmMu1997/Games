@@ -25,6 +25,7 @@ PAWN_SHADOW = (0, 0, 0, 85)  # slightly lighter oval under each pawn
 SHADOW_CACHE_LIMIT = 256
 HUD_DARK = (14, 22, 31)
 HUD_EDGE = (255, 214, 56)
+PILL_SHADE = 20  # a pill button's fill is its colour darkened by this much
 # The soft light pool behind the board: full strength in the middle, then it
 # fades to nothing over its outer GLOW_FADE share, drawn as rings GLOW_STEP px
 # apart (small steps keep the fade smooth, with no visible rim).
@@ -341,10 +342,15 @@ def draw_round_icon_button(
     text: str,
     fonts: dict[str, pygame.font.Font],
 ) -> None:
-    """Draw a compact action button for save, menu, and new-game controls."""
+    """Draw a compact pill button for the Save and New table controls.
 
-    draw_shadowed_rect(surface, rect, darken(color, 20), border=HUD_EDGE, radius=rect.height // 2)
-    image = fonts["button"].render(text, True, WHITE)
+    The label takes ``readable_on`` of the actual fill, so a light pill (the
+    gold Save button, or a yellow seat's New button) gets dark lettering.
+    """
+
+    fill = darken(color, PILL_SHADE)
+    draw_shadowed_rect(surface, rect, fill, border=HUD_EDGE, radius=rect.height // 2)
+    image = fonts["button"].render(text, True, readable_on(fill))
     surface.blit(image, image.get_rect(center=rect.center))
 
 
