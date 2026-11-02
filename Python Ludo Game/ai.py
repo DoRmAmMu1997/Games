@@ -82,8 +82,10 @@ def score_move(game, move: Move, profile: AIProfile) -> int:
     if game.rules.blockades and _builds_own_blockade(game, move):
         score += profile.blockade
 
-    # A deterministic nudge prefers moving the most advanced token when scores
-    # are equal, which makes seeded simulations easier to compare.
+    # A small nudge adds the distance this move covers (a yard entry counts as
+    # 0), so a longer move edges out an otherwise equal one. Any remaining tie
+    # goes to the lowest token index (see choose_move's sort key), which keeps
+    # seeded simulations deterministic and easy to compare.
     score += move.to_steps - max(move.from_steps, 0)
     return score
 
