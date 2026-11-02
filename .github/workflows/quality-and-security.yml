@@ -10,6 +10,8 @@
 #   each pytest command, and set ~5 points below the measured value when the
 #   floor was introduced. Raise them as coverage grows; never lower them to
 #   make a failing change pass.
+# - Third-party actions are pinned to full commit SHAs (the trailing comment
+#   names the release); Dependabot's github-actions updates keep them current.
 name: Quality & Security
 
 on:
@@ -19,6 +21,11 @@ on:
 
 permissions:
   contents: read
+
+# A newer push to the same branch or PR supersedes the run in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
@@ -32,12 +39,18 @@ jobs:
       SDL_VIDEODRIVER: dummy
       SDL_AUDIODRIVER: dummy
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The job never pushes, so do not leave the token on disk while
+          # third-party packages and tests run.
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          # Key the pip cache on every requirements file, including the dev pins.
+          cache-dependency-path: "**/requirements*.txt"
 
       - name: Install dependencies
         run: |
@@ -48,19 +61,19 @@ jobs:
         run: pre-commit validate-config
 
       - name: Ludo tests (coverage floor 75)
-        working-directory: Python Ludo Game
+        working-directory: "Python Ludo Game"
         run: python -m pytest tests -q --cov=game --cov=board --cov=ai --cov=models --cov-fail-under=75
 
       - name: Monopoly tests (coverage floor 80)
-        working-directory: Python Monopoly Game
+        working-directory: "Python Monopoly Game"
         run: python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=80
 
       - name: Orbital Orchard tests (coverage floor 90)
-        working-directory: Python Sputnika Game
+        working-directory: "Python Sputnika Game"
         run: python -m pytest tests -q --cov=merge_logic --cov=physics --cov-fail-under=90
 
       - name: Solitaire tests (coverage floor 32)
-        working-directory: Python Solitaire Game
+        working-directory: "Python Solitaire Game"
         run: python -m pytest tests -q --cov=solitaire --cov-fail-under=32
 
       - name: Headless autotests (full app smoke)
