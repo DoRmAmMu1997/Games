@@ -25,6 +25,8 @@ from game import LudoGame, LudoRules
 from models import Move
 from settings import (
     AI_TURN_DELAY_MS,
+    AUTOTEST_FRAMES,
+    AUTOTEST_SEED,
     DICE_ANIM_MS,
     FPS,
     GOLD,
@@ -348,9 +350,15 @@ class LudoApp:
     and the paced AI loop.
     """
 
-    def __init__(self) -> None:
-        """Create the pygame window and initialize screen-level state."""
+    def __init__(self, persist: bool = True) -> None:
+        """Create the pygame window and initialize screen-level state.
 
+        ``persist=False`` makes the app read saves but never write or delete
+        the savegame or stats files. The hidden autotest uses it so a quick
+        self-check can never disturb a player's real progress.
+        """
+
+        self.persist = persist
         self.window_size = _fit_window_size(_desktop_work_area_size(), _window_chrome_size())
         self.screen_surface = pygame.display.set_mode(self.window_size)
         pygame.display.set_caption(WINDOW_TITLE)
@@ -534,7 +542,7 @@ class LudoApp:
 
         if event.key == pygame.K_ESCAPE:
             if self.screen == "playing" and self.game:
-                save_game(self.game)
+                self._save_game()
                 self.screen = "setup"
             else:
                 self.running = False
@@ -626,7 +634,7 @@ class LudoApp:
             if 0 <= index < len(self.visible_moves):
                 self._apply_move(self.visible_moves[index])
         elif key == "save_quit":
-            save_game(self.game)
+            self._save_game()
             self.screen = "setup"
         elif key == "new_game":
             self.screen = "setup"
@@ -654,7 +662,7 @@ class LudoApp:
                 ai_number += 1
         game = LudoGame(players, rules, ai_profile=self.ai_profiles[self.ai_profile_index])
         self.start_game(game)
-        save_game(game)
+        self._save_game()
 
     def _roll_for_human(self) -> None:
         """Roll for the current human player and handle no-move rolls."""
@@ -830,6 +838,12 @@ class LudoApp:
             return
         if self.saved_turns_taken != self.game.turns_taken:
             self.saved_turns_taken = self.game.turns_taken
+            self._save_game()
+
+    def _save_game(self) -> None:
+        """Write the current game to disk, unless this app must not persist."""
+
+        if self.persist and self.game is not None:
             save_game(self.game)
 
     def _record_finished_game_once(self) -> None:
@@ -848,8 +862,11 @@ class LudoApp:
         key = str(self.game.rules.total_players)
         self.stats.setdefault("by_player_count", {"4": 0, "5": 0, "6": 0})
         self.stats["by_player_count"][key] = int(self.stats["by_player_count"].get(key, 0)) + 1
-        save_stats(self.stats)
-        clear_saved_game()
+        # Stats still count in memory for the game-over card; only the disk
+        # writes are skipped for a non-persisting app (the autotest).
+        if self.persist:
+            save_stats(self.stats)
+            clear_saved_game()
 
     def _draw(self) -> None:
         """Clear the window and draw whichever screen is active."""
@@ -1198,9 +1215,15 @@ def main() -> None:
 
     pygame.init()
     try:
-        app = LudoApp()
-        max_frames = 8 if os.environ.get("LUDO_AUTOTEST") else None
-        app.run(max_frames=max_frames)
+        if os.environ.get("LUDO_AUTOTEST"):
+            # Headless self-test: play a seeded all-AI game on the classic
+            # four-player board, and never touch the player's saves or stats.
+            app = LudoApp(persist=False)
+            players = [(f"AI {seat + 1} ({seat_name(MIN_PLAYERS, seat)})", False) for seat in range(MIN_PLAYERS)]
+            app.start_game(LudoGame(players, LudoRules(total_players=MIN_PLAYERS), seed=AUTOTEST_SEED))
+            app.run(max_frames=AUTOTEST_FRAMES)
+        else:
+            LudoApp().run()
     finally:
         pygame.quit()
 

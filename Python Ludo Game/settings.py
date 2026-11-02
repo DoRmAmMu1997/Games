@@ -35,6 +35,12 @@ DICE_ANIM_MS = 350
 # per second: fast enough not to drag, slow enough to follow each hop.
 TOKEN_HOP_SPEED = 460.0
 
+# LUDO_AUTOTEST=1 plays a hidden, seeded all-AI four-player game for this many
+# frames (the AI acts every frame there), long enough to roll, enter, move, and
+# capture, then exits. The fixed seed makes every autotest run identical.
+AUTOTEST_FRAMES = 120
+AUTOTEST_SEED = 7
+
 # Token pins (the drawn pawns) and their click targets.
 TOKEN_PIN_RADIUS = 15  # radius of a pawn's coloured head, in pixels
 # A click selects the nearest highlighted pawn whose drawn centre lies within

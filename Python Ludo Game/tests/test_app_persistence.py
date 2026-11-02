@@ -24,6 +24,7 @@ import pygame
 
 import main
 from game import LudoGame, LudoRules
+from settings import AUTOTEST_FRAMES, AUTOTEST_SEED
 
 
 def make_game(total_players: int = 4) -> LudoGame:
@@ -185,6 +186,91 @@ class StatsRepairTests(TempSaveDirTestCase):
         self.assertEqual(app.stats["games"], 1)
         self.assertEqual(app.stats["human_wins"], 1)
         self.assertEqual(app.stats["by_player_count"]["4"], 1)
+
+
+class PersistFlagTests(TempSaveDirTestCase):
+    """An app opened with persist=False never writes or deletes save files."""
+
+    def seed_files(self) -> dict[str, bytes]:
+        """Write a savegame and stats file, returning every file's bytes by name."""
+
+        self.write_save(make_game().to_dict())
+        self.stats_path.write_text(json.dumps(main.load_stats()), encoding="utf-8")
+        return self.snapshot()
+
+    def snapshot(self) -> dict[str, bytes]:
+        """Return the bytes of every file currently in the temp save folder."""
+
+        return {path.name: path.read_bytes() for path in sorted(self.save_dir.iterdir())}
+
+    def test_default_app_does_write_its_save(self) -> None:
+        """Control: a normal app overwrites the save when a new game starts."""
+
+        before = self.seed_files()
+        app = main.LudoApp()
+        app._on_setup_button("start")
+        self.assertNotEqual(self.snapshot()["savegame.json"], before["savegame.json"])
+
+    def test_persist_false_leaves_save_and_stats_untouched(self) -> None:
+        """Starting, autosaving, Save, Esc, and finishing a game write nothing to disk."""
+
+        before = self.seed_files()
+        app = main.LudoApp(persist=False)
+
+        app._on_setup_button("start")
+        app._roll_for_human()
+        app._on_play_button("save_quit")
+        app._on_setup_button("start")
+        app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, unicode="", mod=0))
+
+        game = make_game()
+        for token in game.players[0].tokens:
+            token.steps = game.layout.finish_steps
+        game.players[0].tokens[3].steps = game.layout.finish_steps - 1
+        app.start_game(game)
+        game.record_roll(1)
+        app._apply_move(game.legal_moves(1)[0])
+        app._update(False)
+
+        self.assertEqual(app.screen, "over")
+        self.assertEqual(app.stats["games"], 1, "stats should still be tracked in memory")
+        self.assertEqual(self.snapshot(), before)
+
+
+class AutotestTests(TempSaveDirTestCase):
+    """LUDO_AUTOTEST plays a seeded all-AI game and leaves saves alone."""
+
+    def test_autotest_plays_without_touching_seeded_saves(self) -> None:
+        """The autotest plays real AI turns, yet the seeded files stay byte-identical."""
+
+        self.write_save(make_game().to_dict())
+        self.stats_path.write_text(json.dumps(main.load_stats()), encoding="utf-8")
+        before = {path.name: path.read_bytes() for path in sorted(self.save_dir.iterdir())}
+        apps: list[main.LudoApp] = []
+        original_run = main.LudoApp.run
+
+        def spy_run(app: main.LudoApp, max_frames: int | None = None) -> None:
+            """Remember the autotest's app, then run it for real."""
+
+            apps.append(app)
+            original_run(app, max_frames=max_frames)
+
+        self.addCleanup(pygame.init)  # main() quits pygame on the way out
+        with (
+            mock.patch.dict(os.environ, {"LUDO_AUTOTEST": "1"}),
+            mock.patch.object(main.LudoApp, "run", autospec=True, side_effect=spy_run) as run,
+        ):
+            main.main()
+
+        self.assertEqual(run.call_args.kwargs["max_frames"], AUTOTEST_FRAMES)
+        app = apps[0]
+        self.assertFalse(app.persist)
+        assert app.game is not None
+        self.assertEqual(app.game.seed, AUTOTEST_SEED)
+        self.assertFalse(any(player.is_human for player in app.game.players))
+        self.assertGreater(app.game.total_rolls, 0, "the autotest never rolled")
+        after = {path.name: path.read_bytes() for path in sorted(self.save_dir.iterdir())}
+        self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

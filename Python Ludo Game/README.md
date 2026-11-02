@@ -117,7 +117,8 @@ python -m unittest discover -s "Python Ludo Game\tests" -v
 python -m compileall "Python Ludo Game"
 ```
 
-For a headless Pygame smoke test in PowerShell:
+For a headless Pygame smoke test in PowerShell (it plays a short seeded
+all-AI game in a hidden window and never writes or deletes your saves):
 
 ```powershell
 $env:SDL_VIDEODRIVER='dummy'
