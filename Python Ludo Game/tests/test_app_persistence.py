@@ -108,5 +108,84 @@ class CorruptSaveResumeTests(TempSaveDirTestCase):
                 self.assertIsNone(app.game)
 
 
+class StatsRepairTests(TempSaveDirTestCase):
+    """Damaged lifetime stats are repaired field by field instead of crashing."""
+
+    def write_stats(self, payload: object) -> None:
+        """Write ``payload`` as the on-disk stats JSON."""
+
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.stats_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def malformed_stats(self) -> dict:
+        """Return stats with one bad value of each awkward kind, plus good ones to keep."""
+
+        return {
+            "games": None,
+            "human_wins": "x",
+            "ai_wins": float("inf"),
+            "turn_total": [12],
+            "by_player_count": {"4": None, "5": 3, "6": "y"},
+        }
+
+    def test_malformed_counters_and_buckets_fall_back_to_zero(self) -> None:
+        """None, "x", inf, a list, and null buckets become 0; good values survive."""
+
+        self.write_stats(self.malformed_stats())
+
+        stats = main.load_stats()
+
+        self.assertEqual(
+            {key: stats[key] for key in ("games", "human_wins", "ai_wins", "turn_total")},
+            {"games": 0, "human_wins": 0, "ai_wins": 0, "turn_total": 0},
+        )
+        self.assertEqual(stats["by_player_count"], {"4": 0, "5": 3, "6": 0})
+
+    def test_repairs_are_logged_by_field_name(self) -> None:
+        """Each repaired field is named in error.log so a bad file can be traced."""
+
+        self.write_stats(self.malformed_stats())
+
+        main.load_stats()
+
+        log = (self.save_dir / "error.log").read_text(encoding="utf-8")
+        for field in ("games", "human_wins", "ai_wins", "turn_total", "by_player_count[4]", "by_player_count[6]"):
+            with self.subTest(field=field):
+                self.assertIn(f"'{field}'", log)
+        self.assertNotIn("by_player_count[5]", log)
+
+    def test_valid_stats_load_without_logging(self) -> None:
+        """A healthy stats file loads as-is and writes nothing to error.log."""
+
+        good = {"games": 4, "human_wins": 1, "ai_wins": 3, "turn_total": 400,
+                "by_player_count": {"4": 2, "5": 1, "6": 1}}
+        self.write_stats(good)
+
+        self.assertEqual(main.load_stats(), good)
+        self.assertFalse((self.save_dir / "error.log").exists())
+
+    def test_game_over_with_malformed_stats_does_not_crash(self) -> None:
+        """Finishing a game records and shows stats even when the file was damaged."""
+
+        self.write_stats(self.malformed_stats())
+        app = main.LudoApp()
+        game = make_game()
+        tokens = game.players[0].tokens
+        for token in tokens:
+            token.steps = game.layout.finish_steps
+        tokens[3].steps = game.layout.finish_steps - 1
+        app.start_game(game)
+        game.record_roll(1)
+
+        app._apply_move(game.legal_moves(1)[0])
+        app._update(False)
+        app._draw()
+
+        self.assertEqual(app.screen, "over")
+        self.assertEqual(app.stats["games"], 1)
+        self.assertEqual(app.stats["human_wins"], 1)
+        self.assertEqual(app.stats["by_player_count"]["4"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

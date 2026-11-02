@@ -12,6 +12,7 @@ import time
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pygame
 
@@ -247,10 +248,26 @@ def _atomic_write(path: Path, payload: dict) -> None:
         _log_error(error)
 
 
-def load_stats() -> dict:
-    """Read lifetime stats, filling in defaults for missing fields."""
+def _stat_count(value: Any, field: str) -> int:
+    """Return one stats counter as an int, or 0 (logged) when it is malformed.
 
-    defaults = {
+    A hand-edited or damaged stats file can hold anything JSON allows: null,
+    text, a list, or a huge number that loads as infinity. Repairing the one
+    bad field keeps every good counter instead of crashing the game-over
+    screen.
+    """
+
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        _log_error(ValueError(f"stats field {field!r} was {value!r}; reset to 0"))
+        return 0
+
+
+def load_stats() -> dict:
+    """Read lifetime stats, filling in defaults and repairing malformed fields."""
+
+    defaults: dict[str, Any] = {
         "games": 0,
         "human_wins": 0,
         "ai_wins": 0,
@@ -268,6 +285,11 @@ def load_stats() -> dict:
         defaults["by_player_count"] = {**{"4": 0, "5": 0, "6": 0}, **counts}
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         pass
+    for field in ("games", "human_wins", "ai_wins", "turn_total"):
+        defaults[field] = _stat_count(defaults[field], field)
+    buckets = defaults["by_player_count"]
+    for key in buckets:
+        buckets[key] = _stat_count(buckets[key], f"by_player_count[{key}]")
     return defaults
 
 

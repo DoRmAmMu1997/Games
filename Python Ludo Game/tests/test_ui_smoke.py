@@ -153,7 +153,6 @@ class UiSmokeTests(unittest.TestCase):
             app.running = False
 
 
-
 class StaleMoveTests(unittest.TestCase):
     """Keyboard input must always act on the engine's current legal moves."""
 

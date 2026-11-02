@@ -150,7 +150,6 @@ class HudLayoutTests(unittest.TestCase):
                 app.running = False
 
 
-
 class HudTextFitTests(unittest.TestCase):
     """HUD text is measured in rendered pixels, so it always fits its box."""
 
