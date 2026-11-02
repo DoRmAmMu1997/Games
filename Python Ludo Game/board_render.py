@@ -9,7 +9,17 @@ import pygame
 
 import visual_theme as theme
 from models import Move
-from settings import GOLD, HOME_LENGTH, STACK_SPACING, TOKEN_HIT_RADIUS, TOKEN_PIN_RADIUS, WHITE, seat_colors
+from settings import (
+    GOLD,
+    HOME_LENGTH,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    STACK_SPACING,
+    TOKEN_HIT_RADIUS,
+    TOKEN_PIN_RADIUS,
+    WHITE,
+    seat_colors,
+)
 
 Point = tuple[float, float]
 Color = tuple[int, int, int]
@@ -25,6 +35,10 @@ RADIAL_CENTER = (450.0, 410.0)
 BANNER_WIDTH = 150
 BANNER_HEIGHT = 28
 SQUARE_BANNER_GAP = 24
+# Radial banners keep at least this many pixels between themselves and their
+# yard, and at least BANNER_SCREEN_MARGIN pixels from the window edge.
+BANNER_GAP = 4
+BANNER_SCREEN_MARGIN = 6
 
 
 @dataclass(frozen=True)
@@ -46,7 +60,7 @@ class RadialSpec:
     yard_half_angle: float   # angular half-width of the yard triangle base
     token_radius: float      # distance to the middle of the 2x2 token cluster
     token_spread: float      # half-spacing between yard token slots
-    banner_radius: float     # distance to the player name banner
+    banner_radius: float     # least distance from the hub to a name banner's centre
 
 
 RADIAL_SPECS: dict[int, RadialSpec] = {
@@ -60,7 +74,9 @@ RADIAL_SPECS: dict[int, RadialSpec] = {
         yard_half_angle=math.radians(22.0),
         token_radius=258.0,
         token_spread=24.0,
-        banner_radius=362.0,
+        # 350 rather than 362 so the bottom banner (and its shadow) clears the
+        # HUD dice tray at y=790.
+        banner_radius=350.0,
     ),
     6: RadialSpec(
         inner_radius=98.0,
@@ -749,11 +765,34 @@ def _radial_yard_slots(center: Point, yard_angle: float, spec: RadialSpec) -> tu
 
 
 def _radial_banner_anchor(center: Point, yard_angle: float, spec: RadialSpec) -> Point:
-    """Return the name-banner center on the outer edge of one yard."""
+    """Return the name-banner centre just beyond the outer edge of one yard.
 
-    x, y = _polar(center, yard_angle, spec.banner_radius)
-    # Keep the whole 150x28 banner on the logical canvas with a small margin.
-    return (max(92.0, min(1188.0, x)), max(28.0, min(872.0, y)))
+    The yard triangle's flat outer edge lies ``yard_base_radius * cos(half
+    angle)`` from the hub along the yard's direction. The banner centre is
+    pushed past that edge by the banner's own reach along the same direction
+    (half-width times |cos| plus half-height times |sin|) plus ``BANNER_GAP``.
+
+    Beginner note: a wide, short banner reaches much further sideways than
+    up or down, so a banner beside a side yard must sit further out than one
+    below the bottom yard. Measuring the reach along the yard direction
+    handles every angle with one formula. ``banner_radius`` is a floor that
+    keeps short reaches from hugging the yard. Finally the whole banner is
+    clamped onto the canvas.
+    """
+
+    direction = _unit(yard_angle)
+    half_width = BANNER_WIDTH / 2
+    half_height = BANNER_HEIGHT / 2
+    reach = half_width * abs(direction[0]) + half_height * abs(direction[1])
+    outer_edge = spec.yard_base_radius * math.cos(spec.yard_half_angle)
+    distance = max(spec.banner_radius, outer_edge + reach + BANNER_GAP)
+    x, y = _polar(center, yard_angle, distance)
+    min_x = half_width + BANNER_SCREEN_MARGIN
+    min_y = half_height + BANNER_SCREEN_MARGIN
+    return (
+        max(min_x, min(SCREEN_WIDTH - min_x, x)),
+        max(min_y, min(SCREEN_HEIGHT - min_y, y)),
+    )
 
 
 def _convex_hull(points: list[Point]) -> list[Point]:
