@@ -273,7 +273,10 @@ def load_saved_game() -> LudoGame | None:
 
     try:
         return LudoGame.from_dict(json.loads(SAVEGAME_PATH.read_text(encoding="utf-8")))
-    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+    # AttributeError covers a damaged entry of the wrong JSON type (a list
+    # where a token object belongs). OverflowError covers huge numbers: JSON
+    # reads 1e400 as float inf, and int(inf) raises OverflowError.
+    except (OSError, TypeError, ValueError, KeyError, AttributeError, OverflowError, json.JSONDecodeError):
         return None
 
 

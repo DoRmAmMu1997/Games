@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 import unittest
 from pathlib import Path
@@ -263,6 +264,48 @@ class LegacySaveMigrationTests(unittest.TestCase):
         data["lap_version"] = 3
         with self.assertRaises(ValueError):
             LudoGame.from_dict(data)
+
+
+class CorruptSaveTests(unittest.TestCase):
+    """from_dict refuses save data that would crash or wedge a resumed game."""
+
+    def test_corrupt_saves_raise_value_error(self) -> None:
+        """Each kind of damaged save is rejected with ValueError, never loaded."""
+
+        valid = make_game().to_dict()
+        finish = make_game().layout.finish_steps
+
+        def damaged(change) -> dict:
+            """Return a deep copy of the valid save with ``change`` applied to it."""
+
+            data = copy.deepcopy(valid)
+            change(data)
+            return data
+
+        cases = {
+            "current out of range": damaged(lambda data: data.update(current=4)),
+            "unknown awaiting": damaged(lambda data: data.update(awaiting="dancing")),
+            "phase game_over": damaged(lambda data: data.update(phase="game_over")),
+            "choose_move with no roll": damaged(lambda data: data.update(awaiting="choose_move", last_roll=None)),
+            "missing token": damaged(lambda data: data["players"][0]["tokens"].pop()),
+            "steps past home": damaged(lambda data: data["players"][1]["tokens"][0].update(steps=finish + 1)),
+            "top-level list": [valid],
+            "top-level null": None,
+            "top-level string": "savegame",
+            "top-level number": 42,
+        }
+        for name, data in cases.items():
+            with self.subTest(case=name), self.assertRaises(ValueError):
+                LudoGame.from_dict(data)  # type: ignore[arg-type]
+
+    def test_valid_choose_move_save_still_loads(self) -> None:
+        """A save taken mid-turn, with a real die roll waiting, still resumes."""
+
+        game = make_game()
+        game.record_roll(6)
+        restored = LudoGame.from_dict(game.to_dict())
+        self.assertEqual(restored.awaiting, "choose_move")
+        self.assertEqual(restored.last_roll, 6)
 
 
 if __name__ == "__main__":

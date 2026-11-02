@@ -327,9 +327,15 @@ class LudoGame:
         - Tokens on the shared track keep their cell and end up one cell
           closer to home, because the lap is one cell shorter.
 
-        Raises ``ValueError`` for a ``lap_version`` this code does not know.
+        Raises ``ValueError`` for a ``lap_version`` this code does not know,
+        and for damaged data that would crash or wedge a resumed game: a top
+        level that is not a JSON object, an out-of-range current player, a
+        turn state that cannot be resumed, a missing die roll, or token
+        counts and steps outside the board.
         """
 
+        if not isinstance(data, dict):
+            raise ValueError("Save data must be a JSON object.")
         lap_version = int(data.get("lap_version", 1))
         if lap_version not in (1, LAP_VERSION):
             raise ValueError(f"Unsupported Ludo lap version: {lap_version}")
@@ -345,13 +351,23 @@ class LudoGame:
         game.current = int(data.get("current", 0))
         game.phase = str(data.get("phase", "playing"))
         game.awaiting = str(data.get("awaiting", "pre_roll"))
-        game.last_roll = data.get("last_roll")
+        game.last_roll = None if data.get("last_roll") is None else int(data["last_roll"])
         game.consecutive_sixes = int(data.get("consecutive_sixes", 0))
         game.turns_taken = int(data.get("turns_taken", 0))
         game.total_rolls = int(data.get("total_rolls", 0))
         game.winner = data.get("winner")
         game.ranking = [int(item) for item in data.get("ranking", [])]
         game.event_log = [str(item) for item in data.get("event_log", [])] or ["Game resumed."]
+        if not 0 <= game.current < len(game.players):
+            raise ValueError("Saved current player is out of range.")
+        if game.phase != "playing" or game.awaiting not in ("pre_roll", "choose_move"):
+            raise ValueError("Saved turn state cannot be resumed.")
+        if game.awaiting == "choose_move" and not (game.last_roll is not None and 1 <= game.last_roll <= 6):
+            raise ValueError("Saved die roll is invalid.")
+        for player in game.players:
+            if len(player.tokens) != TOKENS_PER_PLAYER or any(
+                    not -1 <= token.steps <= game.layout.finish_steps for token in player.tokens):
+                raise ValueError("Saved token data is invalid.")
         game._mark_finished_tokens()
         return game
 
