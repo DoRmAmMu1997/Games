@@ -48,8 +48,11 @@ TOKEN_PIN_RADIUS = 15  # radius of a pawn's coloured head, in pixels
 # exact when neighbouring pawns' circles overlap on the tight 6P board.
 TOKEN_HIT_RADIUS = 33
 # Pawns sharing one cell fan out around its centre so each stays visible.
-# Neighbouring pawns in a fan sit this many pixels apart.
-STACK_SPACING = 12
+# Stacked pawns shrink to STACK_PIN_RADIUS and sit STACK_SPACING pixels apart,
+# which keeps every pawn's number clear of the (white-ringed) heads drawn after
+# it, while a six-pawn fan still stays within about one cell of its square.
+STACK_SPACING = 24
+STACK_PIN_RADIUS = 11
 
 
 # ---------------------------------------------------------------------------

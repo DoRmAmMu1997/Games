@@ -31,6 +31,8 @@ from settings import SCREEN_HEIGHT, SCREEN_WIDTH
 YARD_SLOT_RADIUS = 24
 # Name banners cast a drop shadow this far below themselves.
 BANNER_SHADOW_DROP = 4
+# draw_token_pin wraps each pawn's coloured head in a white ring this wide.
+PIN_RING_WIDTH = 4
 
 
 def make_game(total_players: int) -> LudoGame:
@@ -249,6 +251,61 @@ class RosterChipTests(unittest.TestCase):
                 self.assertTrue(chip.inflate(-8, -4).contains(box), f"{box} spills out of {chip}")
                 others = [other for other in drawn if other is not box and chip.collidepoint(other.topleft)]
                 self.assertEqual(box.collidelistall(others), [], f"{box} overlaps another line on its chip")
+
+
+class StackReadabilityTests(unittest.TestCase):
+    """Every pawn number in a stack stays visible above the pawns drawn after it."""
+
+    fonts: dict[str, pygame.font.Font]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame and the app fonts once for the stack checks."""
+
+        pygame.init()
+        cls.fonts = ui.make_fonts()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the stack checks."""
+
+        pygame.quit()
+
+    def label_ink(self, label: str, centre: tuple[float, float]) -> pygame.Rect:
+        """Return the screen rect of a pawn label's actual ink, drawn centred on ``centre``."""
+
+        image = self.fonts["tiny"].render(label, True, (255, 255, 255))
+        full = image.get_rect(center=(int(centre[0]), int(centre[1])))
+        return image.get_bounding_rect().move(full.topleft)
+
+    def test_stack_numbers_are_not_covered_by_later_pawns(self) -> None:
+        """For stacks of 2 to 6 pawns, no later pawn's head covers an earlier number."""
+
+        for count in (4, 5, 6):
+            for size in range(2, 7):
+                with self.subTest(total_players=count, stack=size):
+                    game = make_game(count)
+                    safe = game.layout.safe_indices[1]
+                    seats = [seat for seat in (0, 2) for _ in range(4)][:size]
+                    keys = []
+                    for slot, seat in enumerate(seats):
+                        token_index = slot % 4
+                        game.players[seat].tokens[token_index].steps = game.layout.steps_to_reach(seat, safe)
+                        keys.append((seat, token_index))
+                    pins = BoardRenderer(game.layout).token_pins(game)
+                    order = [key for key in pins if key in keys]
+                    for position, key in enumerate(order):
+                        ink = self.label_ink(str(key[1] + 1), pins[key][0])
+                        for later in order[position + 1:]:
+                            (cx, cy), radius = pins[later]
+                            nearest_x = min(max(cx, ink.left), ink.right)
+                            nearest_y = min(max(cy, ink.top), ink.bottom)
+                            head = radius + PIN_RING_WIDTH
+                            self.assertGreater(
+                                ((cx - nearest_x) ** 2 + (cy - nearest_y) ** 2) ** 0.5,
+                                head,
+                                f"pawn {later} covers the number of pawn {key}",
+                            )
 
 
 if __name__ == "__main__":

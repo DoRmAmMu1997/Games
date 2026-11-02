@@ -14,6 +14,7 @@ from settings import (
     HOME_LENGTH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    STACK_PIN_RADIUS,
     STACK_SPACING,
     TOKEN_HIT_RADIUS,
     TOKEN_PIN_RADIUS,
@@ -181,7 +182,9 @@ class BoardRenderer:
         This is the ONLY place that decides where a pawn appears on screen.
         Pawns whose logical cells round to the same point (any colours, on a
         safe square, a start square, a lane cell, or the finish) fan out
-        around that point; a lone pawn sits exactly on its cell centre.
+        around that point as smaller pins (``STACK_PIN_RADIUS``), so every
+        number stays readable; a lone pawn sits exactly on its cell centre at
+        full size.
         Drawing, move highlights, and click hit-testing all read these pins,
         so a click always measures against what the player actually sees.
 
@@ -207,7 +210,8 @@ class BoardRenderer:
                 occupants = cells[(round(base[0]), round(base[1]))]
                 offset = _stack_offset(occupants.index(key), len(occupants))
                 drawn = animated_positions.get(key, base)
-                pins[key] = ((drawn[0] + offset[0], drawn[1] + offset[1]), TOKEN_PIN_RADIUS)
+                radius = TOKEN_PIN_RADIUS if len(occupants) == 1 else STACK_PIN_RADIUS
+                pins[key] = ((drawn[0] + offset[0], drawn[1] + offset[1]), radius)
         return pins
 
     def move_at_pos(self, pos: tuple[int, int], moves: list[Move], game) -> Move | None:
