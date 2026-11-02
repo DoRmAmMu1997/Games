@@ -49,9 +49,10 @@ TOKEN_PIN_RADIUS = 15  # radius of a pawn's coloured head, in pixels
 TOKEN_HIT_RADIUS = 33
 # Pawns sharing one cell fan out around its centre so each stays visible.
 # Stacked pawns shrink to STACK_PIN_RADIUS and sit STACK_SPACING pixels apart,
-# which keeps every pawn's number clear of the (white-ringed) heads drawn after
-# it, while a six-pawn fan still stays within about one cell of its square.
-STACK_SPACING = 24
+# which keeps every pawn's number at least 2 px clear of the (white-ringed)
+# heads drawn after it in any common font, while a six-pawn fan still stays
+# within about one cell of its square.
+STACK_SPACING = 26
 STACK_PIN_RADIUS = 11
 
 

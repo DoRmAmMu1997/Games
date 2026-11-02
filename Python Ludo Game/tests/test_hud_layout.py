@@ -28,6 +28,9 @@ from game import LudoGame, LudoRules
 
 # Yard parking slots are drawn as rings of this radius (see _draw_yard_slots).
 YARD_SLOT_RADIUS = 24
+# Text-fit checks pretend each line is this much taller than this machine's
+# font, so a platform with a slightly taller font still fits.
+LINE_HEIGHT_SLACK = 2
 
 
 def make_game(total_players: int) -> LudoGame:
@@ -186,8 +189,12 @@ class HudTextFitTests(unittest.TestCase):
                 self.game.awaiting = awaiting
                 self.game.players[0].is_human = human
                 lines = ui.wrap_lines(font, self.app._turn_prompt(), rect.width)
-                height = len(lines) * font.get_height() + (len(lines) - 1) * main.PLAY_PROMPT_LINE_GAP
-                self.assertLessEqual(height, rect.height, f"{lines} do not fit {rect}")
+                # Allow every line to be LINE_HEIGHT_SLACK px taller than this
+                # machine's font, so another platform's font still fits.
+                line_height = font.get_height() + LINE_HEIGHT_SLACK
+                height = len(lines) * line_height + (len(lines) - 1) * main.PLAY_PROMPT_LINE_GAP
+                self.assertLessEqual(height, rect.height, f"{lines} do not fit {rect} with slack")
+        self.assertFalse(rect.colliderect(main.PLAY_TRAY_BANNER_RECT), "prompt overlaps the tray banner")
 
     def test_long_log_lines_are_ellipsized_to_the_log_width(self) -> None:
         """A log line wider than the log card is shortened with an ellipsis, not overflowed."""

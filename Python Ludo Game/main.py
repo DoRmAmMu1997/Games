@@ -104,20 +104,23 @@ PLAY_SAVE_RECT = pygame.Rect(34, 794, 136, 38)
 PLAY_NEW_RECT = pygame.Rect(34, 842, 136, 34)
 PLAY_DICE_TRAY_RECT = pygame.Rect(214, 790, 430, 86)
 PLAY_ROLL_RECT = pygame.Rect(510, 818, 112, 38)
-# The turn prompt sits under the tray's player banner. 44 px holds two wrapped
-# lines of the small font (two 21 px Windows Arial lines plus the 2 px gap).
-PLAY_PROMPT_RECT = pygame.Rect(PLAY_DICE_TRAY_RECT.x + 104, PLAY_DICE_TRAY_RECT.y + 42, 300, 44)
+# The tray's player banner, then the turn prompt under it. 48 px holds two
+# wrapped lines of the small font (21 px in Windows Arial, Liberation Sans and
+# DejaVu Sans) plus the 2 px gap, with 4 px to spare for taller fonts.
+PLAY_TRAY_BANNER_RECT = pygame.Rect(PLAY_DICE_TRAY_RECT.x + 104, PLAY_DICE_TRAY_RECT.y + 8, 180, 28)
+PLAY_PROMPT_RECT = pygame.Rect(PLAY_DICE_TRAY_RECT.x + 104, PLAY_DICE_TRAY_RECT.y + 38, 300, 48)
 PLAY_PROMPT_LINE_GAP = 2
 # The right-hand column holds the roster, then the move buttons, then the
 # table log. Nothing here may overlap the board: a full six-player roster
-# ends at y = 90 + 5 * 54 + 48 = 408, so the move buttons start below it.
+# ends at y = 90 + 5 * 54 + 50 = 410, so the move buttons start below it.
 PLAY_ROSTER_X = 932
 PLAY_ROSTER_Y = 90
 PLAY_ROSTER_WIDTH = 254
 PLAY_ROSTER_STEP = 54
-# A chip holds two text lines (name, then home/captures). 48 px fits them
-# with the tallest platform fonts (21 px + 18 px DejaVu Sans) plus margins.
-PLAY_ROSTER_CHIP_HEIGHT = 48
+# A chip holds two text lines (name, then home/captures). 50 px fits them with
+# the tallest platform fonts (21 px + 18 px DejaVu Sans) and 4 px to spare at
+# the top and bottom.
+PLAY_ROSTER_CHIP_HEIGHT = 50
 PLAY_ROSTER_TEXT_X = 44         # chip text starts here, right of the colour dot
 PLAY_ROSTER_TEXT_PADDING = 10   # clear space between the text and the chip's right edge
 PLAY_ROSTER_TAG_GAP = 8         # least space between the name and its Human/AI tag
@@ -1007,8 +1010,7 @@ class LudoApp:
         # physical board-game table where the dice sit beside the board.
         tray = PLAY_DICE_TRAY_RECT
         theme.draw_dice_tray(self.window, tray, die_value, self.fonts, accent=current.color)
-        banner = pygame.Rect(tray.x + 104, tray.y + 12, 180, 28)
-        theme.draw_player_banner(self.window, banner, current.color, current.name[:18], self.fonts)
+        theme.draw_player_banner(self.window, PLAY_TRAY_BANNER_RECT, current.color, current.name[:18], self.fonts)
 
         ui.draw_wrapped(
             self.window,

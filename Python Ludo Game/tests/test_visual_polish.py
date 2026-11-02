@@ -35,6 +35,9 @@ YARD_SLOT_RADIUS = 24
 BANNER_SHADOW_DROP = 4
 # draw_token_pin wraps each pawn's coloured head in a white ring this wide.
 PIN_RING_WIDTH = 4
+# Font-dependent layouts must pass with spare room, not by a hair: digit ink
+# and line heights shift by a pixel or two between fonts and platforms.
+LABEL_CLEARANCE = 2  # least gap between a pawn number and any later pawn's head
 
 
 def make_game(total_players: int) -> LudoGame:
@@ -272,7 +275,8 @@ class RosterChipTests(unittest.TestCase):
         for box in drawn:
             chip = next(chip for chip in chips if chip.collidepoint(box.topleft))
             with self.subTest(box=box):
-                self.assertTrue(chip.inflate(-8, -4).contains(box), f"{box} spills out of {chip}")
+                # 4 px inset on every side leaves room for a slightly taller font.
+                self.assertTrue(chip.inflate(-8, -8).contains(box), f"{box} crowds the edge of {chip}")
                 others = [other for other in drawn if other is not box and chip.collidepoint(other.topleft)]
                 self.assertEqual(box.collidelistall(others), [], f"{box} overlaps another line on its chip")
 
@@ -325,10 +329,10 @@ class StackReadabilityTests(unittest.TestCase):
                             nearest_x = min(max(cx, ink.left), ink.right)
                             nearest_y = min(max(cy, ink.top), ink.bottom)
                             head = radius + PIN_RING_WIDTH
-                            self.assertGreater(
+                            self.assertGreaterEqual(
                                 ((cx - nearest_x) ** 2 + (cy - nearest_y) ** 2) ** 0.5,
-                                head,
-                                f"pawn {later} covers the number of pawn {key}",
+                                head + LABEL_CLEARANCE,
+                                f"pawn {later} covers (or nearly covers) the number of pawn {key}",
                             )
 
 
