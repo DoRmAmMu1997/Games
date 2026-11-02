@@ -11,7 +11,7 @@ import math
 
 import pygame
 
-from settings import INK, MIN_LABEL_CONTRAST, WHITE
+from settings import LABEL_DARK, LABEL_LIGHT, WHITE
 
 WALLPAPER_BLUE = (30, 123, 197)
 WALLPAPER_DEEP = (12, 52, 93)
@@ -59,12 +59,16 @@ def contrast_ratio(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
 def readable_on(fill: tuple[int, int, int]) -> tuple[int, int, int]:
     """Return the label colour for text or markings drawn on ``fill``.
 
-    White is kept wherever it reaches ``MIN_LABEL_CONTRAST`` so most seats
-    keep their familiar white labels; light fills such as yellow and orange
-    get dark ink instead.
+    Whichever of ``LABEL_LIGHT`` (white) or ``LABEL_DARK`` (black) contrasts
+    more with ``fill`` wins, so dark seats such as blue get white labels and
+    light seats such as yellow, orange and green get black ones. Comparing
+    the two, instead of keeping white until it barely passes a bar, leaves
+    every seat colour comfortably above ``LABEL_CONTRAST_TARGET``.
     """
 
-    return WHITE if contrast_ratio(WHITE, fill) >= MIN_LABEL_CONTRAST else INK
+    light = contrast_ratio(LABEL_LIGHT, fill)
+    dark = contrast_ratio(LABEL_DARK, fill)
+    return LABEL_LIGHT if light >= dark else LABEL_DARK
 
 
 def draw_ludo_wallpaper(surface: pygame.Surface) -> None:

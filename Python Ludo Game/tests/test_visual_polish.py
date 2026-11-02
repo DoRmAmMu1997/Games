@@ -11,6 +11,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -26,7 +27,7 @@ import ui
 import visual_theme as theme
 from board_render import START_CELL_BRIGHTEN, BoardRenderer, _square_home_rects
 from game import LudoGame, LudoRules
-from settings import MIN_LABEL_CONTRAST, SCREEN_HEIGHT, SCREEN_WIDTH, seat_colors
+from settings import LABEL_CONTRAST_TARGET, MIN_LABEL_CONTRAST, SCREEN_HEIGHT, SCREEN_WIDTH, seat_colors
 
 # Yard parking slots are drawn as rings of this radius (see _draw_yard_slots).
 YARD_SLOT_RADIUS = 24
@@ -151,6 +152,22 @@ class SetupPanelTests(unittest.TestCase):
                 )
         self.assertLessEqual(main._setup_option_row(2).left_button.bottom + gap, main.SETUP_RULES_HEADER_Y)
         self.assertLessEqual(buttons["toggle_three_sixes"].bottom + gap, main.SETUP_NAME_HEADER_Y)
+
+
+class RecordingFont:
+    """Wrap a pygame font and remember the colour of every ``render`` call."""
+
+    def __init__(self, font: pygame.font.Font) -> None:
+        """Keep the real font and start with no recorded colours."""
+
+        self.font = font
+        self.colors: list[tuple[int, int, int]] = []
+
+    def render(self, text: str, antialias: bool, color, *args) -> pygame.Surface:
+        """Record ``color`` as an RGB triple, then render with the real font."""
+
+        self.colors.append((color[0], color[1], color[2]))
+        return self.font.render(text, antialias, color, *args)
 
 
 def rgb(color: pygame.Color) -> tuple[int, int, int]:
@@ -344,15 +361,24 @@ class SeatMarkingContrastTests(unittest.TestCase):
         self.assertAlmostEqual(theme.contrast_ratio((0, 0, 0), (255, 255, 255)), 21.0, places=2)
         self.assertAlmostEqual(theme.contrast_ratio((120, 30, 200), (120, 30, 200)), 1.0)
 
-    def test_readable_label_colour_contrasts_with_every_seat_colour(self) -> None:
-        """The label colour picked for each seat colour reaches MIN_LABEL_CONTRAST."""
+    def test_label_colour_beats_the_design_target_on_every_seat_fill(self) -> None:
+        """The label colour picked for each seat colour and start tint reaches 4.5:1.
 
-        for color in self.all_seat_colors():
-            with self.subTest(color=color):
-                self.assertGreaterEqual(theme.contrast_ratio(theme.readable_on(color), color), MIN_LABEL_CONTRAST)
+        This compares plain colours, so it is exact and font-independent. The
+        design target (LABEL_CONTRAST_TARGET) sits well above the 3:1 floor
+        that rendered, antialiased pixels must clear on any platform.
+        """
 
-    def test_start_arrows_stand_out_from_their_start_cells(self) -> None:
-        """Each start square's arrow contrasts with the square it is drawn on."""
+        seats = self.all_seat_colors()
+        fills = seats | {theme.brighten(color, START_CELL_BRIGHTEN) for color in seats}
+        for fill in fills:
+            with self.subTest(fill=fill):
+                label = theme.readable_on(fill)
+                self.assertGreaterEqual(theme.contrast_ratio(label, fill), LABEL_CONTRAST_TARGET)
+                self.assertGreater(LABEL_CONTRAST_TARGET, MIN_LABEL_CONTRAST)
+
+    def test_start_arrows_use_the_readable_colour_of_their_start_cells(self) -> None:
+        """Each start square's arrow is drawn in exactly the readable colour for that square."""
 
         for count in (4, 5, 6):
             surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -361,12 +387,27 @@ class SeatMarkingContrastTests(unittest.TestCase):
             for seat, start in enumerate(renderer.layout.start_indices):
                 with self.subTest(total_players=count, seat=seat):
                     x, y = renderer.display.track_positions[start]
-                    arrow = rgb(surface.get_at((int(x), int(y))))
                     cell = theme.brighten(seat_colors(count)[seat], START_CELL_BRIGHTEN)
-                    self.assertGreaterEqual(theme.contrast_ratio(arrow, cell), MIN_LABEL_CONTRAST)
+                    # The arrow shaft is a plain 3 px line through the square's
+                    # centre, so this pixel is the arrow colour exactly.
+                    self.assertEqual(rgb(surface.get_at((int(x), int(y)))), theme.readable_on(cell))
 
-    def test_pawn_numbers_stand_out_on_every_seat_colour(self) -> None:
-        """A pawn's number contrasts with the pawn's own colour."""
+    def test_pawn_numbers_use_the_readable_colour_of_the_pawn(self) -> None:
+        """draw_token_pin renders each number in readable_on(pawn colour)."""
+
+        for color in self.all_seat_colors():
+            with self.subTest(color=color):
+                recorder = RecordingFont(self.fonts["tiny"])
+                fonts = {"tiny": cast(pygame.font.Font, recorder)}
+                theme.draw_token_pin(pygame.Surface((80, 80)), (40, 36), color, radius=15, label="4", fonts=fonts)
+                self.assertEqual(recorder.colors, [theme.readable_on(color)])
+
+    def test_rendered_pawn_numbers_clear_the_contrast_floor(self) -> None:
+        """Sanity check on real pixels: some ink pixel of each number reaches 3:1.
+
+        Antialiasing thins strokes differently per font, so this only asks for
+        the 3:1 floor while the colours themselves target 4.5:1.
+        """
 
         for color in self.all_seat_colors():
             with self.subTest(color=color):
@@ -380,7 +421,6 @@ class SeatMarkingContrastTests(unittest.TestCase):
                     for y in range(ink.top, ink.bottom)
                 )
                 self.assertGreaterEqual(best, MIN_LABEL_CONTRAST)
-
 
 if __name__ == "__main__":
     unittest.main()
