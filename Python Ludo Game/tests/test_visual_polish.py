@@ -488,6 +488,64 @@ class GameOverLayoutTests(unittest.TestCase):
         self.assertLessEqual(plaque.right, main.PANEL_X)
         self.assertGreaterEqual(plaque.left, 0)
 
+    def drawn_text_boxes(self, app: main.LudoApp, card: pygame.Rect) -> list[pygame.Rect]:
+        """Draw the game-over screen and return the box of every text drawn in ``card``."""
+
+        boxes: list[pygame.Rect] = []
+        real_draw_text = ui.draw_text
+
+        def record(surface, font, text, pos, *args, **kwargs) -> None:
+            """Remember text boxes that start inside ``card``, then draw them."""
+
+            box = pygame.Rect((int(pos[0]), int(pos[1])), font.size(text))
+            if kwargs.get("center"):
+                box.center = (int(pos[0]), int(pos[1]))
+            if card.collidepoint(box.topleft):
+                boxes.append(box)
+            real_draw_text(surface, font, text, pos, *args, **kwargs)
+
+        with mock.patch.object(ui, "draw_text", side_effect=record):
+            app._draw()
+        return boxes
+
+    def test_ranking_and_stats_cards_line_up(self) -> None:
+        """Both game-over cards start at the same height."""
+
+        self.assertEqual(main.OVER_STATS_RECT.top, main.OVER_RANKING_RECT.top)
+
+    def test_stats_card_is_trimmed_to_its_text(self) -> None:
+        """The stats card holds every line with room to spare, and little empty card below."""
+
+        app = self.finished_app()
+        card = main.OVER_STATS_RECT
+        boxes = self.drawn_text_boxes(app, card)
+        self.assertEqual(len(boxes), 6, "expected the title and five stat lines")
+        last_bottom = max(box.bottom for box in boxes)
+        for box in boxes:
+            with self.subTest(box=box):
+                self.assertTrue(card.inflate(-16, -16).contains(box.inflate(0, LINE_HEIGHT_SLACK)))
+        self.assertLessEqual(card.bottom - last_bottom, main.OVER_CARD_PADDING + 3 * LINE_HEIGHT_SLACK + 16)
+
+    def test_ranking_rows_fit_their_card_for_six_players(self) -> None:
+        """Every ranking row of a six-player game fits inside the ranking card."""
+
+        app = self.finished_app()
+        card = main.OVER_RANKING_RECT
+        boxes = self.drawn_text_boxes(app, card)
+        self.assertEqual(len(boxes), 13, "expected the title plus a name and a score per player")
+        for box in boxes:
+            with self.subTest(box=box):
+                self.assertTrue(card.inflate(-16, -16).contains(box.inflate(0, LINE_HEIGHT_SLACK)))
+
+    def test_end_buttons_sit_below_the_stats_card(self) -> None:
+        """New Game and Quit sit under the stats card without touching it."""
+
+        app = self.finished_app()
+        for button in app._buttons_for_screen():
+            with self.subTest(button=button.key):
+                self.assertGreater(button.rect.top, main.OVER_STATS_RECT.bottom)
+                self.assertLessEqual(button.rect.bottom, SCREEN_HEIGHT)
+
     def test_end_buttons_are_centred_under_the_stats_card(self) -> None:
         """New Game and Quit share the stats card's centre line."""
 

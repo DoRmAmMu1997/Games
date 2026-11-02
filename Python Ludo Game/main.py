@@ -147,12 +147,19 @@ PLAY_MOVE_GAP = 8
 # The log's bottom edge lines up with the dice tray and New button (y = 876).
 PLAY_LOG_RECT = pygame.Rect(PLAY_ROSTER_X, 744, PLAY_ROSTER_WIDTH, 132)
 PLAY_LOG_PADDING = 12  # inset of the log's text from the card's left and right edges
-# Game-over screen: the ranking card on the left, the lifetime-stats card on
-# the right, and the New Game / Quit buttons centred beneath the stats card.
-OVER_RANKING_RECT = pygame.Rect(210, 248, 480, 360)
-OVER_STATS_RECT = pygame.Rect(PANEL_X + 14, 60, PANEL_WIDTH + 2, 540)
+# Game-over screen: the ranking card on the left and the lifetime-stats card
+# on the right start at the same height. The stats card is sized to its title
+# and five stat lines (with room for taller fonts), and the New Game / Quit
+# buttons sit centred just beneath it.
+OVER_CARD_TOP = 248
+OVER_CARD_PADDING = 18            # inset of a card's text from its edges
+OVER_RANKING_RECT = pygame.Rect(210, OVER_CARD_TOP, 480, 360)
+OVER_STATS_FIRST_LINE = 70        # first stat line, measured from the card top
+OVER_STATS_LINE_STEP = 42
+OVER_STATS_HEIGHT = 290           # title + five lines + padding, with font slack
+OVER_STATS_RECT = pygame.Rect(PANEL_X + 14, OVER_CARD_TOP, PANEL_WIDTH + 2, OVER_STATS_HEIGHT)
 OVER_BUTTON_SIZE = (220, 44)
-OVER_BUTTON_TOP = 700
+OVER_BUTTON_TOP = OVER_STATS_RECT.bottom + 24
 OVER_BUTTON_STEP = 58
 # The winner's name sits on a plaque in their seat colour under "Game Over",
 # so it reads on the blue wallpaper whatever the seat colour. The plaque's
@@ -1208,10 +1215,11 @@ class LudoApp:
             )
 
         stats = OVER_STATS_RECT
-        # The stats card keeps the old information but uses the same floating
-        # table-card style as the redesigned setup and play screens.
+        # The stats card uses the same floating table-card style as the
+        # redesigned setup and play screens.
         theme.draw_shadowed_rect(self.window, stats, theme.HUD_DARK, border=PANEL_EDGE, radius=14)
-        ui.draw_text(self.window, self.fonts["header"], "Lifetime Stats", (stats.x + 18, stats.y + 18), WHITE)
+        title_pos = (stats.x + OVER_CARD_PADDING, stats.y + OVER_CARD_PADDING)
+        ui.draw_text(self.window, self.fonts["header"], "Lifetime Stats", title_pos, WHITE)
         games = max(1, int(self.stats.get("games", 0)))
         average_turns = int(self.stats.get("turn_total", 0)) / games
         by_count = {**{"4": 0, "5": 0, "6": 0}, **self.stats.get("by_player_count", {})}
@@ -1223,15 +1231,8 @@ class LudoApp:
             f"4P / 5P / 6P: {by_count['4']} / {by_count['5']} / {by_count['6']}",
         ]
         for offset, line in enumerate(lines):
-            ui.draw_text(self.window, self.fonts["body"], line, (stats.x + 18, stats.y + 70 + offset * 42), SOFT)
-        ui.draw_wrapped(
-            self.window,
-            self.fonts["small"],
-            "Captures, exact home rolls, bonus turns, and safe squares "
-            "all used the same engine rules as the live game.",
-            pygame.Rect(stats.x + 18, stats.y + 316, stats.width - 36, 88),
-            SOFT,
-        )
+            y = stats.y + OVER_STATS_FIRST_LINE + offset * OVER_STATS_LINE_STEP
+            ui.draw_text(self.window, self.fonts["body"], line, (stats.x + OVER_CARD_PADDING, y), SOFT)
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
 
