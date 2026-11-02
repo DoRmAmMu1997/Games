@@ -385,9 +385,13 @@ class LudoGame:
         return captured
 
     def _blocked_by_blockade(self, player_index: int, from_steps: int, to_steps: int) -> bool:
-        """Return True if optional blockade rules stop this path."""
+        """Return True if optional blockade rules stop this path.
 
-        if not self.rules.blockades or from_steps < 0:
+        A yard entry (``from_steps`` -1 to 0) checks just the start square,
+        so an opponent pair sitting there keeps the yard shut.
+        """
+
+        if not self.rules.blockades:
             return False
         blocked_indices = self._opponent_blockades(player_index)
         if not blocked_indices:

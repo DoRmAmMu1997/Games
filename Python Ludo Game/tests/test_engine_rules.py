@@ -131,6 +131,25 @@ class EngineRuleTests(unittest.TestCase):
                 self.assertEqual(game.current, 0)
                 self.assertEqual(game.awaiting, "pre_roll")
 
+    def test_blockade_on_the_start_square_stops_yard_entry(self) -> None:
+        """An opponent pair on a player's start square blocks tokens leaving the yard.
+
+        Beginner note: with blockades on, two same-colour tokens on one square
+        form a wall nobody else may pass or land on. Entering the board lands
+        on the start square, so a wall there must keep the yard shut.
+        """
+
+        players = [(f"P{i + 1}", i == 0) for i in range(4)]
+        game = LudoGame(players, LudoRules(total_players=4, blockades=True), seed=11)
+        start = game.layout.start_indices[0]
+        for token in game.players[1].tokens[:2]:
+            token.steps = game.layout.steps_to_reach(1, start)
+
+        self.assertEqual([move for move in game.legal_moves(6) if move.enters_board], [])
+
+        game.players[1].tokens[1].steps = -1
+        self.assertEqual(len([move for move in game.legal_moves(6) if move.enters_board]), 4)
+
     def test_save_load_round_trip_keeps_rule_and_player_state(self) -> None:
         """Saving and restoring should preserve rules and progress."""
 
