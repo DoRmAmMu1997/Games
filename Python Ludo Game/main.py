@@ -71,12 +71,19 @@ PLAY_SAVE_RECT = pygame.Rect(34, 794, 136, 38)
 PLAY_NEW_RECT = pygame.Rect(34, 842, 136, 34)
 PLAY_DICE_TRAY_RECT = pygame.Rect(214, 790, 430, 86)
 PLAY_ROLL_RECT = pygame.Rect(510, 818, 112, 38)
-PLAY_MOVE_START = (690, 566)
-PLAY_MOVE_SIZE = (188, 38)
-PLAY_MOVE_GAP = 8
-PLAY_LOG_RECT = pygame.Rect(674, 742, 206, 132)
+# The right-hand column holds the roster, then the move buttons, then the
+# table log. Nothing here may overlap the board: a full six-player roster
+# ends at y = 90 + 5 * 52 + 40 = 390, so the move buttons start below it.
 PLAY_ROSTER_X = 932
 PLAY_ROSTER_Y = 90
+PLAY_ROSTER_WIDTH = 254
+PLAY_ROSTER_STEP = 52
+PLAY_ROSTER_CHIP_HEIGHT = 40
+PLAY_MOVE_START = (PLAY_ROSTER_X, 410)
+PLAY_MOVE_SIZE = (PLAY_ROSTER_WIDTH, 38)
+PLAY_MOVE_GAP = 8
+# The log's bottom edge lines up with the dice tray and New button (y = 876).
+PLAY_LOG_RECT = pygame.Rect(PLAY_ROSTER_X, 744, PLAY_ROSTER_WIDTH, 132)
 PREVIEW_CENTERS = ((200, 470), (450, 470), (700, 470))
 PREVIEW_SIZE = 216
 
@@ -957,7 +964,9 @@ class LudoApp:
             return
         ui.draw_text(self.window, self.fonts["header"], "Players", (PLAY_ROSTER_X, PLAY_ROSTER_Y - 42), WHITE)
         for index, player in enumerate(self.game.players):
-            rect = pygame.Rect(PLAY_ROSTER_X, PLAY_ROSTER_Y + index * 52, 254, 40)
+            rect = pygame.Rect(
+                PLAY_ROSTER_X, PLAY_ROSTER_Y + index * PLAY_ROSTER_STEP, PLAY_ROSTER_WIDTH, PLAY_ROSTER_CHIP_HEIGHT
+            )
             border = player.color if index == self.game.current else PANEL_EDGE
             theme.draw_shadowed_rect(self.window, rect, theme.HUD_DARK, border=border, radius=12, shadow_offset=(0, 4))
             pygame.draw.circle(self.window, player.color, (rect.x + 22, rect.centery), 12)
@@ -1011,14 +1020,7 @@ class LudoApp:
         elif self.game.current_player.is_human and self.game.awaiting == "choose_move":
             for index, move in enumerate(self.visible_moves[:4]):
                 label = f"{index + 1}: Token {move.token_index + 1} -> {move.to_steps}"
-                y = PLAY_MOVE_START[1] + index * (PLAY_MOVE_SIZE[1] + PLAY_MOVE_GAP)
-                buttons.append(
-                    ui.Button(
-                        pygame.Rect(PLAY_MOVE_START[0], y, PLAY_MOVE_SIZE[0], PLAY_MOVE_SIZE[1]),
-                        label,
-                        f"move_{index}",
-                    )
-                )
+                buttons.append(ui.Button(_move_button_rect(index), label, f"move_{index}"))
         buttons.append(ui.Button(PLAY_SAVE_RECT, "Save", "save_quit"))
         buttons.append(ui.Button(PLAY_NEW_RECT, "New", "new_game"))
         return buttons
@@ -1077,6 +1079,13 @@ class LudoApp:
         )
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
+
+
+def _move_button_rect(index: int) -> pygame.Rect:
+    """Return the play-screen rectangle for move button ``index`` (0 to 3)."""
+
+    y = PLAY_MOVE_START[1] + index * (PLAY_MOVE_SIZE[1] + PLAY_MOVE_GAP)
+    return pygame.Rect(PLAY_MOVE_START[0], y, PLAY_MOVE_SIZE[0], PLAY_MOVE_SIZE[1])
 
 
 def _name_rect(index: int) -> pygame.Rect:

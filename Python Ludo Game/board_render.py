@@ -20,6 +20,11 @@ SQUARE_LEFT = 135
 SQUARE_TOP = 105
 SQUARE_SIZE = SQUARE_CELL * GRID_CELLS
 RADIAL_CENTER = (450.0, 410.0)
+# Player name banners: size, and how far a square-board banner sits beyond
+# the outer edge of its yard (centre to yard edge).
+BANNER_WIDTH = 150
+BANNER_HEIGHT = 28
+SQUARE_BANNER_GAP = 24
 
 
 @dataclass(frozen=True)
@@ -261,12 +266,41 @@ class BoardRenderer:
         self._draw_home_lanes(surface)
         self._draw_center_home(surface, None)
 
+    def banner_rects(self) -> list[pygame.Rect]:
+        """Return every seat's name-banner rectangle, in seat order.
+
+        Square-board banners sit outside the board: above the two top yards
+        and below the two bottom yards, never over track cells. Radial
+        banners sit on each yard's outer edge at the layout's banner anchor.
+        """
+
+        rects: list[pygame.Rect] = []
+        if self.layout.total_players == 4:
+            for yard in _square_home_rects():
+                above = yard.centery < self.display.center[1]
+                label_y = yard.y - SQUARE_BANNER_GAP if above else yard.bottom + SQUARE_BANNER_GAP
+                rect = pygame.Rect(0, 0, BANNER_WIDTH, BANNER_HEIGHT)
+                rect.center = (yard.centerx, label_y)
+                rects.append(rect)
+            return rects
+        for anchor in self.display.banner_anchors:
+            rect = pygame.Rect(0, 0, BANNER_WIDTH, BANNER_HEIGHT)
+            rect.center = _ipoint(anchor)
+            rects.append(rect)
+        return rects
+
+    def _draw_banners(self, surface: pygame.Surface, game, fonts: dict[str, pygame.font.Font]) -> None:
+        """Draw every player's name banner at its ``banner_rects`` slot."""
+
+        for player_index, rect in enumerate(self.banner_rects()):
+            color = self.display.seat_colors[player_index]
+            theme.draw_player_banner(surface, rect, color, game.players[player_index].name[:16], fonts)
+
     def _draw_square_homes(self, surface: pygame.Surface, game, fonts: dict[str, pygame.font.Font]) -> None:
         """Draw the four square yards plus each player's name banner."""
 
         self._draw_square_yards(surface)
-        for player_index, yard in enumerate(_square_home_rects()):
-            self._draw_player_tab(surface, game, fonts, player_index, yard)
+        self._draw_banners(surface, game, fonts)
 
     def _draw_square_yards(self, surface: pygame.Surface) -> None:
         """Draw four large square home yards like a classic Ludo board."""
@@ -284,16 +318,7 @@ class BoardRenderer:
         """Draw the radial yard wedges plus each player's name banner."""
 
         self._draw_radial_yards(surface)
-        for player_index in range(self.layout.total_players):
-            banner = pygame.Rect(0, 0, 150, 28)
-            banner.center = _ipoint(self.display.banner_anchors[player_index])
-            theme.draw_player_banner(
-                surface,
-                banner,
-                self.display.seat_colors[player_index],
-                game.players[player_index].name[:16],
-                fonts,
-            )
+        self._draw_banners(surface, game, fonts)
 
     def _draw_radial_yards(self, surface: pygame.Surface) -> None:
         """Draw the triangular yard wedges between the radial board arms."""
@@ -336,27 +361,6 @@ class BoardRenderer:
             pygame.draw.circle(surface, theme.darken(color, 38), _ipoint(point), 24)
             pygame.draw.circle(surface, WHITE, _ipoint(point), 18)
             pygame.draw.circle(surface, theme.BOARD_EDGE, _ipoint(point), 18, 2)
-
-    def _draw_player_tab(
-        self,
-        surface: pygame.Surface,
-        game,
-        fonts: dict[str, pygame.font.Font],
-        player_index: int,
-        yard: pygame.Rect,
-    ) -> None:
-        """Draw the player's name tag on the outer edge of a square yard.
-
-        Banners live outside the board: above the two top yards and below the
-        two bottom yards, never over track cells.
-        """
-
-        color = self.display.seat_colors[player_index]
-        name = game.players[player_index].name[:16]
-        label_y = yard.y - 24 if yard.centery < self.display.center[1] else yard.bottom + 24
-        rect = pygame.Rect(0, 0, 150, 28)
-        rect.center = (yard.centerx, label_y)
-        theme.draw_player_banner(surface, rect, color, name, fonts)
 
     def _draw_track(self, surface: pygame.Surface) -> None:
         """Draw the shared white track and colored start squares."""
