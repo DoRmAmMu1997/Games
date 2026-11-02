@@ -7,6 +7,7 @@ shared pixel at all.
 
 from __future__ import annotations
 
+import itertools
 import os
 import sys
 import unittest
@@ -597,6 +598,51 @@ class BlendedShadowTests(unittest.TestCase):
         hub = renderer.display.hub_polygon
         lowest = max(hub, key=lambda point: point[1])
         self.assert_blended(surface.get_at((int(lowest[0]), int(lowest[1]) + 4)))
+
+
+class WallpaperGlowTests(unittest.TestCase):
+    """The soft glow behind the board blends over the dice stamps, with no rim."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Build the full-size wallpaper once for the glow checks."""
+
+        pygame.init()
+        cls.wallpaper = theme._build_wallpaper((SCREEN_WIDTH, SCREEN_HEIGHT))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the glow checks."""
+
+        pygame.quit()
+
+    wallpaper: pygame.Surface
+
+    def brightness(self, point: tuple[int, int]) -> float:
+        """Return the perceived brightness of one wallpaper pixel."""
+
+        return luminance(rgb(self.wallpaper.get_at(point)))
+
+    def test_stamps_stay_visible_inside_the_glow(self) -> None:
+        """A stamp's parking dot near the glow's centre is darker than the gap beside it."""
+
+        # The stamp at (540, 440) lies well inside the glow; its first dot is at
+        # (+28, +28), and (530, 430) is open wallpaper just outside the stamp.
+        self.assertGreater(self.brightness((530, 430)) - self.brightness((568, 468)), 8)
+
+    def test_glow_fades_out_without_a_hard_rim(self) -> None:
+        """Walking out through the glow's edge, brightness never jumps between neighbours."""
+
+        centre = pygame.math.Vector2(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+        radius = min(SCREEN_WIDTH, SCREEN_HEIGHT) // 3
+        # At -10 degrees the edge crosses open wallpaper between the stamps.
+        direction = pygame.math.Vector2(1, 0).rotate(-10)
+        samples = []
+        for step in range(radius - 60, radius + 30):
+            point = centre + direction * step
+            samples.append(self.brightness((int(point.x), int(point.y))))
+        jumps = [abs(after - before) for before, after in itertools.pairwise(samples)]
+        self.assertLess(max(jumps), 3, "the glow ends in a visible rim")
 
 
 if __name__ == "__main__":

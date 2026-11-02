@@ -25,6 +25,13 @@ PAWN_SHADOW = (0, 0, 0, 85)  # slightly lighter oval under each pawn
 SHADOW_CACHE_LIMIT = 256
 HUD_DARK = (14, 22, 31)
 HUD_EDGE = (255, 214, 56)
+# The soft light pool behind the board: full strength in the middle, then it
+# fades to nothing over its outer GLOW_FADE share, drawn as rings GLOW_STEP px
+# apart (small steps keep the fade smooth, with no visible rim).
+GLOW_COLOR = (64, 172, 245)
+GLOW_MAX_ALPHA = 55
+GLOW_FADE = 0.45
+GLOW_STEP = 2
 
 _WALLPAPER_CACHE: dict[tuple[int, int], pygame.Surface] = {}
 _SHADOW_CACHE: dict[tuple, pygame.Surface] = {}
@@ -341,9 +348,30 @@ def _build_wallpaper(size: tuple[int, int]) -> pygame.Surface:
         for y in range(-130, height + 180, 190):
             tint = WALLPAPER_TEAL if (x // 240 + y // 190) % 2 else (42, 85, 165)
             _draw_faint_board_stamp(overlay, (x, y), tint)
-    pygame.draw.circle(overlay, (64, 172, 245, 55), (width // 2, height // 2), min(width, height) // 3)
     wallpaper.blit(overlay, (0, 0))
+    # The glow gets its own layer, blitted on top, so it tints the stamps
+    # beneath it instead of replacing them (pygame.draw on an alpha surface
+    # overwrites pixels rather than blending).
+    wallpaper.blit(_build_glow(size), (0, 0))
     return wallpaper
+
+
+def _build_glow(size: tuple[int, int]) -> pygame.Surface:
+    """Return a transparent layer holding the soft round glow behind the board.
+
+    Rings are painted from the outside in, each a touch more opaque, so the
+    glow is strongest in the middle and fades smoothly to nothing at its edge.
+    """
+
+    width, height = size
+    layer = pygame.Surface(size, pygame.SRCALPHA)
+    radius = min(width, height) // 3
+    fade = max(1.0, radius * GLOW_FADE)
+    for ring in range(radius, 0, -GLOW_STEP):
+        amount = min(1.0, (radius - ring) / fade)
+        eased = amount * amount * (3 - 2 * amount)  # smoothstep: no kink at either end
+        pygame.draw.circle(layer, (*GLOW_COLOR, round(GLOW_MAX_ALPHA * eased)), (width // 2, height // 2), ring)
+    return layer
 
 
 def _draw_faint_board_stamp(surface: pygame.Surface, pos: tuple[int, int], color: tuple[int, int, int]) -> None:
