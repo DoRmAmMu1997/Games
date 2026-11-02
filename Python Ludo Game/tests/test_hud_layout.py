@@ -22,6 +22,7 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import main
+import ui
 from board_render import BoardRenderer, DisplayCell
 from game import LudoGame, LudoRules
 
@@ -147,6 +148,97 @@ class HudLayoutTests(unittest.TestCase):
                 self.assertEqual(app.screen, "setup")
             finally:
                 app.running = False
+
+
+
+class HudTextFitTests(unittest.TestCase):
+    """HUD text is measured in rendered pixels, so it always fits its box."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the text-fit checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the text-fit checks."""
+
+        pygame.quit()
+
+    def setUp(self) -> None:
+        """Create an app with a game in progress for each test."""
+
+        self.app = main.LudoApp()
+        self.addCleanup(setattr, self.app, "running", False)
+        self.game = make_game(4)
+        self.app.start_game(self.game)
+
+    def test_prompt_box_holds_two_wrapped_lines_inside_the_tray(self) -> None:
+        """Every turn prompt wraps into lines that fit the prompt box, which sits in the tray."""
+
+        rect = main.PLAY_PROMPT_RECT
+        font = self.app.fonts["small"]
+        self.assertGreaterEqual(rect.height, 40)
+        self.assertTrue(main.PLAY_DICE_TRAY_RECT.contains(rect), "prompt box leaks out of the dice tray")
+        states = (("pre_roll", True), ("choose_move", True), ("pre_roll", False))
+        for awaiting, human in states:
+            with self.subTest(awaiting=awaiting, human=human):
+                self.game.awaiting = awaiting
+                self.game.players[0].is_human = human
+                lines = ui.wrap_lines(font, self.app._turn_prompt(), rect.width)
+                height = len(lines) * font.get_height() + (len(lines) - 1) * main.PLAY_PROMPT_LINE_GAP
+                self.assertLessEqual(height, rect.height, f"{lines} do not fit {rect}")
+
+    def test_long_log_lines_are_ellipsized_to_the_log_width(self) -> None:
+        """A log line wider than the log card is shortened with an ellipsis, not overflowed."""
+
+        self.game.event_log.append("Player 1 captured AI 2 (Red), AI 3 (Green) and AI 1 (Blue) on one square.")
+        drawn: list[tuple[str, int]] = []
+        real_draw_text = ui.draw_text
+
+        def record(surface, font, text, pos, *args, **kwargs) -> None:
+            """Remember text drawn inside the log card, then draw it for real."""
+
+            if main.PLAY_LOG_RECT.collidepoint(pos):
+                drawn.append((text, font.size(text)[0] + int(pos[0])))
+            real_draw_text(surface, font, text, pos, *args, **kwargs)
+
+        with mock.patch.object(ui, "draw_text", side_effect=record):
+            self.app._draw_world_hud()
+
+        self.assertTrue(any(text.endswith("...") for text, _right in drawn), drawn)
+        for text, right in drawn:
+            with self.subTest(text=text):
+                self.assertLessEqual(right, main.PLAY_LOG_RECT.right - main.PLAY_LOG_PADDING)
+
+    def test_ellipsize_keeps_short_text_and_trims_long_text(self) -> None:
+        """Short text passes through unchanged; long text ends in "..." within the width."""
+
+        font = self.app.fonts["tiny"]
+        self.assertEqual(ui.ellipsize(font, "Short line", 200), "Short line")
+        trimmed = ui.ellipsize(font, "A very long log line that cannot possibly fit", 120)
+        self.assertTrue(trimmed.endswith("..."))
+        self.assertLessEqual(font.size(trimmed)[0], 120)
+
+    def test_typing_a_name_stops_at_the_field_pixel_width(self) -> None:
+        """Wide letters are refused once the rendered name would overflow its field."""
+
+        self.app.screen = "setup"
+        self.app.active_field = 0
+        self.app.name_fields[0] = ""
+        for _ in range(40):
+            self.app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_w, unicode="W", mod=0))
+
+        name = self.app.name_fields[0]
+        self.assertLess(len(name), 40, "no keystroke was ever rejected")
+        width = self.app.fonts["body"].size(name)[0]
+        self.assertLessEqual(width, main.SETUP_CONTROL_WIDTH - 2 * main.SETUP_NAME_TEXT_PADDING)
+        self.assertGreater(
+            self.app.fonts["body"].size(name + "W")[0],
+            main.SETUP_CONTROL_WIDTH - 2 * main.SETUP_NAME_TEXT_PADDING,
+            "a keystroke that still fitted was rejected",
+        )
 
 
 if __name__ == "__main__":

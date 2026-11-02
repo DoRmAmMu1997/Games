@@ -99,14 +99,29 @@ def draw_wrapped(
 
     This helper is intentionally small and predictable. It is good enough for
     short UI prompts and avoids pulling in a larger text layout dependency.
+    Lines that would spill below ``rect`` are not drawn.
     """
 
-    words = text.split()
+    y = rect.y
+    for line in wrap_lines(font, text, rect.width):
+        if y + font.get_height() > rect.bottom:
+            break
+        draw_text(surface, font, line, (rect.x, y), color)
+        y += font.get_height() + line_gap
+
+
+def wrap_lines(font: pygame.font.Font, text: str, width: int) -> list[str]:
+    """Split ``text`` into word-wrapped lines no wider than ``width`` pixels.
+
+    A single word wider than ``width`` still gets its own line, because there
+    is nowhere better to break it.
+    """
+
     lines: list[str] = []
     current = ""
-    for word in words:
+    for word in text.split():
         candidate = word if not current else f"{current} {word}"
-        if font.size(candidate)[0] <= rect.width:
+        if font.size(candidate)[0] <= width:
             current = candidate
         else:
             # Once adding the next word would overflow, commit the line we
@@ -116,13 +131,23 @@ def draw_wrapped(
             current = word
     if current:
         lines.append(current)
+    return lines
 
-    y = rect.y
-    for line in lines:
-        if y + font.get_height() > rect.bottom:
-            break
-        draw_text(surface, font, line, (rect.x, y), color)
-        y += font.get_height() + line_gap
+
+def ellipsize(font: pygame.font.Font, text: str, max_width: int) -> str:
+    """Return ``text``, shortened with "..." if needed, so it renders within ``max_width``.
+
+    Beginner note: characters have different widths ("W" is much wider than
+    "i"), so cutting a string to a fixed number of characters cannot promise
+    it fits. Measuring with ``font.size`` can.
+    """
+
+    if font.size(text)[0] <= max_width:
+        return text
+    ellipsis = "..."
+    while text and font.size(text + ellipsis)[0] > max_width:
+        text = text[:-1]
+    return text.rstrip() + ellipsis
 
 
 def status_color(text: str) -> tuple[int, int, int]:

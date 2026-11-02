@@ -57,6 +57,9 @@ SETUP_OPTION_BUTTON_WIDTH = 46
 SETUP_NAME_HEADER_Y = 570
 SETUP_NAME_START_Y = 608
 SETUP_NAME_FIELD_HEIGHT = 30
+# Name text is inset this far from each side of its field; typing stops once
+# the rendered name would cross the inset on the right.
+SETUP_NAME_TEXT_PADDING = 10
 SETUP_NAME_FIELD_STEP = 35
 SETUP_NAME_SECTION_BOTTOM = (
     SETUP_NAME_START_Y + (MAX_PLAYERS - 1) * SETUP_NAME_FIELD_STEP + SETUP_NAME_FIELD_HEIGHT
@@ -71,6 +74,10 @@ PLAY_SAVE_RECT = pygame.Rect(34, 794, 136, 38)
 PLAY_NEW_RECT = pygame.Rect(34, 842, 136, 34)
 PLAY_DICE_TRAY_RECT = pygame.Rect(214, 790, 430, 86)
 PLAY_ROLL_RECT = pygame.Rect(510, 818, 112, 38)
+# The turn prompt sits under the tray's player banner. 44 px holds two wrapped
+# lines of the small font (two 21 px Windows Arial lines plus the 2 px gap).
+PLAY_PROMPT_RECT = pygame.Rect(PLAY_DICE_TRAY_RECT.x + 104, PLAY_DICE_TRAY_RECT.y + 42, 300, 44)
+PLAY_PROMPT_LINE_GAP = 2
 # The right-hand column holds the roster, then the move buttons, then the
 # table log. Nothing here may overlap the board: a full six-player roster
 # ends at y = 90 + 5 * 52 + 40 = 390, so the move buttons start below it.
@@ -84,6 +91,7 @@ PLAY_MOVE_SIZE = (PLAY_ROSTER_WIDTH, 38)
 PLAY_MOVE_GAP = 8
 # The log's bottom edge lines up with the dice tray and New button (y = 876).
 PLAY_LOG_RECT = pygame.Rect(PLAY_ROSTER_X, 744, PLAY_ROSTER_WIDTH, 132)
+PLAY_LOG_PADDING = 12  # inset of the log's text from the card's left and right edges
 PREVIEW_CENTERS = ((200, 470), (450, 470), (700, 470))
 PREVIEW_SIZE = 216
 
@@ -520,8 +528,12 @@ class LudoApp:
             self.name_fields[index] = self.name_fields[index][:-1]
         elif event.key in (pygame.K_RETURN, pygame.K_TAB):
             self.active_field = (index + 1) % max(1, self.human_count)
-        elif event.unicode and event.unicode.isprintable() and len(self.name_fields[index]) < 18:
-            self.name_fields[index] += event.unicode
+        elif event.unicode and event.unicode.isprintable():
+            # Measure the rendered name, not its length: ten "W"s are far
+            # wider than ten "i"s, and only pixels decide whether it fits.
+            candidate = self.name_fields[index] + event.unicode
+            if self.fonts["body"].size(candidate)[0] <= SETUP_CONTROL_WIDTH - 2 * SETUP_NAME_TEXT_PADDING:
+                self.name_fields[index] = candidate
 
     def _on_button(self, key: str) -> None:
         """Dispatch a clicked button key to the active screen."""
@@ -852,7 +864,8 @@ class LudoApp:
             color = seat_colors(self.total_players)[index]
             pygame.draw.rect(self.window, PANEL_CARD, rect, border_radius=6)
             pygame.draw.rect(self.window, color if self.active_field == index else PANEL_EDGE, rect, 2, border_radius=6)
-            ui.draw_text(self.window, self.fonts["body"], self.name_fields[index], (rect.x + 10, rect.y + 4), WHITE)
+            text_pos = (rect.x + SETUP_NAME_TEXT_PADDING, rect.y + 4)
+            ui.draw_text(self.window, self.fonts["body"], self.name_fields[index], text_pos, WHITE)
 
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
@@ -934,28 +947,35 @@ class LudoApp:
         banner = pygame.Rect(tray.x + 104, tray.y + 12, 180, 28)
         theme.draw_player_banner(self.window, banner, current.color, current.name[:18], self.fonts)
 
-        if current.is_human and self.game.awaiting == "choose_move":
-            prompt = "Pick a highlighted token or use a move button."
-        elif current.is_human:
-            prompt = "Roll the die."
-        else:
-            prompt = "AI is thinking..."
         ui.draw_wrapped(
             self.window,
             self.fonts["small"],
-            prompt,
-            pygame.Rect(tray.x + 104, tray.y + 46, 300, 34),
+            self._turn_prompt(),
+            PLAY_PROMPT_RECT,
             WHITE,
+            line_gap=PLAY_PROMPT_LINE_GAP,
         )
 
         self._draw_player_roster()
         log_panel = PLAY_LOG_RECT
+        text_x = log_panel.x + PLAY_LOG_PADDING
+        text_width = log_panel.width - 2 * PLAY_LOG_PADDING
         theme.draw_shadowed_rect(self.window, log_panel, theme.HUD_DARK, border=PANEL_EDGE, radius=12)
-        ui.draw_text(self.window, self.fonts["small"], "Table Log", (log_panel.x + 12, log_panel.y + 10), WHITE)
+        ui.draw_text(self.window, self.fonts["small"], "Table Log", (text_x, log_panel.y + 10), WHITE)
         y = log_panel.y + 38
         for line in self.game.event_log[-4:]:
-            ui.draw_text(self.window, self.fonts["tiny"], line[:36], (log_panel.x + 12, y), ui.status_color(line))
+            text = ui.ellipsize(self.fonts["tiny"], line, text_width)
+            ui.draw_text(self.window, self.fonts["tiny"], text, (text_x, y), ui.status_color(line))
             y += 22
+
+    def _turn_prompt(self) -> str:
+        """Return the one-line instruction shown under the tray's player banner."""
+
+        if self.game is None or not self.game.current_player.is_human:
+            return "AI is thinking..."
+        if self.game.awaiting == "choose_move":
+            return "Pick a highlighted token or use a move button."
+        return "Roll the die."
 
     def _draw_player_roster(self) -> None:
         """Draw compact floating player chips instead of a heavy sidebar."""
