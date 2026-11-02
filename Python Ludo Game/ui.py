@@ -15,6 +15,8 @@ from settings import (
     PANEL_CARD,
     PANEL_EDGE,
     SOFT,
+    STEPPER_SYMBOL_HALF,
+    STEPPER_SYMBOL_THICKNESS,
     SUCCESS,
     WHITE,
 )
@@ -56,7 +58,42 @@ class Button:
             fill, border, color = PANEL_CARD, PANEL_EDGE, WHITE
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
         pygame.draw.rect(surface, border, self.rect, 2, border_radius=8)
-        draw_text(surface, fonts["button"], self.text, self.rect.center, color, center=True)
+        if self.text in STEPPER_SYMBOLS:
+            draw_stepper_symbol(surface, self.text, self.rect.center, color)
+        else:
+            draw_text(surface, fonts["button"], self.text, self.rect.center, color, center=True)
+
+
+# Button labels drawn as shapes by draw_stepper_symbol instead of as text.
+STEPPER_SYMBOLS = frozenset({"-", "+", "<", ">"})
+
+
+def draw_stepper_symbol(
+    surface: pygame.Surface,
+    symbol: str,
+    center: tuple[int, int],
+    color: tuple[int, int, int],
+) -> None:
+    """Draw a stepper's -, +, < or > as a shape centred exactly on ``center``.
+
+    Beginner note: a font glyph such as "+" sits wherever the font designer
+    put it inside its line box, so centring the text box does not centre the
+    symbol. Plain bars and triangles have no such offset, and their size
+    does not depend on the installed font.
+    """
+
+    cx, cy = center
+    half = STEPPER_SYMBOL_HALF
+    thick = STEPPER_SYMBOL_THICKNESS
+    if symbol in ("-", "+"):
+        pygame.draw.rect(surface, color, (cx - half, cy - thick // 2, 2 * half, thick))
+    if symbol == "+":
+        pygame.draw.rect(surface, color, (cx - thick // 2, cy - half, thick, 2 * half))
+    if symbol in ("<", ">"):
+        # A play-style triangle three quarters as wide as it is tall.
+        reach = half * 3 // 4
+        back, tip = (cx - reach, cx + reach - 1) if symbol == ">" else (cx + reach - 1, cx - reach)
+        pygame.draw.polygon(surface, color, [(back, cy - half), (tip, cy), (back, cy + half - 1)])
 
 
 def make_fonts() -> dict[str, pygame.font.Font]:

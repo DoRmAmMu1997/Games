@@ -842,5 +842,47 @@ class AntialiasedCircleTests(unittest.TestCase):
         self.assertTrue(self.edge_has_blend(surface, (50, 50), YARD_SLOT_RADIUS, ring, color))
 
 
+class StepperSymbolTests(unittest.TestCase):
+    """Setup stepper symbols (-, +, <, >) are large and centred in their buttons."""
+
+    fonts: dict[str, pygame.font.Font]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame and the app fonts once for the stepper checks."""
+
+        pygame.init()
+        cls.fonts = ui.make_fonts()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the stepper checks."""
+
+        pygame.quit()
+
+    def test_stepper_symbols_are_large_and_centred(self) -> None:
+        """Each symbol's ink spans at least 14 px and sits within 1 px of the button centre."""
+
+        for symbol in ("-", "+", "<", ">"):
+            with self.subTest(symbol=symbol):
+                surface = pygame.Surface((120, 80))
+                rect = pygame.Rect(30, 20, 46, 38)
+                ui.Button(rect, symbol, "stepper").draw(surface, self.fonts, (0, 0))
+                fill = luminance(rgb(surface.get_at((rect.x + 5, rect.y + 5))))
+                threshold = (fill + luminance(WHITE)) / 2
+                ink = [
+                    (x, y)
+                    for x in range(rect.x + 3, rect.right - 3)
+                    for y in range(rect.y + 3, rect.bottom - 3)
+                    if luminance(rgb(surface.get_at((x, y)))) > threshold
+                ]
+                xs = [x for x, _ in ink]
+                ys = [y for _, y in ink]
+                width, height = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+                self.assertGreaterEqual(max(width, height), 14, f"{symbol} is only {width}x{height} px")
+                self.assertLessEqual(abs((min(xs) + max(xs) + 1) / 2 - rect.centerx), 1.0)
+                self.assertLessEqual(abs((min(ys) + max(ys) + 1) / 2 - rect.centery), 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

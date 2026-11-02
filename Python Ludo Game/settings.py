@@ -93,6 +93,10 @@ LABEL_LIGHT = (255, 255, 255)
 LABEL_DARK = (0, 0, 0)
 LABEL_CONTRAST_TARGET = 4.5
 MIN_LABEL_CONTRAST = 3.0
+# Setup stepper buttons draw their -, +, <, > as shapes rather than font
+# glyphs, so they are large and exactly centred whatever font is installed.
+STEPPER_SYMBOL_HALF = 8        # half the symbol's span: symbols are 16 px across
+STEPPER_SYMBOL_THICKNESS = 4   # stroke width of the - and + bars
 DISABLED = (88, 98, 102)        # muted grey for a disabled button's border and label
 DISABLED_FILL = (26, 32, 36)    # darker than PANEL_CARD, so a disabled button reads as "off"
 
