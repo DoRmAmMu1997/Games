@@ -88,5 +88,46 @@ class BannerPlacementTests(unittest.TestCase):
                 self.assertFalse(shadowed.colliderect(main.PLAY_DICE_TRAY_RECT), f"{shadowed} touches the tray")
 
 
+class SetupPanelTests(unittest.TestCase):
+    """The setup column fits inside its dark panel even with six human names."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the setup-panel checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the setup-panel checks."""
+
+        pygame.quit()
+
+    def test_six_human_setup_fits_inside_the_panel(self) -> None:
+        """Every setup button and name field sits at least 8 px inside the panel."""
+
+        app = main.LudoApp(persist=False)
+        self.addCleanup(setattr, app, "running", False)
+        app.total_players = 6
+        app.human_count = 6
+        inner = main.SETUP_PANEL_RECT.inflate(-16, -16)
+        rects = [(button.key, button.rect) for button in app.setup_buttons()]
+        rects += [(f"name {index + 1}", main._name_rect(index)) for index in range(6)]
+        for name, rect in rects:
+            with self.subTest(control=name):
+                self.assertTrue(inner.contains(rect), f"{name} {rect} leaves the panel {inner}")
+
+    def test_section_headers_do_not_touch_the_controls_below_them(self) -> None:
+        """The "Advanced Rules" and "Human Names" headers end above their first control."""
+
+        app = main.LudoApp(persist=False)
+        self.addCleanup(setattr, app, "running", False)
+        header_height = app.fonts["header"].get_height()
+        buttons = {button.key: button.rect for button in app.setup_buttons()}
+        self.assertLessEqual(main.SETUP_RULES_HEADER_Y + header_height, buttons["toggle_blockades"].y)
+        self.assertLessEqual(buttons["toggle_three_sixes"].bottom, main.SETUP_NAME_HEADER_Y)
+        self.assertLessEqual(main.SETUP_NAME_HEADER_Y + header_height, main._name_rect(0).y)
+
+
 if __name__ == "__main__":
     unittest.main()

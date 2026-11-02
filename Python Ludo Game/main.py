@@ -67,13 +67,22 @@ SETUP_OPTION_STEP = 78
 SETUP_OPTION_CONTROL_OFFSET_Y = 32
 SETUP_OPTION_CONTROL_HEIGHT = 38
 SETUP_OPTION_BUTTON_WIDTH = 46
-SETUP_NAME_HEADER_Y = 570
-SETUP_NAME_START_Y = 608
+# The dark setup panel on the right; every setup control must fit inside it.
+SETUP_PANEL_RECT = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 30, SCREEN_HEIGHT).inflate(-14, -18)
+# Rows below the option steppers. Six human names plus Resume and Start must
+# still fit inside SETUP_PANEL_RECT, so the toggle and name rows are packed
+# with small gaps (6 px between toggles, 3 px between name fields).
+SETUP_RULES_HEADER_Y = 354
+SETUP_TOGGLE_START_Y = 386
+SETUP_TOGGLE_STEP = 42
+SETUP_TOGGLE_HEIGHT = 36
+SETUP_NAME_HEADER_Y = 556
+SETUP_NAME_START_Y = 592
 SETUP_NAME_FIELD_HEIGHT = 30
 # Name text is inset this far from each side of its field; typing stops once
 # the rendered name would cross the inset on the right.
 SETUP_NAME_TEXT_PADDING = 10
-SETUP_NAME_FIELD_STEP = 35
+SETUP_NAME_FIELD_STEP = 33
 SETUP_NAME_SECTION_BOTTOM = (
     SETUP_NAME_START_Y + (MAX_PLAYERS - 1) * SETUP_NAME_FIELD_STEP + SETUP_NAME_FIELD_HEIGHT
 )
@@ -407,6 +416,13 @@ class LudoApp:
         human_row = _setup_option_row(1)
         ai_row = _setup_option_row(2)
         x = SETUP_CONTROL_X
+
+        def toggle_rect(index: int) -> pygame.Rect:
+            """Return the rectangle of house-rule toggle ``index`` (0 to 3)."""
+
+            y = SETUP_TOGGLE_START_Y + index * SETUP_TOGGLE_STEP
+            return pygame.Rect(x, y, SETUP_CONTROL_WIDTH, SETUP_TOGGLE_HEIGHT)
+
         return [
             ui.Button(total_row.left_button, "-", "total_players_prev"),
             ui.Button(total_row.right_button, "+", "total_players_next"),
@@ -414,26 +430,10 @@ class LudoApp:
             ui.Button(human_row.right_button, "+", "human_count_next"),
             ui.Button(ai_row.left_button, "<", "ai_profile_prev"),
             ui.Button(ai_row.right_button, ">", "ai_profile_next"),
-            ui.Button(
-                pygame.Rect(x, 390, SETUP_CONTROL_WIDTH, 36),
-                _toggle_label("Blockades", self.rule_blockades),
-                "toggle_blockades",
-            ),
-            ui.Button(
-                pygame.Rect(x, 436, SETUP_CONTROL_WIDTH, 36),
-                _toggle_label("Capture bonus", self.rule_capture_bonus),
-                "toggle_capture_bonus",
-            ),
-            ui.Button(
-                pygame.Rect(x, 482, SETUP_CONTROL_WIDTH, 36),
-                _toggle_label("Home bonus", self.rule_home_bonus),
-                "toggle_home_bonus",
-            ),
-            ui.Button(
-                pygame.Rect(x, 528, SETUP_CONTROL_WIDTH, 36),
-                _toggle_label("Three 6s", self.rule_three_sixes),
-                "toggle_three_sixes",
-            ),
+            ui.Button(toggle_rect(0), _toggle_label("Blockades", self.rule_blockades), "toggle_blockades"),
+            ui.Button(toggle_rect(1), _toggle_label("Capture bonus", self.rule_capture_bonus), "toggle_capture_bonus"),
+            ui.Button(toggle_rect(2), _toggle_label("Home bonus", self.rule_home_bonus), "toggle_home_bonus"),
+            ui.Button(toggle_rect(3), _toggle_label("Three 6s", self.rule_three_sixes), "toggle_three_sixes"),
             ui.Button(
                 pygame.Rect(x, SETUP_START_Y, SETUP_CONTROL_WIDTH, SETUP_ACTION_HEIGHT),
                 "Start Game",
@@ -897,14 +897,14 @@ class LudoApp:
         )
         self._draw_board_previews()
 
-        panel = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 30, SCREEN_HEIGHT)
-        theme.draw_shadowed_rect(self.window, panel.inflate(-14, -18), PANEL_BG, border=PANEL_EDGE, radius=16)
+        theme.draw_shadowed_rect(self.window, SETUP_PANEL_RECT, PANEL_BG, border=PANEL_EDGE, radius=16)
         ui.draw_text(self.window, self.fonts["title"], "Setup", (PANEL_X + 24, 42), WHITE)
         self._setup_value("Total Players", str(self.total_players), 0)
         self._setup_value("Human Players", str(self.human_count), 1)
         self._setup_value("AI Profile", self.ai_profiles[self.ai_profile_index].title(), 2)
 
-        ui.draw_text(self.window, self.fonts["header"], "Advanced Rules", (PANEL_X + 24, 354), WHITE)
+        rules_header = (SETUP_CONTROL_X, SETUP_RULES_HEADER_Y)
+        ui.draw_text(self.window, self.fonts["header"], "Advanced Rules", rules_header, WHITE)
         ui.draw_text(self.window, self.fonts["header"], "Human Names", (SETUP_CONTROL_X, SETUP_NAME_HEADER_Y), WHITE)
         for index in range(self.human_count):
             # Name fields are lightweight hand-drawn rectangles. The active
