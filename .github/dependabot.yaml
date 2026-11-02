@@ -1,0 +1,59 @@
+# Dependabot version updates for the four games.
+#
+# Notes for maintainers (and agents):
+# - requirements-dev.txt (pip, repo root) and .pre-commit-config.yaml
+#   (pre-commit) share one multi-ecosystem group, so a ruff release moves
+#   the `ruff==` pin and the ruff-pre-commit `rev:` in the SAME pull request
+#   (AGENTS.md: bump them together). `patterns: ["*"]` is required for
+#   entries in a multi-ecosystem group and keeps every other dev tool and
+#   hook in that same weekly PR.
+# - Each pygame game pins pygame-ce in its own requirements.txt;
+#   `group-by: dependency-name` bumps all three copies in one PR so they
+#   stay textually consistent. Solitaire is stdlib-only (no manifest).
+# - The game folder names contain spaces: keep them double-quoted.
+# - cooldown waits a week after a release before proposing it (GitHub's
+#   default is 3 days), a cheap guard against compromised fresh releases.
+version: 2
+
+multi-ecosystem-groups:
+  dev-toolchain:
+    schedule:
+      interval: "weekly"
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    patterns: ["*"]
+    multi-ecosystem-group: "dev-toolchain"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    patterns: ["*"]
+    multi-ecosystem-group: "dev-toolchain"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "pip"
+    directories:
+      - "/Python Ludo Game"
+      - "/Python Monopoly Game"
+      - "/Python Sputnika Game"
+    schedule:
+      interval: "weekly"
+    groups:
+      pygame-ce:
+        group-by: dependency-name
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    cooldown:
+      default-days: 7

@@ -9,16 +9,52 @@ import pygame
 
 import visual_theme as theme
 from models import Move
-from settings import GOLD, WHITE, seat_colors
+from settings import (
+    GOLD,
+    HOME_LENGTH,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    STACK_PIN_RADIUS,
+    STACK_SPACING,
+    TOKEN_HIT_RADIUS,
+    TOKEN_PIN_RADIUS,
+    WHITE,
+    seat_colors,
+)
 
 Point = tuple[float, float]
 Color = tuple[int, int, int]
+TokenKey = tuple[int, int]
 GRID_CELLS = 15
 SQUARE_CELL = 42
 SQUARE_LEFT = 135
 SQUARE_TOP = 105
 SQUARE_SIZE = SQUARE_CELL * GRID_CELLS
 RADIAL_CENTER = (450.0, 410.0)
+# Player name banners: size, and how far a square-board banner sits beyond
+# the outer edge of its yard (centre to yard edge).
+BANNER_WIDTH = 150
+BANNER_HEIGHT = 28
+SQUARE_BANNER_GAP = 24
+# Start squares are painted in their seat colour lifted by this much.
+START_CELL_BRIGHTEN = 8
+# Yard parking spots: a ring in the yard colour darkened by YARD_RING_DARKEN,
+# around a white spot with a thin dark edge.
+YARD_SLOT_RADIUS = 24
+YARD_SLOT_INNER_RADIUS = 18
+YARD_SLOT_EDGE_WIDTH = 2
+YARD_RING_DARKEN = 38
+# Move highlights: a white ring around each movable pawn and a gold ring on
+# its landing cell. Each ring band gets a thin dark edge on both sides, because
+# white (and pale gold) on the cream board would otherwise barely show.
+MOVE_RING_RADIUS = 33
+LANDING_RING_RADIUS = 36
+HIGHLIGHT_RING_WIDTH = 4
+HIGHLIGHT_EDGE_WIDTH = 2
+# Radial banners keep at least this many pixels between themselves and their
+# yard, and at least BANNER_SCREEN_MARGIN pixels from the window edge.
+BANNER_GAP = 4
+BANNER_SCREEN_MARGIN = 6
 
 
 @dataclass(frozen=True)
@@ -40,7 +76,7 @@ class RadialSpec:
     yard_half_angle: float   # angular half-width of the yard triangle base
     token_radius: float      # distance to the middle of the 2x2 token cluster
     token_spread: float      # half-spacing between yard token slots
-    banner_radius: float     # distance to the player name banner
+    banner_radius: float     # least distance from the hub to a name banner's centre
 
 
 RADIAL_SPECS: dict[int, RadialSpec] = {
@@ -54,7 +90,9 @@ RADIAL_SPECS: dict[int, RadialSpec] = {
         yard_half_angle=math.radians(22.0),
         token_radius=258.0,
         token_spread=24.0,
-        banner_radius=362.0,
+        # 350 rather than 362 so the bottom banner (and its shadow) clears the
+        # HUD dice tray at y=790.
+        banner_radius=350.0,
     ),
     6: RadialSpec(
         inner_radius=98.0,
@@ -109,10 +147,13 @@ class DisplayLayout:
 class BoardRenderer:
     """Draw the Ludo arena without changing the rules engine.
 
-    ``BoardLayout`` still owns the true token coordinates and click targets.
-    This renderer dresses those coordinates in a brighter board-game style:
-    square homes for four players, triangular homes for five and six players,
-    player tabs, safe stars, arrows, and glossy pawn pins.
+    ``BoardLayout`` owns the authoritative track *indices* (start squares,
+    safe squares, and the lap). This renderer's ``DisplayLayout`` owns every
+    on-screen coordinate: the classic square cross for four players and the
+    radial boards for five and six, with token pins and click targets
+    measured in those same coordinates. It dresses them in a bright
+    board-game style: square or triangular yards, player tabs, safe stars,
+    arrows, and glossy pawn pins.
     """
 
     def __init__(self, layout) -> None:
@@ -142,18 +183,73 @@ class BoardRenderer:
         self._draw_track(surface)
         self._draw_home_lanes(surface)
         self._draw_center_home(surface, game)
-        self._draw_move_highlights(surface, legal_moves)
-        self._draw_tokens(surface, game, fonts, animated_positions)
+        pins = self.token_pins(game, animated_positions)
+        self._draw_move_highlights(surface, legal_moves, pins)
+        self._draw_tokens(surface, game, fonts, pins)
 
-    def move_at_pos(self, pos: tuple[int, int], moves: list[Move]) -> Move | None:
-        """Return the legal move whose token was clicked, if any."""
+    def token_pins(
+        self,
+        game,
+        animated_positions: dict[TokenKey, Point] | None = None,
+    ) -> dict[TokenKey, tuple[Point, int]]:
+        """Return every pawn's drawn ``(centre, radius)``, in drawing order.
 
+        This is the ONLY place that decides where a pawn appears on screen.
+        Pawns whose logical cells round to the same point (any colours, on a
+        safe square, a start square, a lane cell, or the finish) fan out
+        around that point as smaller pins (``STACK_PIN_RADIUS``), so every
+        number stays readable; a lone pawn sits exactly on its cell centre at
+        full size.
+        Drawing, move highlights, and click hit-testing all read these pins,
+        so a click always measures against what the player actually sees.
+
+        ``animated_positions`` holds the shell's in-flight pixel for a pawn
+        that is still hopping; the fan offset is added on top of it.
+        """
+
+        animated_positions = animated_positions or {}
+        cells: dict[tuple[int, int], list[TokenKey]] = {}
+        bases: dict[TokenKey, Point] = {}
+        for player_index, player in enumerate(game.players):
+            for token_index, token in enumerate(player.tokens):
+                key = (player_index, token_index)
+                base = self.position_for(player_index, token.steps, token_index)
+                bases[key] = base
+                cells.setdefault((round(base[0]), round(base[1])), []).append(key)
+
+        pins: dict[TokenKey, tuple[Point, int]] = {}
+        for player_index, player in enumerate(game.players):
+            for token_index in range(len(player.tokens)):
+                key = (player_index, token_index)
+                base = bases[key]
+                occupants = cells[(round(base[0]), round(base[1]))]
+                offset = _stack_offset(occupants.index(key), len(occupants))
+                drawn = animated_positions.get(key, base)
+                radius = TOKEN_PIN_RADIUS if len(occupants) == 1 else STACK_PIN_RADIUS
+                pins[key] = ((drawn[0] + offset[0], drawn[1] + offset[1]), radius)
+        return pins
+
+    def move_at_pos(self, pos: tuple[int, int], moves: list[Move], game) -> Move | None:
+        """Return the legal move whose drawn pawn is nearest the click, if any.
+
+        Every highlighted pawn within ``TOKEN_HIT_RADIUS`` of the click is a
+        candidate and the closest one wins. Taking the first match instead
+        would let a neighbouring pawn steal the click wherever two hit
+        circles overlap, which happens on the tight 6P board.
+        """
+
+        pins = self.token_pins(game)
         px, py = pos
+        candidates: list[tuple[float, Move]] = []
         for move in moves:
-            center = self.position_for(move.player_index, move.from_steps, move.token_index)
-            if math.hypot(px - center[0], py - center[1]) <= self.cell_radius + 18:
-                return move
-        return None
+            center, _radius = pins[(move.player_index, move.token_index)]
+            distance = math.hypot(px - center[0], py - center[1])
+            if distance <= TOKEN_HIT_RADIUS:
+                candidates.append((distance, move))
+        if not candidates:
+            return None
+        # ``min`` keeps the first of equally near candidates, so ties are stable.
+        return min(candidates, key=lambda candidate: candidate[0])[1]
 
     def position_for(self, player_index: int, steps: int, token_index: int = 0) -> Point:
         """Return the rendered coordinate for a token.
@@ -208,12 +304,41 @@ class BoardRenderer:
         self._draw_home_lanes(surface)
         self._draw_center_home(surface, None)
 
+    def banner_rects(self) -> list[pygame.Rect]:
+        """Return every seat's name-banner rectangle, in seat order.
+
+        Square-board banners sit outside the board: above the two top yards
+        and below the two bottom yards, never over track cells. Radial
+        banners sit on each yard's outer edge at the layout's banner anchor.
+        """
+
+        rects: list[pygame.Rect] = []
+        if self.layout.total_players == 4:
+            for yard in _square_home_rects():
+                above = yard.centery < self.display.center[1]
+                label_y = yard.y - SQUARE_BANNER_GAP if above else yard.bottom + SQUARE_BANNER_GAP
+                rect = pygame.Rect(0, 0, BANNER_WIDTH, BANNER_HEIGHT)
+                rect.center = (yard.centerx, label_y)
+                rects.append(rect)
+            return rects
+        for anchor in self.display.banner_anchors:
+            rect = pygame.Rect(0, 0, BANNER_WIDTH, BANNER_HEIGHT)
+            rect.center = _ipoint(anchor)
+            rects.append(rect)
+        return rects
+
+    def _draw_banners(self, surface: pygame.Surface, game, fonts: dict[str, pygame.font.Font]) -> None:
+        """Draw every player's name banner at its ``banner_rects`` slot."""
+
+        for player_index, rect in enumerate(self.banner_rects()):
+            color = self.display.seat_colors[player_index]
+            theme.draw_player_banner(surface, rect, color, game.players[player_index].name[:16], fonts)
+
     def _draw_square_homes(self, surface: pygame.Surface, game, fonts: dict[str, pygame.font.Font]) -> None:
         """Draw the four square yards plus each player's name banner."""
 
         self._draw_square_yards(surface)
-        for player_index, yard in enumerate(_square_home_rects()):
-            self._draw_player_tab(surface, game, fonts, player_index, yard)
+        self._draw_banners(surface, game, fonts)
 
     def _draw_square_yards(self, surface: pygame.Surface) -> None:
         """Draw four large square home yards like a classic Ludo board."""
@@ -231,16 +356,7 @@ class BoardRenderer:
         """Draw the radial yard wedges plus each player's name banner."""
 
         self._draw_radial_yards(surface)
-        for player_index in range(self.layout.total_players):
-            banner = pygame.Rect(0, 0, 150, 28)
-            banner.center = _ipoint(self.display.banner_anchors[player_index])
-            theme.draw_player_banner(
-                surface,
-                banner,
-                self.display.seat_colors[player_index],
-                game.players[player_index].name[:16],
-                fonts,
-            )
+        self._draw_banners(surface, game, fonts)
 
     def _draw_radial_yards(self, surface: pygame.Surface) -> None:
         """Draw the triangular yard wedges between the radial board arms."""
@@ -280,30 +396,11 @@ class BoardRenderer:
         """Paint the empty circular parking spots inside a player's home."""
 
         for point in positions:
-            pygame.draw.circle(surface, theme.darken(color, 38), _ipoint(point), 24)
-            pygame.draw.circle(surface, WHITE, _ipoint(point), 18)
-            pygame.draw.circle(surface, theme.BOARD_EDGE, _ipoint(point), 18, 2)
-
-    def _draw_player_tab(
-        self,
-        surface: pygame.Surface,
-        game,
-        fonts: dict[str, pygame.font.Font],
-        player_index: int,
-        yard: pygame.Rect,
-    ) -> None:
-        """Draw the player's name tag on the outer edge of a square yard.
-
-        Banners live outside the board: above the two top yards and below the
-        two bottom yards, never over track cells.
-        """
-
-        color = self.display.seat_colors[player_index]
-        name = game.players[player_index].name[:16]
-        label_y = yard.y - 24 if yard.centery < self.display.center[1] else yard.bottom + 24
-        rect = pygame.Rect(0, 0, 150, 28)
-        rect.center = (yard.centerx, label_y)
-        theme.draw_player_banner(surface, rect, color, name, fonts)
+            center = _ipoint(point)
+            # Antialiased circles keep the round parking spots smooth-edged.
+            pygame.draw.aacircle(surface, theme.darken(color, YARD_RING_DARKEN), center, YARD_SLOT_RADIUS)
+            pygame.draw.aacircle(surface, WHITE, center, YARD_SLOT_INNER_RADIUS)
+            pygame.draw.aacircle(surface, theme.BOARD_EDGE, center, YARD_SLOT_INNER_RADIUS, YARD_SLOT_EDGE_WIDTH)
 
     def _draw_track(self, surface: pygame.Surface) -> None:
         """Draw the shared white track and colored start squares."""
@@ -313,7 +410,7 @@ class BoardRenderer:
             fill = WHITE
             border = theme.BOARD_EDGE
             if owner is not None:
-                fill = theme.brighten(self.display.seat_colors[owner], 8)
+                fill = theme.brighten(self.display.seat_colors[owner], START_CELL_BRIGHTEN)
             if self.display.track_cells:
                 self._draw_display_cell(surface, self.display.track_cells[index], fill, border)
             else:
@@ -323,15 +420,26 @@ class BoardRenderer:
             if index in self.layout.safe_indices:
                 theme.draw_star(surface, point, 13, theme.BOARD_EDGE, fill=WHITE)
             if owner is not None:
-                self._draw_start_arrow(surface, owner, point)
+                self._draw_start_arrow(surface, owner, point, fill)
 
-    def _draw_start_arrow(self, surface: pygame.Surface, player_index: int, point: tuple[float, float]) -> None:
-        """Draw a colored arrow showing the first movement direction."""
+    def _draw_start_arrow(
+        self,
+        surface: pygame.Surface,
+        player_index: int,
+        point: tuple[float, float],
+        cell_fill: tuple[int, int, int],
+    ) -> None:
+        """Draw an arrow on a start square showing the first movement direction.
+
+        The square itself carries the seat colour, so the arrow uses whichever
+        of white or dark ink stands out on it (``theme.readable_on``); an
+        arrow in the seat's own colour would vanish into its square.
+        """
 
         next_index = (self.layout.start_indices[player_index] + 1) % self.layout.track_length
         next_point = self.display.track_positions[next_index]
         angle = math.atan2(next_point[1] - point[1], next_point[0] - point[0])
-        theme.draw_arrow(surface, point, angle, self.display.seat_colors[player_index], length=22)
+        theme.draw_arrow(surface, point, angle, theme.readable_on(cell_fill), length=22)
 
     def _draw_home_lanes(self, surface: pygame.Surface) -> None:
         """Draw each player's private colored path into the center."""
@@ -380,7 +488,7 @@ class BoardRenderer:
         hub = self.display.hub_polygon
         center = _ipoint(self.display.center)
         shadow = [(x + 0, y + 6) for x, y in (_ipoint(point) for point in hub)]
-        pygame.draw.polygon(surface, theme.SHADOW, shadow)
+        theme.draw_shadow_polygon(surface, shadow)
         for seat in range(self.layout.total_players):
             wedge = [
                 center,
@@ -415,39 +523,32 @@ class BoardRenderer:
         pygame.draw.circle(surface, theme.WALLPAPER_BLUE, (cx, cy), 17)
         pygame.draw.circle(surface, WHITE, (cx, cy), 5)
 
-    def _draw_move_highlights(self, surface: pygame.Surface, moves: list[Move]) -> None:
-        """Ring clickable tokens and their destinations for a human turn."""
+    def _draw_move_highlights(
+        self,
+        surface: pygame.Surface,
+        moves: list[Move],
+        pins: dict[TokenKey, tuple[Point, int]],
+    ) -> None:
+        """Ring clickable pawns (where they are drawn) and their destinations."""
 
         for move in moves:
-            start = self.position_for(move.player_index, move.from_steps, move.token_index)
-            pygame.draw.circle(surface, WHITE, _ipoint(start), self.cell_radius + 18, 4)
+            start, _radius = pins[(move.player_index, move.token_index)]
+            _draw_edged_ring(surface, start, MOVE_RING_RADIUS, WHITE)
             landing = self.position_for(move.player_index, move.to_steps, move.token_index)
-            pygame.draw.circle(surface, GOLD, _ipoint(landing), self.cell_radius + 21, 4)
+            _draw_edged_ring(surface, landing, LANDING_RING_RADIUS, GOLD)
 
     def _draw_tokens(
         self,
         surface: pygame.Surface,
         game,
         fonts: dict[str, pygame.font.Font],
-        animated_positions: dict[tuple[int, int], tuple[float, float]],
+        pins: dict[TokenKey, tuple[Point, int]],
     ) -> None:
-        """Draw all player pawns as glossy pin-shaped tokens."""
+        """Draw all player pawns as glossy pin-shaped tokens at their pins."""
 
-        stack_offsets: dict[tuple[int, int], int] = {}
-        for player_index, player in enumerate(game.players):
-            for token_index, token in enumerate(player.tokens):
-                base = animated_positions.get(
-                    (player_index, token_index),
-                    self.position_for(player_index, token.steps, token_index),
-                )
-                track_index = self.layout.track_index(player_index, token.steps)
-                offset = (0, 0)
-                if track_index is not None:
-                    count = stack_offsets.get((player_index, track_index), 0)
-                    stack_offsets[(player_index, track_index)] = count + 1
-                    offset = ((count % 2) * 12 - 6, (count // 2) * 12 - 6)
-                center = (base[0] + offset[0], base[1] + offset[1])
-                theme.draw_token_pin(surface, center, player.color, radius=15, label=str(token_index + 1), fonts=fonts)
+        for (player_index, token_index), (center, radius) in pins.items():
+            color = game.players[player_index].color
+            theme.draw_token_pin(surface, center, color, radius=radius, label=str(token_index + 1), fonts=fonts)
 
 
 def _display_layout_for(layout) -> DisplayLayout:
@@ -464,7 +565,9 @@ def _display_layout_for(layout) -> DisplayLayout:
 # arm's left column, west along the west arm's bottom row, then up the west
 # tip. Rotating this template 90 degrees clockwise per seat builds the full
 # 52-cell loop, which keeps every seat's start square, home column, and yard
-# aligned by construction.
+# aligned by construction. A seat's own 51-cell lap stops one cell short of
+# the loop: its last shared cell is the tip cell straight below its home
+# column, e.g. (7, 14) for seat 0, and it never visits the corner (6, 14).
 SQUARE_QUARTER_TRACK: tuple[tuple[int, int], ...] = (
     (6, 13), (6, 12), (6, 11), (6, 10), (6, 9),
     (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8),
@@ -536,15 +639,18 @@ def _radial_display_layout(layout) -> DisplayLayout:
       arrives near the hub, runs OUT along the lane away from its owner's
       yard, crosses the tip cell, and runs back IN along the lane beside the
       owner's yard, so the overall loop is clockwise.
-    - The start cell is the inbound lane's outermost cell, right beside the
-      seat's own yard, and the loop-end (the tip) hands over orthogonally to
-      the home column, which marches inward and finishes at the hub.
+    - The start cell is the inbound lane's second cell, right beside the
+      seat's own yard, exactly like the square board's start square. The
+      inbound lane's outermost cell is the corner a seat's own lap skips.
+    - A lap ends on the arm tip, directly above the home column's first
+      cell, so the token hops straight in; the column then marches inward
+      and finishes at the hub.
     """
 
     total = layout.total_players
     spec = RADIAL_SPECS[total]
     center = RADIAL_CENTER
-    home_length = len(layout.home_lanes[0])
+    home_length = HOME_LENGTH
 
     path_cells: list[DisplayCell] = []
     home_lane_cells: list[tuple[DisplayCell, ...]] = []
@@ -597,10 +703,12 @@ def _radial_display_layout(layout) -> DisplayLayout:
         yard_positions.append(_radial_yard_slots(center, yard_angle, spec))
         banner_anchors.append(_radial_banner_anchor(center, yard_angle, spec))
 
-    # Rotate the concatenated arm path so index 0 is seat 0's start cell (the
-    # inbound lane's outermost cell). Engine start indices are 13 * seat, and
-    # the same rotation aligns every other seat by symmetry.
-    entry_offset = home_length + 1
+    # Rotate the concatenated arm path so index 0 is seat 0's start cell: the
+    # inbound lane's second cell (past the outbound lane and the tip, plus
+    # the skipped corner). The lap's last cell is then the arm tip above
+    # lane[0]. Engine start indices are 13 * seat, and the same rotation
+    # aligns every other seat by symmetry.
+    entry_offset = home_length + 2
     track_cells = path_cells[entry_offset:] + path_cells[:entry_offset]
 
     hub_polygon = tuple(
@@ -689,11 +797,34 @@ def _radial_yard_slots(center: Point, yard_angle: float, spec: RadialSpec) -> tu
 
 
 def _radial_banner_anchor(center: Point, yard_angle: float, spec: RadialSpec) -> Point:
-    """Return the name-banner center on the outer edge of one yard."""
+    """Return the name-banner centre just beyond the outer edge of one yard.
 
-    x, y = _polar(center, yard_angle, spec.banner_radius)
-    # Keep the whole 150x28 banner on the logical canvas with a small margin.
-    return (max(92.0, min(1188.0, x)), max(28.0, min(872.0, y)))
+    The yard triangle's flat outer edge lies ``yard_base_radius * cos(half
+    angle)`` from the hub along the yard's direction. The banner centre is
+    pushed past that edge by the banner's own reach along the same direction
+    (half-width times |cos| plus half-height times |sin|) plus ``BANNER_GAP``.
+
+    Beginner note: a wide, short banner reaches much further sideways than
+    up or down, so a banner beside a side yard must sit further out than one
+    below the bottom yard. Measuring the reach along the yard direction
+    handles every angle with one formula. ``banner_radius`` is a floor that
+    keeps short reaches from hugging the yard. Finally the whole banner is
+    clamped onto the canvas.
+    """
+
+    direction = _unit(yard_angle)
+    half_width = BANNER_WIDTH / 2
+    half_height = BANNER_HEIGHT / 2
+    reach = half_width * abs(direction[0]) + half_height * abs(direction[1])
+    outer_edge = spec.yard_base_radius * math.cos(spec.yard_half_angle)
+    distance = max(spec.banner_radius, outer_edge + reach + BANNER_GAP)
+    x, y = _polar(center, yard_angle, distance)
+    min_x = half_width + BANNER_SCREEN_MARGIN
+    min_y = half_height + BANNER_SCREEN_MARGIN
+    return (
+        max(min_x, min(SCREEN_WIDTH - min_x, x)),
+        max(min_y, min(SCREEN_HEIGHT - min_y, y)),
+    )
 
 
 def _convex_hull(points: list[Point]) -> list[Point]:
@@ -763,13 +894,6 @@ def _square_center_rect() -> pygame.Rect:
     return pygame.Rect(SQUARE_LEFT + SQUARE_CELL * 6, SQUARE_TOP + SQUARE_CELL * 6, SQUARE_CELL * 3, SQUARE_CELL * 3)
 
 
-def _player_outward(player_index: int, total_players: int) -> Point:
-    """Return the direction from the hub toward one radial player base."""
-
-    angle = -math.pi / 2 + math.tau * player_index / total_players
-    return math.cos(angle), math.sin(angle)
-
-
 def _radial_cell(
     center: Point,
     outward: Point,
@@ -801,6 +925,38 @@ def _offset_point(base: Point, outward: Point, tangent: Point, along: float, acr
         base[0] + outward[0] * along + tangent[0] * across,
         base[1] + outward[1] * along + tangent[1] * across,
     )
+
+
+def _draw_edged_ring(surface: pygame.Surface, center: Point, radius: int, color: Color) -> None:
+    """Draw a highlight ring band of ``color`` with a dark edge on both sides.
+
+    Beginner note: ``pygame.draw.circle`` with a width paints a band inward
+    from ``radius``. Painting a wider dark band first and the coloured band on
+    top leaves ``HIGHLIGHT_EDGE_WIDTH`` pixels of dark edge outside and inside.
+    """
+
+    point = _ipoint(center)
+    edge_width = HIGHLIGHT_RING_WIDTH + 2 * HIGHLIGHT_EDGE_WIDTH
+    pygame.draw.circle(surface, theme.BOARD_EDGE, point, radius + HIGHLIGHT_EDGE_WIDTH, edge_width)
+    pygame.draw.circle(surface, color, point, radius, HIGHLIGHT_RING_WIDTH)
+
+
+def _stack_offset(slot: int, count: int) -> Point:
+    """Return pawn ``slot``'s offset from the centre of a cell shared by ``count`` pawns.
+
+    The pawns sit on the corners of a regular ``count``-sided polygon whose
+    sides are ``STACK_SPACING`` long, so neighbours are always the same
+    distance apart. Beginner note: a regular polygon with side ``s`` and
+    ``k`` corners has corner radius ``s / (2 * sin(pi / k))``. The first
+    corner is turned so the polygon's top edge is flat, which reads like a
+    neat row of pawns. A lone pawn gets no offset at all.
+    """
+
+    if count <= 1:
+        return (0.0, 0.0)
+    radius = STACK_SPACING / (2 * math.sin(math.pi / count))
+    angle = -math.pi / 2 - math.pi / count + math.tau * slot / count
+    return (math.cos(angle) * radius, math.sin(angle) * radius)
 
 
 def _owner_for_start(index: int, start_indices: tuple[int, ...]) -> int | None:

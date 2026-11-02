@@ -15,7 +15,7 @@ auto-solve, undo, and a confetti win celebration along the way.
 
 ## Requirements
 
-- Python 3.11 or newer.
+- Python 3.12 or newer.
 - `tkinter`, which ships with the standard Python installer on Windows and
   macOS. **No `pip` packages are required** — the game uses only the Python
   standard library.
@@ -117,3 +117,7 @@ pyinstaller "Solitaire Game.spec"
 The spec file produces a single-file, windowed executable and bundles the
 window icon. Because the save data lives in `%APPDATA%`, the high score and
 stats persist no matter where the `.exe` is moved.
+
+## License
+
+Part of this repository, released under the MIT License — see [LICENSE](../LICENSE).
