@@ -39,6 +39,7 @@ PIN_RING_WIDTH = 4
 # Font-dependent layouts must pass with spare room, not by a hair: digit ink
 # and line heights shift by a pixel or two between fonts and platforms.
 LABEL_CLEARANCE = 2  # least gap between a pawn number and any later pawn's head
+LINE_HEIGHT_SLACK = 2  # extra height allowed per text line for taller platform fonts
 
 
 def make_game(total_players: int) -> LudoGame:
@@ -643,6 +644,53 @@ class WallpaperGlowTests(unittest.TestCase):
             samples.append(self.brightness((int(point.x), int(point.y))))
         jumps = [abs(after - before) for before, after in itertools.pairwise(samples)]
         self.assertLess(max(jumps), 3, "the glow ends in a visible rim")
+
+
+class SetupIntroTests(unittest.TestCase):
+    """The setup screen's intro sits on a dark plate that holds every line."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the intro checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the intro checks."""
+
+        pygame.quit()
+
+    def setUp(self) -> None:
+        """Draw one setup frame with a non-persisting app."""
+
+        self.app = main.LudoApp(persist=False)
+        self.addCleanup(setattr, self.app, "running", False)
+        self.app._draw()
+
+    def test_intro_text_contrasts_with_its_plate(self) -> None:
+        """The intro colour reaches the 4.5:1 target against the plate actually drawn."""
+
+        plate, _lines = self.app._setup_intro_layout()
+        behind = rgb(self.app.window.get_at((plate.x + 6, plate.centery)))
+        self.assertGreaterEqual(theme.contrast_ratio(main.SETUP_INTRO_COLOR, behind), LABEL_CONTRAST_TARGET)
+
+    def test_plate_holds_every_line_and_clears_the_title_and_previews(self) -> None:
+        """Every wrapped line fits inside the plate, which sits between the title and previews."""
+
+        plate, lines = self.app._setup_intro_layout()
+        font = self.app.fonts["body"]
+        self.assertGreaterEqual(len(lines), 2)
+        for index, line in enumerate(lines):
+            with self.subTest(line=line):
+                box = pygame.Rect(0, 0, *font.size(line))
+                box.centerx = plate.centerx
+                box.y = plate.y + main.SETUP_INTRO_PADDING[1] + index * (font.get_height() + main.SETUP_INTRO_LINE_GAP)
+                self.assertTrue(plate.contains(box), f"{box} spills out of {plate}")
+        title_bottom = main.SETUP_TITLE_CENTER[1] + self.app.fonts["huge"].get_height() // 2
+        self.assertGreater(plate.top, title_bottom)
+        preview_top = min(y for _x, y in main.PREVIEW_CENTERS) - main.PREVIEW_SIZE // 2
+        self.assertLess(plate.bottom + 2 * LINE_HEIGHT_SLACK * len(lines), preview_top)
 
 
 if __name__ == "__main__":

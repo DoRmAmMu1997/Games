@@ -67,6 +67,21 @@ SETUP_OPTION_STEP = 78
 SETUP_OPTION_CONTROL_OFFSET_Y = 32
 SETUP_OPTION_CONTROL_HEIGHT = 38
 SETUP_OPTION_BUTTON_WIDTH = 46
+# Setup title and intro. The intro sits on a see-through dark plate sized to
+# its wrapped lines, so it reads on the bright wallpaper glow, and no line is
+# ever dropped by a fixed-height box.
+SETUP_TITLE_CENTER = (450, 92)
+SETUP_INTRO_TEXT = (
+    "Classic competitive Ludo for 4 to 6 players. "
+    "Choose how many seats are human; the remaining seats use heuristic AI."
+)
+SETUP_INTRO_COLOR = SOFT
+SETUP_INTRO_WIDTH = 560          # widest a wrapped intro line may be
+SETUP_INTRO_TOP = 146            # y of the first intro line
+SETUP_INTRO_LINE_GAP = 4
+SETUP_INTRO_PADDING = (16, 8)    # plate space around the text: horizontal, vertical
+SETUP_INTRO_PLATE_ALPHA = 200    # plate opacity (0-255) over the wallpaper
+SETUP_INTRO_RADIUS = 12
 # The dark setup panel on the right; every setup control must fit inside it.
 SETUP_PANEL_RECT = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 30, SCREEN_HEIGHT).inflate(-14, -18)
 # Each section header ("Advanced Rules", "Human Names") gets room above its
@@ -916,15 +931,14 @@ class LudoApp:
         mouse = self._logical_mouse_pos()
         # The setup screen shares the new wallpaper so the menu feels like the
         # same game as the redesigned board instead of a separate utility page.
-        ui.draw_text(self.window, self.fonts["huge"], "LUDO", (450, 92), WHITE, center=True)
-        ui.draw_wrapped(
-            self.window,
-            self.fonts["body"],
-            "Classic competitive Ludo for 4 to 6 players. "
-            "Choose how many seats are human; the remaining seats use heuristic AI.",
-            pygame.Rect(170, 138, 560, 80),
-            SOFT,
-        )
+        ui.draw_text(self.window, self.fonts["huge"], "LUDO", SETUP_TITLE_CENTER, WHITE, center=True)
+        plate, lines = self._setup_intro_layout()
+        plate_color = (*theme.HUD_DARK, SETUP_INTRO_PLATE_ALPHA)
+        theme.draw_translucent_rect(self.window, plate, SETUP_INTRO_RADIUS, plate_color)
+        font = self.fonts["body"]
+        for index, line in enumerate(lines):
+            y = plate.y + SETUP_INTRO_PADDING[1] + index * (font.get_height() + SETUP_INTRO_LINE_GAP)
+            ui.draw_text(self.window, font, line, (plate.centerx - font.size(line)[0] // 2, y), SETUP_INTRO_COLOR)
         self._draw_board_previews()
 
         theme.draw_shadowed_rect(self.window, SETUP_PANEL_RECT, PANEL_BG, border=PANEL_EDGE, radius=16)
@@ -948,6 +962,22 @@ class LudoApp:
 
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
+
+    def _setup_intro_layout(self) -> tuple[pygame.Rect, list[str]]:
+        """Return the intro plate rect and the wrapped intro lines it holds.
+
+        The plate is measured from this platform's font, so it always fits
+        exactly the lines drawn on it, centred under the title.
+        """
+
+        font = self.fonts["body"]
+        lines = ui.wrap_lines(font, SETUP_INTRO_TEXT, SETUP_INTRO_WIDTH)
+        text_width = max(font.size(line)[0] for line in lines)
+        text_height = len(lines) * font.get_height() + (len(lines) - 1) * SETUP_INTRO_LINE_GAP
+        pad_x, pad_y = SETUP_INTRO_PADDING
+        plate = pygame.Rect(0, 0, text_width + 2 * pad_x, text_height + 2 * pad_y)
+        plate.midtop = (SETUP_TITLE_CENTER[0], SETUP_INTRO_TOP - pad_y)
+        return plate, lines
 
     def _setup_value(self, label: str, value: str, row_index: int) -> None:
         """Draw one setup label plus its centered current value."""

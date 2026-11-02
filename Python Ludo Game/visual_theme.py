@@ -142,6 +142,21 @@ def draw_shadow_rect(
     small transparent layer first and blitting that layer blends it instead.
     """
 
+    draw_translucent_rect(surface, rect, radius, color)
+
+
+def draw_translucent_rect(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    radius: int,
+    color: tuple[int, int, int, int],
+) -> None:
+    """Blend a rounded rectangle of an RGBA ``color`` onto ``surface``.
+
+    Used for shadows and for see-through plates behind text on the wallpaper;
+    see ``draw_shadow_rect`` for why the shape goes through a layer.
+    """
+
     key = ("rect", rect.size, radius, color)
     fresh = key not in _SHADOW_CACHE
     layer = _shadow_layer(key, rect.size)
