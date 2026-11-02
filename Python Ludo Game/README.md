@@ -22,7 +22,7 @@ hopping cell by cell like the popular mobile Ludo apps.
 
 ## Requirements
 
-- Python 3.11 or newer.
+- Python 3.12 or newer.
 - `pygame-ce`.
 
 Install dependencies once with:

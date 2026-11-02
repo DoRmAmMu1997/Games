@@ -23,7 +23,7 @@ thirteen themed boards, auctions, trading, and save & resume.
 
 ## Requirements
 
-- Python 3.11 or newer.
+- Python 3.12 or newer.
 - `pygame-ce`.
 
 Install dependencies once with:

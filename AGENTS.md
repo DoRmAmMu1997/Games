@@ -82,7 +82,7 @@ animation state, and persistence. Keep it that way:
 
 ## 5. Coding conventions
 
-- Python 3.11+; `from __future__ import annotations`; modern typing
+- Python 3.12+; `from __future__ import annotations`; modern typing
   (`X | None`, pep585 builtins). Line length 120 (ruff enforces).
 - **Self-contained games.** Never import across game folders and never
   create a shared package. Small helpers (`_atomic_write`, `_log_error`,
@@ -119,7 +119,7 @@ Install once: `pip install -r requirements-dev.txt` plus
 requirements file provides pygame-ce for all three).
 
 From the repo root, all of these must pass — CI runs exactly this set on
-Python 3.11 and 3.13:
+Python 3.12, 3.13 and 3.14:
 
 ```powershell
 # Headless env for the pygame games (PowerShell syntax)

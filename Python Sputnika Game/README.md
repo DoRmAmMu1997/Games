@@ -24,7 +24,7 @@ Orbital Orchard is a desktop Python puzzle game built with `pygame-ce`. You drop
 
 ## Install
 
-1. Create and activate a Python 3.11+ virtual environment if you want one.
+1. Create and activate a Python 3.12+ virtual environment if you want one.
 2. Install dependencies:
 
 ```bash

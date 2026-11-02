@@ -28,7 +28,7 @@ pip install -r requirements.txt
 python main.py                     # python solitaire.py for the Solitaire game
 ```
 
-Python 3.11 or newer is recommended for all four.
+Python 3.12 or newer is recommended for all four.
 
 ## Tests
 

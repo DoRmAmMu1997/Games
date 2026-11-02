@@ -15,7 +15,7 @@ auto-solve, undo, and a confetti win celebration along the way.
 
 ## Requirements
 
-- Python 3.11 or newer.
+- Python 3.12 or newer.
 - `tkinter`, which ships with the standard Python installer on Windows and
   macOS. **No `pip` packages are required** — the game uses only the Python
   standard library.
