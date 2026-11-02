@@ -113,3 +113,7 @@ All of the easiest balancing knobs live in `settings.py`:
 - `pygame-ce` is the preferred dependency, but the code sticks to the common `pygame` import path.
 - All visuals are generated with pygame drawing primitives at runtime.
 - Audio is generated procedurally; if the mixer is unavailable, the game still runs silently.
+
+## License
+
+Part of this repository, released under the MIT License — see [LICENSE](../LICENSE).

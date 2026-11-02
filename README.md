@@ -82,6 +82,7 @@ when the `.exe` is moved or rebuilt:
 ```
 Games/
 ├── README.md                    -- this file
+├── LICENSE                      -- MIT license
 ├── .gitignore
 ├── Python Sputnika Game/        -- Orbital Orchard (pygame)
 ├── Python Solitaire Game/       -- Klondike Solitaire (tkinter)
@@ -105,3 +106,7 @@ Codex (OpenAI); the original Codex output supplied the playable base, and
 later passes added per-user save persistence, crash-safe atomic writes,
 gameplay and graphics improvements, Monopoly, Ludo, and the EXE-build
 workflow.
+
+## License
+
+Released under the MIT License — see [LICENSE](LICENSE).

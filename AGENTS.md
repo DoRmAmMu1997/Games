@@ -42,6 +42,7 @@ deduplicate across game folders.
 Games/
 ├── AGENTS.md / CLAUDE.md        -- this guide (CLAUDE.md just imports it)
 ├── README.md                    -- player-facing overview
+├── LICENSE                      -- MIT license
 ├── pyproject.toml               -- ruff + mypy + bandit config (repo-wide)
 ├── requirements-dev.txt         -- exact-pinned dev/CI toolchain
 ├── .pre-commit-config.yaml      -- check-only hooks (never rewrite files)

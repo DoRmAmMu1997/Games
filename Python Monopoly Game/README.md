@@ -197,3 +197,10 @@ The computer players are **heuristic**, not optimal. They:
 `cautious`, `standard`, and `sharp` setup profiles tune reserves, bidding
 aggression, blocking pressure, and trade margins without changing the rules
 engine.
+
+## License
+
+Part of this repository, released under the MIT License — see [LICENSE](../LICENSE).
+
+MONOPOLY is a trademark of Hasbro. This is an unofficial fan-made game and is not affiliated
+with, endorsed by, or sponsored by Hasbro.

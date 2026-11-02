@@ -117,3 +117,7 @@ pyinstaller "Solitaire Game.spec"
 The spec file produces a single-file, windowed executable and bundles the
 window icon. Because the save data lives in `%APPDATA%`, the high score and
 stats persist no matter where the `.exe` is moved.
+
+## License
+
+Part of this repository, released under the MIT License — see [LICENSE](../LICENSE).

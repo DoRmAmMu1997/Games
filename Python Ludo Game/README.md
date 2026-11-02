@@ -125,3 +125,7 @@ track cells per player segment and 6 home-lane cells per player -- so the
 rules are identical whichever board shape is on screen. The geometry test
 suite locks the visual layout to those rules: track continuity, clockwise
 movement, and start/yard/home alignment are all asserted per player count.
+
+## License
+
+Part of this repository, released under the MIT License — see [LICENSE](../LICENSE).
