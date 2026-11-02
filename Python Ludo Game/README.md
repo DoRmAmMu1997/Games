@@ -19,6 +19,8 @@ hopping cell by cell like the popular mobile Ludo apps.
 - `simulation.py` - seeded all-AI runs for tuning.
 - `tests/` - engine, AI, board-geometry, save/load, and Pygame smoke coverage.
 - `requirements.txt`, `Ludo Game.spec` - dependency and PyInstaller recipe.
+- `ludo_icon.ico`, `ludo_icon.png` - the `.exe` icon, and the window icon
+  (the 256px image from inside the `.ico`, which pygame cannot decode).
 
 ## Requirements
 

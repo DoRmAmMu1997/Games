@@ -28,6 +28,15 @@ from settings import (
     DICE_ANIM_MS,
     FPS,
     GOLD,
+    ICON_BOARD_COLOR,
+    ICON_BOARD_INSET,
+    ICON_BOARD_RADIUS,
+    ICON_BOARD_SIZE,
+    ICON_DOT_ORIGIN,
+    ICON_DOT_RADIUS,
+    ICON_DOT_SPACING,
+    ICON_FILE,
+    ICON_SIZE,
     INK,
     MAX_PLAYERS,
     MIN_PLAYERS,
@@ -345,7 +354,7 @@ class LudoApp:
         self.window_size = _fit_window_size(_desktop_work_area_size(), _window_chrome_size())
         self.screen_surface = pygame.display.set_mode(self.window_size)
         pygame.display.set_caption(WINDOW_TITLE)
-        pygame.display.set_icon(_make_icon())
+        pygame.display.set_icon(_load_icon())
         self.window = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT)).convert()
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
@@ -1148,21 +1157,39 @@ def _toggle_label(label: str, enabled: bool) -> str:
     return f"{label}: {'On' if enabled else 'Off'}"
 
 
-def _make_icon() -> pygame.Surface:
-    """Create the in-window icon by drawing it.
+def _resource_path(name: str) -> str:
+    """Path to a bundled resource, working from source or a frozen .exe."""
+    base = getattr(sys, "_MEIPASS", None)
+    base_dir = base if base else os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, name)
 
-    ``ludo_icon.ico`` is NOT loaded here: SDL_image cannot decode this file
-    ("Unsupported ICO bitmap format"), so a runtime load would always fail
-    into this function anyway. The .ico is still used, by PyInstaller, for
-    the executable's own file and taskbar icon (see the spec's ``icon=``).
+
+def _load_icon() -> pygame.Surface:
+    """Return the bundled window icon, or the drawn fallback if it cannot load.
+
+    ``ludo_icon.png`` is the 256px image from inside ``ludo_icon.ico``. The
+    .ico itself cannot be loaded here (SDL_image reports "Unsupported ICO
+    bitmap format"); PyInstaller still uses it for the .exe's own file and
+    taskbar icon (see the spec's ``icon=``).
     """
 
-    icon = pygame.Surface((64, 64), pygame.SRCALPHA)
-    pygame.draw.rect(icon, (238, 232, 209), (4, 4, 56, 56), border_radius=12)
-    for index, color in enumerate(seat_colors(4)):
-        x = 22 + (index % 2) * 20
-        y = 22 + (index // 2) * 20
-        pygame.draw.circle(icon, color, (x, y), 9)
+    try:
+        return pygame.image.load(_resource_path(ICON_FILE))
+    except (OSError, pygame.error):
+        return _make_icon()
+
+
+def _make_icon() -> pygame.Surface:
+    """Draw a simple fallback icon: a cream board with one dot per classic seat."""
+
+    icon = pygame.Surface((ICON_SIZE, ICON_SIZE), pygame.SRCALPHA)
+    board = (ICON_BOARD_INSET, ICON_BOARD_INSET, ICON_BOARD_SIZE, ICON_BOARD_SIZE)
+    pygame.draw.rect(icon, ICON_BOARD_COLOR, board, border_radius=ICON_BOARD_RADIUS)
+    # Seat dots sit in a 2x2 grid, in the classic four-player seat order.
+    for index, color in enumerate(seat_colors(MIN_PLAYERS)):
+        x = ICON_DOT_ORIGIN + (index % 2) * ICON_DOT_SPACING
+        y = ICON_DOT_ORIGIN + (index // 2) * ICON_DOT_SPACING
+        pygame.draw.circle(icon, color, (x, y), ICON_DOT_RADIUS)
     return icon
 
 

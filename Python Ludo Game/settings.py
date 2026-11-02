@@ -114,6 +114,23 @@ def seat_name(total_players: int, seat: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Window icon
+# ---------------------------------------------------------------------------
+# The window icon is the 256px PNG taken from ludo_icon.ico (pygame cannot
+# decode the .ico itself). If the PNG ever fails to load, main._make_icon draws
+# a simple stand-in: a cream board square holding one dot per classic seat.
+ICON_FILE = "ludo_icon.png"
+ICON_SIZE = 64                      # fallback icon canvas, in pixels
+ICON_BOARD_INSET = 4                # gap between the canvas edge and the board
+ICON_BOARD_SIZE = 56                # side of the cream board square
+ICON_BOARD_RADIUS = 12              # rounded-corner radius of the board
+ICON_BOARD_COLOR = (238, 232, 209)  # cream, like the real board
+ICON_DOT_ORIGIN = 22                # centre of the top-left seat dot
+ICON_DOT_SPACING = 20               # distance between neighbouring dots
+ICON_DOT_RADIUS = 9                 # radius of each seat dot
+
+
+# ---------------------------------------------------------------------------
 # Save data
 # ---------------------------------------------------------------------------
 def _user_save_dir() -> Path:
