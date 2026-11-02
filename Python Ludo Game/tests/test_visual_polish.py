@@ -426,5 +426,72 @@ class SeatMarkingContrastTests(unittest.TestCase):
                 )
                 self.assertGreaterEqual(best, MIN_LABEL_CONTRAST)
 
+
+class GameOverLayoutTests(unittest.TestCase):
+    """The game-over screen puts the winner on a plaque and centres its buttons."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the game-over checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the game-over checks."""
+
+        pygame.quit()
+
+    def finished_app(self, winner_name: str = "Player 1") -> main.LudoApp:
+        """Return a non-persisting app showing a finished 6P game won by seat 0."""
+
+        app = main.LudoApp(persist=False)
+        self.addCleanup(setattr, app, "running", False)
+        players = [(winner_name, True)] + [(f"AI {seat}", False) for seat in range(1, 6)]
+        game = LudoGame(players, LudoRules(total_players=6), seed=2)
+        for token in game.players[0].tokens:
+            token.steps = game.layout.finish_steps
+        game._finish_game(0)
+        app.start_game(game)
+        app.screen = "over"
+        return app
+
+    def test_winner_name_sits_on_a_plaque_in_the_winner_colour(self) -> None:
+        """Behind the winner text is a plaque filled with the winner's colour, not wallpaper."""
+
+        app = self.finished_app()
+        app._draw()
+        assert app.game is not None
+        winner = app.game.players[0]
+        plaque, text = app._winner_plaque(winner)
+        self.assertEqual(text, "Player 1 wins!")
+        self.assertEqual(rgb(app.window.get_at((plaque.x + 8, plaque.centery))), winner.color)
+        label = theme.readable_on(winner.color)
+        self.assertGreaterEqual(theme.contrast_ratio(label, winner.color), LABEL_CONTRAST_TARGET)
+
+    def test_long_winner_names_still_fit_their_plaque(self) -> None:
+        """A wide winner name is ellipsized so the text stays inside a plaque left of the panel."""
+
+        app = self.finished_app("W" * 18)
+        assert app.game is not None
+        plaque, text = app._winner_plaque(app.game.players[0])
+        text_rect = pygame.Rect((0, 0), app.fonts["title"].size(text))
+        text_rect.center = plaque.center
+        self.assertTrue(plaque.contains(text_rect), f"{text_rect} spills out of {plaque}")
+        self.assertTrue(text.endswith("wins!"))
+        self.assertLessEqual(plaque.right, main.PANEL_X)
+        self.assertGreaterEqual(plaque.left, 0)
+
+    def test_end_buttons_are_centred_under_the_stats_card(self) -> None:
+        """New Game and Quit share the stats card's centre line."""
+
+        app = self.finished_app()
+        buttons = app._buttons_for_screen()
+        self.assertEqual([button.key for button in buttons], ["new_game", "quit"])
+        for button in buttons:
+            with self.subTest(button=button.key):
+                self.assertEqual(button.rect.centerx, main.OVER_STATS_RECT.centerx)
+
+
 if __name__ == "__main__":
     unittest.main()

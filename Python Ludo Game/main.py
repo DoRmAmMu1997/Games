@@ -131,6 +131,19 @@ PLAY_MOVE_GAP = 8
 # The log's bottom edge lines up with the dice tray and New button (y = 876).
 PLAY_LOG_RECT = pygame.Rect(PLAY_ROSTER_X, 744, PLAY_ROSTER_WIDTH, 132)
 PLAY_LOG_PADDING = 12  # inset of the log's text from the card's left and right edges
+# Game-over screen: the ranking card on the left, the lifetime-stats card on
+# the right, and the New Game / Quit buttons centred beneath the stats card.
+OVER_RANKING_RECT = pygame.Rect(210, 248, 480, 360)
+OVER_STATS_RECT = pygame.Rect(PANEL_X + 14, 60, PANEL_WIDTH + 2, 540)
+OVER_BUTTON_SIZE = (220, 44)
+OVER_BUTTON_TOP = 700
+OVER_BUTTON_STEP = 58
+# The winner's name sits on a plaque in their seat colour under "Game Over",
+# so it reads on the blue wallpaper whatever the seat colour. The plaque's
+# width is capped so it stays clear of the stats card column.
+OVER_PLAQUE_CENTER = (450, 178)
+OVER_PLAQUE_PADDING = (28, 8)  # space around the text: horizontal, vertical
+OVER_PLAQUE_MAX_WIDTH = 620
 PREVIEW_CENTERS = ((200, 470), (450, 470), (700, 470))
 PREVIEW_SIZE = 216
 
@@ -1101,10 +1114,8 @@ class LudoApp:
         if self.screen == "setup":
             return self.setup_buttons()
         if self.screen == "over":
-            return [
-                ui.Button(pygame.Rect(PANEL_X + 42, 700, 220, 44), "New Game", "new_game"),
-                ui.Button(pygame.Rect(PANEL_X + 42, 758, 220, 44), "Quit", "quit"),
-            ]
+            new_rect, quit_rect = _over_button_rects()
+            return [ui.Button(new_rect, "New Game", "new_game"), ui.Button(quit_rect, "Quit", "quit")]
         if self.game is None:
             return []
         buttons: list[ui.Button] = []
@@ -1118,6 +1129,23 @@ class LudoApp:
         buttons.append(ui.Button(PLAY_NEW_RECT, "New", "new_game"))
         return buttons
 
+    def _winner_plaque(self, winner) -> tuple[pygame.Rect, str]:
+        """Return the winner plaque's rect and the (possibly ellipsized) text on it.
+
+        The plaque hugs the text plus ``OVER_PLAQUE_PADDING``; a name too wide
+        for ``OVER_PLAQUE_MAX_WIDTH`` is ellipsized, keeping " wins!" intact.
+        """
+
+        font = self.fonts["title"]
+        pad_x, pad_y = OVER_PLAQUE_PADDING
+        suffix = " wins!"
+        name_width = OVER_PLAQUE_MAX_WIDTH - 2 * pad_x - font.size(suffix)[0]
+        text = ui.ellipsize(font, winner.name, name_width) + suffix
+        text_width, text_height = font.size(text)
+        plaque = pygame.Rect(0, 0, text_width + 2 * pad_x, text_height + 2 * pad_y)
+        plaque.center = OVER_PLAQUE_CENTER
+        return plaque, text
+
     def _draw_game_over(self) -> None:
         """Draw final rankings and lifetime stats."""
 
@@ -1128,9 +1156,12 @@ class LudoApp:
         mouse = self._logical_mouse_pos()
         winner = self.game.players[self.game.winner] if self.game.winner is not None else self.game.players[0]
         ui.draw_text(self.window, self.fonts["huge"], "Game Over", (450, 104), WHITE, center=True)
-        ui.draw_text(self.window, self.fonts["title"], f"{winner.name} wins!", (450, 174), winner.color, center=True)
+        plaque, text = self._winner_plaque(winner)
+        theme.draw_shadowed_rect(self.window, plaque, winner.color, border=theme.BOARD_EDGE, radius=14)
+        plaque_label = theme.readable_on(winner.color)
+        ui.draw_text(self.window, self.fonts["title"], text, plaque.center, plaque_label, center=True)
 
-        table = pygame.Rect(210, 248, 480, 360)
+        table = OVER_RANKING_RECT
         theme.draw_shadowed_rect(self.window, table, theme.HUD_DARK, border=winner.color, radius=14)
         ui.draw_text(self.window, self.fonts["header"], "Final Ranking", (table.x + 28, table.y + 24), WHITE)
         for rank, player_index in enumerate(self.game.ranking, start=1):
@@ -1145,7 +1176,7 @@ class LudoApp:
                 SOFT,
             )
 
-        stats = pygame.Rect(PANEL_X + 14, 60, PANEL_WIDTH + 2, 540)
+        stats = OVER_STATS_RECT
         # The stats card keeps the old information but uses the same floating
         # table-card style as the redesigned setup and play screens.
         theme.draw_shadowed_rect(self.window, stats, theme.HUD_DARK, border=PANEL_EDGE, radius=14)
@@ -1172,6 +1203,18 @@ class LudoApp:
         )
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
+
+
+def _over_button_rects() -> tuple[pygame.Rect, pygame.Rect]:
+    """Return the New Game and Quit rects, centred under the stats card."""
+
+    width, height = OVER_BUTTON_SIZE
+    rects = []
+    for index in range(2):
+        rect = pygame.Rect(0, OVER_BUTTON_TOP + index * OVER_BUTTON_STEP, width, height)
+        rect.centerx = OVER_STATS_RECT.centerx
+        rects.append(rect)
+    return rects[0], rects[1]
 
 
 def _roster_chip_rect(index: int) -> pygame.Rect:
