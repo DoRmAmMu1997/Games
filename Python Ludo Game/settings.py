@@ -78,7 +78,8 @@ INK = (20, 24, 26)
 GOLD = (224, 181, 76)
 SUCCESS = (110, 205, 140)
 DANGER = (224, 84, 84)
-DISABLED = (88, 98, 102)
+DISABLED = (88, 98, 102)        # muted grey for a disabled button's border and label
+DISABLED_FILL = (26, 32, 36)    # darker than PANEL_CARD, so a disabled button reads as "off"
 
 # Base token colours. Individual boards pick from these via the seat tables
 # below instead of indexing one shared list, because the classic colour wheel

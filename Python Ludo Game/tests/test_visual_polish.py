@@ -21,6 +21,7 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import main
+import ui
 from board_render import BoardRenderer, _square_home_rects
 from game import LudoGame, LudoRules
 from settings import SCREEN_HEIGHT, SCREEN_WIDTH
@@ -127,6 +128,56 @@ class SetupPanelTests(unittest.TestCase):
         self.assertLessEqual(main.SETUP_RULES_HEADER_Y + header_height, buttons["toggle_blockades"].y)
         self.assertLessEqual(buttons["toggle_three_sixes"].bottom, main.SETUP_NAME_HEADER_Y)
         self.assertLessEqual(main.SETUP_NAME_HEADER_Y + header_height, main._name_rect(0).y)
+
+
+def luminance(color) -> float:
+    """Return perceived brightness of an RGB colour, 0 (black) to 255 (white)."""
+
+    return 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
+
+
+class ButtonStateTests(unittest.TestCase):
+    """A disabled button reads as switched off: darker and dimmer than an idle one."""
+
+    fonts: dict[str, pygame.font.Font]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame and fonts once for the button checks."""
+
+        pygame.init()
+        cls.fonts = ui.make_fonts()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the button checks."""
+
+        pygame.quit()
+
+    def render(self, enabled: bool) -> tuple[pygame.Surface, pygame.Rect]:
+        """Draw one button, not hovered, and return the surface and its rect."""
+
+        surface = pygame.Surface((300, 80))
+        rect = pygame.Rect(20, 20, 246, 34)
+        ui.Button(rect, "Resume Saved Game", "resume", enabled=enabled).draw(surface, self.fonts, (0, 0))
+        return surface, rect
+
+    def test_disabled_fill_is_darker_than_an_enabled_fill(self) -> None:
+        """The disabled background is never brighter than an idle enabled background."""
+
+        enabled, rect = self.render(True)
+        disabled, _rect = self.render(False)
+        sample = (rect.x + 8, rect.centery)
+        self.assertLess(luminance(disabled.get_at(sample)), luminance(enabled.get_at(sample)) + 1)
+
+    def test_disabled_label_is_dimmed(self) -> None:
+        """A disabled button draws no near-white label pixels."""
+
+        surface, rect = self.render(False)
+        brightest = max(
+            luminance(surface.get_at((x, y))) for x in range(rect.x, rect.right) for y in range(rect.y, rect.bottom)
+        )
+        self.assertLess(brightest, 170)
 
 
 if __name__ == "__main__":

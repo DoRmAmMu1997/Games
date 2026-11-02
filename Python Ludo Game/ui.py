@@ -9,6 +9,7 @@ import pygame
 from settings import (
     DANGER,
     DISABLED,
+    DISABLED_FILL,
     GOLD,
     INK,
     PANEL_CARD,
@@ -40,15 +41,21 @@ class Button:
         return self.enabled and self.rect.collidepoint(pos)
 
     def draw(self, surface: pygame.Surface, fonts: dict[str, pygame.font.Font], mouse: tuple[int, int]) -> None:
-        """Render the button, including disabled and hover states."""
+        """Render the button, including disabled and hover states.
+
+        A disabled button is drawn darker than an idle one, with a muted
+        border and label, so it reads as switched off rather than lit up.
+        """
 
         hovered = self.contains(mouse)
-        fill = self.accent if hovered else PANEL_CARD
         if not self.enabled:
-            fill = DISABLED
+            fill, border, color = DISABLED_FILL, DISABLED, DISABLED
+        elif hovered:
+            fill, border, color = self.accent, PANEL_EDGE, INK
+        else:
+            fill, border, color = PANEL_CARD, PANEL_EDGE, WHITE
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
-        pygame.draw.rect(surface, PANEL_EDGE if self.enabled else INK, self.rect, 2, border_radius=8)
-        color = INK if hovered and self.enabled else WHITE
+        pygame.draw.rect(surface, border, self.rect, 2, border_radius=8)
         draw_text(surface, fonts["button"], self.text, self.rect.center, color, center=True)
 
 
