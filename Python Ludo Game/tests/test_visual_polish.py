@@ -535,5 +535,69 @@ class MoveHighlightTests(unittest.TestCase):
                     self.assertGreaterEqual(edge, MIN_LABEL_CONTRAST, "ring has no visible edge on cream")
 
 
+class BlendedShadowTests(unittest.TestCase):
+    """Drop shadows darken what is under them instead of painting solid black."""
+
+    BACKGROUND = (200, 200, 200)
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the shadow checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the shadow checks."""
+
+        pygame.quit()
+
+    def canvas(self) -> pygame.Surface:
+        """Return an opaque light-grey surface, like the game's window."""
+
+        surface = pygame.Surface((200, 200))
+        surface.fill(self.BACKGROUND)
+        return surface
+
+    def assert_blended(self, pixel: pygame.Color) -> None:
+        """Fail unless ``pixel`` is darker than the background but clearly not black."""
+
+        value = rgb(pixel)
+        self.assertLess(value[0], self.BACKGROUND[0], f"{value} is not shaded")
+        self.assertGreater(value[0], self.BACKGROUND[0] // 4, f"{value} is (nearly) solid black")
+
+    def test_rect_shadow_is_blended(self) -> None:
+        """The strip below a shadowed rect is a translucent shade."""
+
+        surface = self.canvas()
+        theme.draw_shadowed_rect(surface, pygame.Rect(40, 40, 100, 60), (90, 90, 200), radius=8, shadow_offset=(0, 6))
+        self.assert_blended(surface.get_at((90, 103)))
+
+    def test_polygon_shadow_is_blended(self) -> None:
+        """The strip below a shadowed polygon is a translucent shade."""
+
+        surface = self.canvas()
+        theme.draw_shadowed_polygon(surface, [(40, 40), (160, 40), (160, 120), (40, 120)], (90, 90, 200))
+        self.assert_blended(surface.get_at((100, 124)))
+
+    def test_pawn_shadow_is_blended(self) -> None:
+        """The oval under a pawn, beside its pointer, is a translucent shade."""
+
+        surface = self.canvas()
+        theme.draw_token_pin(surface, (100, 80), (200, 60, 60), radius=15)
+        self.assert_blended(surface.get_at((87, 95)))
+
+    def test_radial_hub_shadow_is_blended(self) -> None:
+        """The shadow under the radial hub is a translucent shade, not black."""
+
+        surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        surface.fill(self.BACKGROUND)
+        renderer = BoardRenderer(make_game(6).layout)
+        renderer._draw_center_home(surface, None)
+        hub = renderer.display.hub_polygon
+        lowest = max(hub, key=lambda point: point[1])
+        self.assert_blended(surface.get_at((int(lowest[0]), int(lowest[1]) + 4)))
+
+
 if __name__ == "__main__":
     unittest.main()

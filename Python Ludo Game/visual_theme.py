@@ -18,11 +18,16 @@ WALLPAPER_DEEP = (12, 52, 93)
 WALLPAPER_TEAL = (18, 126, 142)
 CREAM = (250, 247, 232)
 BOARD_EDGE = (15, 21, 28)
-SHADOW = (0, 0, 0, 95)
+SHADOW = (0, 0, 0, 95)       # translucent black for card, board, and banner shadows
+PAWN_SHADOW = (0, 0, 0, 85)  # slightly lighter oval under each pawn
+# Shadow layers are cached by shape; this cap keeps the cache small even if
+# many differently sized shapes (such as winner plaques) appear in a session.
+SHADOW_CACHE_LIMIT = 256
 HUD_DARK = (14, 22, 31)
 HUD_EDGE = (255, 214, 56)
 
 _WALLPAPER_CACHE: dict[tuple[int, int], pygame.Surface] = {}
+_SHADOW_CACHE: dict[tuple, pygame.Surface] = {}
 
 
 def brighten(color: tuple[int, int, int], amount: int) -> tuple[int, int, int]:
@@ -93,8 +98,7 @@ def draw_shadowed_rect(
 ) -> None:
     """Draw a rounded rectangle with a soft offset shadow."""
 
-    shadow_rect = rect.move(*shadow_offset)
-    pygame.draw.rect(surface, SHADOW, shadow_rect, border_radius=radius)
+    draw_shadow_rect(surface, rect.move(*shadow_offset), radius)
     pygame.draw.rect(surface, fill, rect, border_radius=radius)
     if border is not None:
         pygame.draw.rect(surface, border, rect, 2, border_radius=radius)
@@ -112,9 +116,77 @@ def draw_shadowed_polygon(
     """Draw a polygon that looks lifted from the wallpaper."""
 
     shadow_points = [(x + shadow_offset[0], y + shadow_offset[1]) for x, y in points]
-    pygame.draw.polygon(surface, SHADOW, shadow_points)
+    draw_shadow_polygon(surface, shadow_points)
     pygame.draw.polygon(surface, fill, points)
     pygame.draw.polygon(surface, border, points, border_width)
+
+
+def draw_shadow_rect(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    radius: int,
+    color: tuple[int, int, int, int] = SHADOW,
+) -> None:
+    """Blend a translucent rounded-rectangle shadow onto ``surface``.
+
+    Beginner note: ``pygame.draw`` ignores the alpha part of a colour when it
+    draws straight onto an opaque surface such as the game window, so a
+    "95/255 black" shadow would come out solid black. Drawing the shape on a
+    small transparent layer first and blitting that layer blends it instead.
+    """
+
+    key = ("rect", rect.size, radius, color)
+    fresh = key not in _SHADOW_CACHE
+    layer = _shadow_layer(key, rect.size)
+    if fresh:
+        pygame.draw.rect(layer, color, layer.get_rect(), border_radius=radius)
+    surface.blit(layer, rect.topleft)
+
+
+def draw_shadow_polygon(
+    surface: pygame.Surface,
+    points: list[tuple[int, int]],
+    color: tuple[int, int, int, int] = SHADOW,
+) -> None:
+    """Blend a translucent polygon shadow onto ``surface`` (see ``draw_shadow_rect``)."""
+
+    left = min(x for x, _ in points)
+    top = min(y for _, y in points)
+    local = tuple((x - left, y - top) for x, y in points)
+    size = (max(x for x, _ in local) + 1, max(y for _, y in local) + 1)
+    key = ("polygon", local, color)
+    fresh = key not in _SHADOW_CACHE
+    layer = _shadow_layer(key, size)
+    if fresh:
+        pygame.draw.polygon(layer, color, local)
+    surface.blit(layer, (left, top))
+
+
+def draw_shadow_ellipse(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    color: tuple[int, int, int, int] = PAWN_SHADOW,
+) -> None:
+    """Blend a translucent oval shadow (under a pawn) onto ``surface``."""
+
+    key = ("ellipse", rect.size, color)
+    fresh = key not in _SHADOW_CACHE
+    layer = _shadow_layer(key, rect.size)
+    if fresh:
+        pygame.draw.ellipse(layer, color, layer.get_rect())
+    surface.blit(layer, rect.topleft)
+
+
+def _shadow_layer(key: tuple, size: tuple[int, int]) -> pygame.Surface:
+    """Return the cached transparent layer for ``key``, creating a blank one if needed."""
+
+    layer = _SHADOW_CACHE.get(key)
+    if layer is None:
+        if len(_SHADOW_CACHE) >= SHADOW_CACHE_LIMIT:
+            _SHADOW_CACHE.clear()
+        layer = pygame.Surface((max(1, size[0]), max(1, size[1])), pygame.SRCALPHA)
+        _SHADOW_CACHE[key] = layer
+    return layer
 
 
 def draw_star(
@@ -188,7 +260,7 @@ def draw_token_pin(
     """Draw one glossy pawn shaped like a map pin."""
 
     cx, cy = int(center[0]), int(center[1])
-    pygame.draw.ellipse(surface, (0, 0, 0, 85), (cx - radius, cy + radius // 2, radius * 2, radius), 0)
+    draw_shadow_ellipse(surface, pygame.Rect(cx - radius, cy + radius // 2, radius * 2, radius))
     pointer = [(cx, cy + radius + 13), (cx - radius + 5, cy + 6), (cx + radius - 5, cy + 6)]
     pygame.draw.polygon(surface, darken(color, 35), pointer)
     pygame.draw.circle(surface, WHITE, (cx, cy), radius + 4)

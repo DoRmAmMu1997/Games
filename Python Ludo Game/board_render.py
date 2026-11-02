@@ -480,7 +480,7 @@ class BoardRenderer:
         hub = self.display.hub_polygon
         center = _ipoint(self.display.center)
         shadow = [(x + 0, y + 6) for x, y in (_ipoint(point) for point in hub)]
-        pygame.draw.polygon(surface, theme.SHADOW, shadow)
+        theme.draw_shadow_polygon(surface, shadow)
         for seat in range(self.layout.total_players):
             wedge = [
                 center,
