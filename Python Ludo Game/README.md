@@ -49,6 +49,9 @@ same direction the tokens move.
 Classic competitive rules are enabled by default:
 
 - Roll a `6` to move a token out of the yard.
+- A lap is 51 squares on the four-player board (64 on five players, 77 on
+  six): a token never lands on the square just behind its own start, and
+  turns straight into its home column from the square before it.
 - Move exactly into the final home cell; overshooting is not legal.
 - Capturing on a non-safe square sends opponent tokens back to their yard.
 - Each start square and each segment star square is safe.
@@ -89,6 +92,16 @@ The game stores data in:
 ```
 
 The path is the same from source and from a packaged `.exe`.
+
+Saves written before the 51-square lap still load. They counted one extra
+shared square (the corner just behind each start), so loading shifts them
+onto the shorter lap:
+
+- Tokens in the home column or at home keep their cell and their distance.
+- A token on the old corner steps back one cell to its column entrance and
+  keeps its distance.
+- Tokens on the shared track keep their cell and end up one cell closer to
+  home, because the lap is one cell shorter.
 
 ## Test
 

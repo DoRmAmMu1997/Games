@@ -10,6 +10,12 @@ from board import BoardLayout
 from models import Move, MoveResult, PlayerState
 from settings import TOKENS_PER_PLAYER, seat_colors
 
+# Saves without this field were written before the classic 51-cell lap, when a
+# token also walked the cell just behind its start (so every home-lane and
+# finish step was one higher). Version 2 is the 51-cell lap; ``from_dict``
+# shifts version-1 steps down and refuses versions it does not know.
+LAP_VERSION = 2
+
 
 @dataclass(frozen=True)
 class LudoRules:
@@ -286,6 +292,7 @@ class LudoGame:
         """Serialize the current game to plain JSON-compatible data."""
 
         return {
+            "lap_version": LAP_VERSION,
             "rules": asdict(self.rules),
             "players": [player.to_dict() for player in self.players],
             "current": self.current,
@@ -304,11 +311,35 @@ class LudoGame:
 
     @classmethod
     def from_dict(cls, data: dict) -> LudoGame:
-        """Rebuild a game from save-file data."""
+        """Rebuild a game from save-file data.
 
+        Saves written before the classic 51-cell lap (``lap_version`` 1, or no
+        key at all) counted one extra shared cell, the corner just behind each
+        token's start. Loading one moves every step at or beyond the new lap
+        length down by one:
+
+        - Tokens in the home column or at home keep their cell and their
+          distance (old lane step 52 is new lane step 51, the same cell).
+        - A token on the old corner steps back one cell to its column
+          entrance and keeps its distance to home.
+        - Tokens on the shared track keep their cell and end up one cell
+          closer to home, because the lap is one cell shorter.
+
+        Raises ``ValueError`` for a ``lap_version`` this code does not know.
+        """
+
+        lap_version = int(data.get("lap_version", 1))
+        if lap_version not in (1, LAP_VERSION):
+            raise ValueError(f"Unsupported Ludo lap version: {lap_version}")
         rules = LudoRules(**data["rules"])
         players = [PlayerState.from_dict(item) for item in data["players"]]
         game = cls(players, rules, seed=data.get("seed"), ai_profile=data.get("ai_profile", "tactical"))
+        if lap_version == 1:
+            lap_length = game.layout.lap_length
+            for player in game.players:
+                for token in player.tokens:
+                    if token.steps >= lap_length:
+                        token.steps -= 1
         game.current = int(data.get("current", 0))
         game.phase = str(data.get("phase", "playing"))
         game.awaiting = str(data.get("awaiting", "pre_roll"))
@@ -343,7 +374,7 @@ class LudoGame:
         blocked_indices = self._opponent_blockades(player_index)
         if not blocked_indices:
             return False
-        for step in range(from_steps + 1, min(to_steps, self.layout.track_length - 1) + 1):
+        for step in range(from_steps + 1, min(to_steps, self.layout.lap_length - 1) + 1):
             if self.layout.track_index(player_index, step) in blocked_indices:
                 return True
         return False

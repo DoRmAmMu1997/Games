@@ -111,7 +111,7 @@ def _lands_in_danger(game, move: Move) -> bool:
         if player_index == move.player_index:
             continue
         for token in player.tokens:
-            if token.steps < 0 or token.steps >= game.layout.track_length:
+            if token.steps < 0 or token.steps >= game.layout.lap_length:
                 continue
             for die in range(1, 7):
                 target = game.layout.track_index(player_index, token.steps + die)

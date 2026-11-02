@@ -464,7 +464,9 @@ def _display_layout_for(layout) -> DisplayLayout:
 # arm's left column, west along the west arm's bottom row, then up the west
 # tip. Rotating this template 90 degrees clockwise per seat builds the full
 # 52-cell loop, which keeps every seat's start square, home column, and yard
-# aligned by construction.
+# aligned by construction. A seat's own 51-cell lap stops one cell short of
+# the loop: its last shared cell is the tip cell straight below its home
+# column, e.g. (7, 14) for seat 0, and it never visits the corner (6, 14).
 SQUARE_QUARTER_TRACK: tuple[tuple[int, int], ...] = (
     (6, 13), (6, 12), (6, 11), (6, 10), (6, 9),
     (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8),
@@ -536,9 +538,12 @@ def _radial_display_layout(layout) -> DisplayLayout:
       arrives near the hub, runs OUT along the lane away from its owner's
       yard, crosses the tip cell, and runs back IN along the lane beside the
       owner's yard, so the overall loop is clockwise.
-    - The start cell is the inbound lane's outermost cell, right beside the
-      seat's own yard, and the loop-end (the tip) hands over orthogonally to
-      the home column, which marches inward and finishes at the hub.
+    - The start cell is the inbound lane's second cell, right beside the
+      seat's own yard, exactly like the square board's start square. The
+      inbound lane's outermost cell is the corner a seat's own lap skips.
+    - A lap ends on the arm tip, directly above the home column's first
+      cell, so the token hops straight in; the column then marches inward
+      and finishes at the hub.
     """
 
     total = layout.total_players
@@ -597,10 +602,12 @@ def _radial_display_layout(layout) -> DisplayLayout:
         yard_positions.append(_radial_yard_slots(center, yard_angle, spec))
         banner_anchors.append(_radial_banner_anchor(center, yard_angle, spec))
 
-    # Rotate the concatenated arm path so index 0 is seat 0's start cell (the
-    # inbound lane's outermost cell). Engine start indices are 13 * seat, and
-    # the same rotation aligns every other seat by symmetry.
-    entry_offset = home_length + 1
+    # Rotate the concatenated arm path so index 0 is seat 0's start cell: the
+    # inbound lane's second cell (past the outbound lane and the tip, plus
+    # the skipped corner). The lap's last cell is then the arm tip above
+    # lane[0]. Engine start indices are 13 * seat, and the same rotation
+    # aligns every other seat by symmetry.
+    entry_offset = home_length + 2
     track_cells = path_cells[entry_offset:] + path_cells[:entry_offset]
 
     hub_polygon = tuple(
