@@ -38,6 +38,12 @@ BANNER_HEIGHT = 28
 SQUARE_BANNER_GAP = 24
 # Start squares are painted in their seat colour lifted by this much.
 START_CELL_BRIGHTEN = 8
+# Yard parking spots: a ring in the yard colour darkened by YARD_RING_DARKEN,
+# around a white spot with a thin dark edge.
+YARD_SLOT_RADIUS = 24
+YARD_SLOT_INNER_RADIUS = 18
+YARD_SLOT_EDGE_WIDTH = 2
+YARD_RING_DARKEN = 38
 # Move highlights: a white ring around each movable pawn and a gold ring on
 # its landing cell. Each ring band gets a thin dark edge on both sides, because
 # white (and pale gold) on the cream board would otherwise barely show.
@@ -390,9 +396,11 @@ class BoardRenderer:
         """Paint the empty circular parking spots inside a player's home."""
 
         for point in positions:
-            pygame.draw.circle(surface, theme.darken(color, 38), _ipoint(point), 24)
-            pygame.draw.circle(surface, WHITE, _ipoint(point), 18)
-            pygame.draw.circle(surface, theme.BOARD_EDGE, _ipoint(point), 18, 2)
+            center = _ipoint(point)
+            # Antialiased circles keep the round parking spots smooth-edged.
+            pygame.draw.aacircle(surface, theme.darken(color, YARD_RING_DARKEN), center, YARD_SLOT_RADIUS)
+            pygame.draw.aacircle(surface, WHITE, center, YARD_SLOT_INNER_RADIUS)
+            pygame.draw.aacircle(surface, theme.BOARD_EDGE, center, YARD_SLOT_INNER_RADIUS, YARD_SLOT_EDGE_WIDTH)
 
     def _draw_track(self, surface: pygame.Surface) -> None:
         """Draw the shared white track and colored start squares."""

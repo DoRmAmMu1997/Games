@@ -286,11 +286,12 @@ def draw_token_pin(
     draw_shadow_ellipse(surface, pygame.Rect(cx - radius, cy + radius // 2, radius * 2, radius))
     pointer = [(cx, cy + radius + 13), (cx - radius + 5, cy + 6), (cx + radius - 5, cy + 6)]
     pygame.draw.polygon(surface, darken(color, 35), pointer)
-    pygame.draw.circle(surface, WHITE, (cx, cy), radius + 4)
-    pygame.draw.circle(surface, darken(color, 20), (cx, cy), radius)
-    pygame.draw.circle(surface, color, (cx, cy - 2), radius - 4)
-    pygame.draw.circle(surface, brighten(color, 95), (cx - radius // 3, cy - radius // 3), max(4, radius // 4))
-    pygame.draw.circle(surface, BOARD_EDGE, (cx, cy), radius + 4, 2)
+    # Antialiased circles give the pawn's round head a smooth outline.
+    pygame.draw.aacircle(surface, WHITE, (cx, cy), radius + 4)
+    pygame.draw.aacircle(surface, darken(color, 20), (cx, cy), radius)
+    pygame.draw.aacircle(surface, color, (cx, cy - 2), radius - 4)
+    pygame.draw.aacircle(surface, brighten(color, 95), (cx - radius // 3, cy - radius // 3), max(4, radius // 4))
+    pygame.draw.aacircle(surface, BOARD_EDGE, (cx, cy), radius + 4, 2)
     if label and fonts is not None:
         text = fonts["tiny"].render(label, True, readable_on(color))
         surface.blit(text, text.get_rect(center=(cx, cy)))

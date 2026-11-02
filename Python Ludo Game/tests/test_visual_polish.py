@@ -26,12 +26,16 @@ import pygame
 import main
 import ui
 import visual_theme as theme
-from board_render import START_CELL_BRIGHTEN, BoardRenderer, _square_home_rects
+from board_render import (
+    START_CELL_BRIGHTEN,
+    YARD_RING_DARKEN,
+    YARD_SLOT_RADIUS,
+    BoardRenderer,
+    _square_home_rects,
+)
 from game import LudoGame, LudoRules
 from settings import GOLD, LABEL_CONTRAST_TARGET, MIN_LABEL_CONTRAST, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, seat_colors
 
-# Yard parking slots are drawn as rings of this radius (see _draw_yard_slots).
-YARD_SLOT_RADIUS = 24
 # Name banners cast a drop shadow this far below themselves.
 BANNER_SHADOW_DROP = 4
 # draw_token_pin wraps each pawn's coloured head in a white ring this wide.
@@ -725,6 +729,59 @@ class PillButtonTests(unittest.TestCase):
                 fill = rgb(surface.get_at((rect.x + 10, rect.centery)))
                 self.assertEqual(len(recorder.colors), 1)
                 self.assertGreaterEqual(theme.contrast_ratio(recorder.colors[0], fill), LABEL_CONTRAST_TARGET)
+
+
+class AntialiasedCircleTests(unittest.TestCase):
+    """Pawn pins and yard parking rings have smooth (antialiased) round edges."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the edge checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the edge checks."""
+
+        pygame.quit()
+
+    def edge_has_blend(self, surface: pygame.Surface, centre: tuple[int, int], radius: int, inside, outside) -> bool:
+        """Return True if a pixel near ``radius`` on a diagonal blends ``inside`` and ``outside``.
+
+        A hard-edged circle only ever shows one colour or the other; an
+        antialiased one shows in-between shades where the edge cuts a pixel.
+        """
+
+        low, high = sorted((luminance(inside), luminance(outside)))
+        span = high - low
+        for angle in (35, 45, 55, 125, 215, 305):
+            direction = pygame.math.Vector2(1, 0).rotate(angle)
+            for step in range(radius - 2, radius + 3):
+                point = pygame.math.Vector2(centre) + direction * step
+                value = luminance(rgb(surface.get_at((round(point.x), round(point.y)))))
+                if low + 0.15 * span < value < high - 0.15 * span:
+                    return True
+        return False
+
+    def test_pawn_outline_is_antialiased(self) -> None:
+        """The white ring round a pawn's head blends into the board behind it."""
+
+        surface = pygame.Surface((100, 100))
+        surface.fill((0, 0, 0))
+        theme.draw_token_pin(surface, (50, 40), (46, 101, 218), radius=15)
+        self.assertTrue(self.edge_has_blend(surface, (50, 40), 15 + PIN_RING_WIDTH, (255, 255, 255), (0, 0, 0)))
+
+    def test_yard_parking_rings_are_antialiased(self) -> None:
+        """Each yard slot's dark outer ring blends into the yard colour around it."""
+
+        color = (224, 173, 48)
+        surface = pygame.Surface((100, 100))
+        surface.fill(color)
+        renderer = BoardRenderer(make_game(4).layout)
+        renderer._draw_yard_slots(surface, ((50.0, 50.0),), color)
+        ring = theme.darken(color, YARD_RING_DARKEN)
+        self.assertTrue(self.edge_has_blend(surface, (50, 50), YARD_SLOT_RADIUS, ring, color))
 
 
 if __name__ == "__main__":
