@@ -69,15 +69,23 @@ SETUP_OPTION_CONTROL_HEIGHT = 38
 SETUP_OPTION_BUTTON_WIDTH = 46
 # The dark setup panel on the right; every setup control must fit inside it.
 SETUP_PANEL_RECT = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 30, SCREEN_HEIGHT).inflate(-14, -18)
+# Each section header ("Advanced Rules", "Human Names") gets room above its
+# first control for one header line plus a clear gap. The header font's line
+# height varies by platform (28 px FreeSans, about 32 px Arial or Liberation
+# Sans, 33 px DejaVu Sans), so the allowance is a 36 px line: the tallest
+# seen plus 3 spare pixels.
+SETUP_HEADER_LINE_ALLOWANCE = 36
+SETUP_HEADER_GAP = 4
+SETUP_HEADER_ROOM = SETUP_HEADER_LINE_ALLOWANCE + SETUP_HEADER_GAP
 # Rows below the option steppers. Six human names plus Resume and Start must
 # still fit inside SETUP_PANEL_RECT, so the toggle and name rows are packed
 # with small gaps (6 px between toggles, 3 px between name fields).
-SETUP_RULES_HEADER_Y = 354
-SETUP_TOGGLE_START_Y = 386
+SETUP_RULES_HEADER_Y = 346
+SETUP_TOGGLE_START_Y = SETUP_RULES_HEADER_Y + SETUP_HEADER_ROOM
 SETUP_TOGGLE_STEP = 42
 SETUP_TOGGLE_HEIGHT = 36
 SETUP_NAME_HEADER_Y = 556
-SETUP_NAME_START_Y = 592
+SETUP_NAME_START_Y = SETUP_NAME_HEADER_Y + SETUP_HEADER_ROOM
 SETUP_NAME_FIELD_HEIGHT = 30
 # Name text is inset this far from each side of its field; typing stops once
 # the rendered name would cross the inset on the right.

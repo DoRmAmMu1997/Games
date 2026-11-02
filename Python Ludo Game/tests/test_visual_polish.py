@@ -118,16 +118,35 @@ class SetupPanelTests(unittest.TestCase):
             with self.subTest(control=name):
                 self.assertTrue(inner.contains(rect), f"{name} {rect} leaves the panel {inner}")
 
-    def test_section_headers_do_not_touch_the_controls_below_them(self) -> None:
-        """The "Advanced Rules" and "Human Names" headers end above their first control."""
+    def test_section_headers_leave_a_gap_above_their_controls(self) -> None:
+        """Each section header ends at least SETUP_HEADER_GAP px above its first control.
+
+        Beginner note: the same font size renders at different line heights
+        on different machines (28 px FreeSans here, about 32 px Arial on
+        Windows, 33 px DejaVu Sans on some Linux CI runners). So the layout
+        reserves SETUP_HEADER_LINE_ALLOWANCE for the header line, and this
+        test checks both this machine's real font and that allowance, so a
+        near miss fails everywhere, not only on the tallest-font platform.
+        """
 
         app = main.LudoApp(persist=False)
         self.addCleanup(setattr, app, "running", False)
         header_height = app.fonts["header"].get_height()
+        gap = main.SETUP_HEADER_GAP
+        self.assertLessEqual(header_height, main.SETUP_HEADER_LINE_ALLOWANCE, "header font outgrew the layout")
         buttons = {button.key: button.rect for button in app.setup_buttons()}
-        self.assertLessEqual(main.SETUP_RULES_HEADER_Y + header_height, buttons["toggle_blockades"].y)
-        self.assertLessEqual(buttons["toggle_three_sixes"].bottom, main.SETUP_NAME_HEADER_Y)
-        self.assertLessEqual(main.SETUP_NAME_HEADER_Y + header_height, main._name_rect(0).y)
+        sections = (
+            ("Advanced Rules", main.SETUP_RULES_HEADER_Y, buttons["toggle_blockades"].y),
+            ("Human Names", main.SETUP_NAME_HEADER_Y, main._name_rect(0).y),
+        )
+        for name, header_y, control_y in sections:
+            with self.subTest(header=name):
+                self.assertLessEqual(header_y + header_height + gap, control_y, "measured header touches its control")
+                self.assertLessEqual(
+                    header_y + main.SETUP_HEADER_LINE_ALLOWANCE + gap, control_y, "no room for a taller header font"
+                )
+        self.assertLessEqual(main._setup_option_row(2).left_button.bottom + gap, main.SETUP_RULES_HEADER_Y)
+        self.assertLessEqual(buttons["toggle_three_sixes"].bottom + gap, main.SETUP_NAME_HEADER_Y)
 
 
 def luminance(color) -> float:
