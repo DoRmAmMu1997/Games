@@ -38,6 +38,13 @@ BANNER_HEIGHT = 28
 SQUARE_BANNER_GAP = 24
 # Start squares are painted in their seat colour lifted by this much.
 START_CELL_BRIGHTEN = 8
+# Move highlights: a white ring around each movable pawn and a gold ring on
+# its landing cell. Each ring band gets a thin dark edge on both sides, because
+# white (and pale gold) on the cream board would otherwise barely show.
+MOVE_RING_RADIUS = 33
+LANDING_RING_RADIUS = 36
+HIGHLIGHT_RING_WIDTH = 4
+HIGHLIGHT_EDGE_WIDTH = 2
 # Radial banners keep at least this many pixels between themselves and their
 # yard, and at least BANNER_SCREEN_MARGIN pixels from the window edge.
 BANNER_GAP = 4
@@ -518,9 +525,9 @@ class BoardRenderer:
 
         for move in moves:
             start, _radius = pins[(move.player_index, move.token_index)]
-            pygame.draw.circle(surface, WHITE, _ipoint(start), self.cell_radius + 18, 4)
+            _draw_edged_ring(surface, start, MOVE_RING_RADIUS, WHITE)
             landing = self.position_for(move.player_index, move.to_steps, move.token_index)
-            pygame.draw.circle(surface, GOLD, _ipoint(landing), self.cell_radius + 21, 4)
+            _draw_edged_ring(surface, landing, LANDING_RING_RADIUS, GOLD)
 
     def _draw_tokens(
         self,
@@ -910,6 +917,20 @@ def _offset_point(base: Point, outward: Point, tangent: Point, along: float, acr
         base[0] + outward[0] * along + tangent[0] * across,
         base[1] + outward[1] * along + tangent[1] * across,
     )
+
+
+def _draw_edged_ring(surface: pygame.Surface, center: Point, radius: int, color: Color) -> None:
+    """Draw a highlight ring band of ``color`` with a dark edge on both sides.
+
+    Beginner note: ``pygame.draw.circle`` with a width paints a band inward
+    from ``radius``. Painting a wider dark band first and the coloured band on
+    top leaves ``HIGHLIGHT_EDGE_WIDTH`` pixels of dark edge outside and inside.
+    """
+
+    point = _ipoint(center)
+    edge_width = HIGHLIGHT_RING_WIDTH + 2 * HIGHLIGHT_EDGE_WIDTH
+    pygame.draw.circle(surface, theme.BOARD_EDGE, point, radius + HIGHLIGHT_EDGE_WIDTH, edge_width)
+    pygame.draw.circle(surface, color, point, radius, HIGHLIGHT_RING_WIDTH)
 
 
 def _stack_offset(slot: int, count: int) -> Point:

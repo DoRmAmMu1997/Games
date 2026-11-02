@@ -27,7 +27,7 @@ import ui
 import visual_theme as theme
 from board_render import START_CELL_BRIGHTEN, BoardRenderer, _square_home_rects
 from game import LudoGame, LudoRules
-from settings import LABEL_CONTRAST_TARGET, MIN_LABEL_CONTRAST, SCREEN_HEIGHT, SCREEN_WIDTH, seat_colors
+from settings import GOLD, LABEL_CONTRAST_TARGET, MIN_LABEL_CONTRAST, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, seat_colors
 
 # Yard parking slots are drawn as rings of this radius (see _draw_yard_slots).
 YARD_SLOT_RADIUS = 24
@@ -491,6 +491,48 @@ class GameOverLayoutTests(unittest.TestCase):
         for button in buttons:
             with self.subTest(button=button.key):
                 self.assertEqual(button.rect.centerx, main.OVER_STATS_RECT.centerx)
+
+
+class MoveHighlightTests(unittest.TestCase):
+    """Move-highlight rings have a dark edge, so they show up on the cream board."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the highlight checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the highlight checks."""
+
+        pygame.quit()
+
+    def test_rings_stand_out_on_the_cream_board(self) -> None:
+        """Along every direction, each ring shows its colour and a dark edge against cream."""
+
+        game = make_game(4)
+        game.players[0].tokens[0].steps = 10
+        game.record_roll(2)
+        moves = [move for move in game.legal_moves(2) if move.token_index == 0]
+        renderer = BoardRenderer(game.layout)
+        pins = renderer.token_pins(game)
+        start, _radius = pins[(0, 0)]
+        landing = renderer.position_for(0, moves[0].to_steps, 0)
+        for name, centre, color in (("token ring", start, WHITE), ("landing ring", landing, GOLD)):
+            surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            surface.fill(theme.CREAM)
+            renderer._draw_move_highlights(surface, moves, pins)
+            for angle in range(0, 360, 45):
+                with self.subTest(ring=name, angle=angle):
+                    direction = pygame.math.Vector2(1, 0).rotate(angle)
+                    samples = [
+                        rgb(surface.get_at((int(centre[0] + direction.x * step), int(centre[1] + direction.y * step))))
+                        for step in range(20, 46)
+                    ]
+                    self.assertIn(color, samples, "ring colour missing")
+                    edge = max(theme.contrast_ratio(sample, theme.CREAM) for sample in samples)
+                    self.assertGreaterEqual(edge, MIN_LABEL_CONTRAST, "ring has no visible edge on cream")
 
 
 if __name__ == "__main__":
