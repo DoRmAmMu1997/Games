@@ -259,7 +259,9 @@ class LudoGame:
         """Handle a roll with no legal moves."""
 
         self._note(f"{self.current_player.name} rolled {die} and has no legal move.")
-        if die == 6 and self.consecutive_sixes < 3:
+        if die == 6:
+            # A 6 always earns another roll, exactly as in apply_move; the
+            # three-sixes penalty (when enabled) is enforced earlier in record_roll.
             self.awaiting = "pre_roll"
         else:
             self.consecutive_sixes = 0

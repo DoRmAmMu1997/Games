@@ -109,6 +109,27 @@ class EngineRuleTests(unittest.TestCase):
         self.assertEqual(game.players[0].tokens[1].steps, -1)
         self.assertEqual(game.current, 1)
 
+    def test_six_with_no_legal_move_keeps_the_turn_without_the_penalty(self) -> None:
+        """Every 6 earns another roll, even a third one, when the penalty is off.
+
+        All of seat 0's tokens sit two cells from home, so a 6 can never be
+        played. Each 6 must still hand the same player another roll, exactly
+        as a played 6 would.
+        """
+
+        players = [(f"P{i + 1}", i == 0) for i in range(4)]
+        game = LudoGame(players, LudoRules(total_players=4, three_sixes_penalty=False), seed=11)
+        for token in game.players[0].tokens:
+            token.steps = game.layout.finish_steps - 2
+
+        for round_number in range(3):
+            with self.subTest(round=round_number + 1):
+                game.record_roll(6)
+                self.assertEqual(game.legal_moves(6), [])
+                game.note_no_move(6)
+                self.assertEqual(game.current, 0)
+                self.assertEqual(game.awaiting, "pre_roll")
+
     def test_save_load_round_trip_keeps_rule_and_player_state(self) -> None:
         """Saving and restoring should preserve rules and progress."""
 
