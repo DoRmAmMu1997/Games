@@ -11,7 +11,7 @@ import math
 
 import pygame
 
-from settings import INK, WHITE
+from settings import INK, MIN_LABEL_CONTRAST, WHITE
 
 WALLPAPER_BLUE = (30, 123, 197)
 WALLPAPER_DEEP = (12, 52, 93)
@@ -42,6 +42,29 @@ def darken(color: tuple[int, int, int], amount: int) -> tuple[int, int, int]:
 
     red, green, blue = color
     return (max(0, red - amount), max(0, green - amount), max(0, blue - amount))
+
+
+def contrast_ratio(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    """Return the WCAG contrast ratio between two colours, from 1 (same) to 21.
+
+    Beginner note: our eyes judge brightness unevenly (green looks much
+    brighter than blue at the same RGB value), so the ratio compares each
+    colour's *relative luminance* rather than raw RGB numbers.
+    """
+
+    light, dark = sorted((_relative_luminance(a), _relative_luminance(b)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def readable_on(fill: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Return the label colour for text or markings drawn on ``fill``.
+
+    White is kept wherever it reaches ``MIN_LABEL_CONTRAST`` so most seats
+    keep their familiar white labels; light fills such as yellow and orange
+    get dark ink instead.
+    """
+
+    return WHITE if contrast_ratio(WHITE, fill) >= MIN_LABEL_CONTRAST else INK
 
 
 def draw_ludo_wallpaper(surface: pygame.Surface) -> None:
@@ -145,7 +168,7 @@ def draw_player_banner(
     """Draw the colored player tab used around the board and in the HUD."""
 
     draw_shadowed_rect(surface, rect, color, border=BOARD_EDGE, radius=8, shadow_offset=(0, 4))
-    label = fonts["small"].render(text, True, INK if _is_light(color) else WHITE)
+    label = fonts["small"].render(text, True, readable_on(color))
     surface.blit(label, label.get_rect(center=rect.center))
 
 
@@ -170,7 +193,7 @@ def draw_token_pin(
     pygame.draw.circle(surface, brighten(color, 95), (cx - radius // 3, cy - radius // 3), max(4, radius // 4))
     pygame.draw.circle(surface, BOARD_EDGE, (cx, cy), radius + 4, 2)
     if label and fonts is not None:
-        text = fonts["tiny"].render(label, True, WHITE)
+        text = fonts["tiny"].render(label, True, readable_on(color))
         surface.blit(text, text.get_rect(center=(cx, cy)))
 
 
@@ -286,11 +309,16 @@ def _blend(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> t
     )
 
 
-def _is_light(color: tuple[int, int, int]) -> bool:
-    """Return True when black text is easier to read on ``color``."""
+def _relative_luminance(color: tuple[int, int, int]) -> float:
+    """Return the WCAG relative luminance of an sRGB colour, from 0 to 1."""
 
-    red, green, blue = color
-    return red * 0.299 + green * 0.587 + blue * 0.114 > 150
+    channels = []
+    for value in color[:3]:
+        level = value / 255
+        # sRGB stores brightness on a curve; undo it before weighting.
+        channels.append(level / 12.92 if level <= 0.04045 else ((level + 0.055) / 1.055) ** 2.4)
+    red, green, blue = channels
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
 
 def _ipoint(point: tuple[float, float]) -> tuple[int, int]:

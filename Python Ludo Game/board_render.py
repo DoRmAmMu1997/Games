@@ -36,6 +36,8 @@ RADIAL_CENTER = (450.0, 410.0)
 BANNER_WIDTH = 150
 BANNER_HEIGHT = 28
 SQUARE_BANNER_GAP = 24
+# Start squares are painted in their seat colour lifted by this much.
+START_CELL_BRIGHTEN = 8
 # Radial banners keep at least this many pixels between themselves and their
 # yard, and at least BANNER_SCREEN_MARGIN pixels from the window edge.
 BANNER_GAP = 4
@@ -393,7 +395,7 @@ class BoardRenderer:
             fill = WHITE
             border = theme.BOARD_EDGE
             if owner is not None:
-                fill = theme.brighten(self.display.seat_colors[owner], 8)
+                fill = theme.brighten(self.display.seat_colors[owner], START_CELL_BRIGHTEN)
             if self.display.track_cells:
                 self._draw_display_cell(surface, self.display.track_cells[index], fill, border)
             else:
@@ -403,15 +405,26 @@ class BoardRenderer:
             if index in self.layout.safe_indices:
                 theme.draw_star(surface, point, 13, theme.BOARD_EDGE, fill=WHITE)
             if owner is not None:
-                self._draw_start_arrow(surface, owner, point)
+                self._draw_start_arrow(surface, owner, point, fill)
 
-    def _draw_start_arrow(self, surface: pygame.Surface, player_index: int, point: tuple[float, float]) -> None:
-        """Draw a colored arrow showing the first movement direction."""
+    def _draw_start_arrow(
+        self,
+        surface: pygame.Surface,
+        player_index: int,
+        point: tuple[float, float],
+        cell_fill: tuple[int, int, int],
+    ) -> None:
+        """Draw an arrow on a start square showing the first movement direction.
+
+        The square itself carries the seat colour, so the arrow uses whichever
+        of white or dark ink stands out on it (``theme.readable_on``); an
+        arrow in the seat's own colour would vanish into its square.
+        """
 
         next_index = (self.layout.start_indices[player_index] + 1) % self.layout.track_length
         next_point = self.display.track_positions[next_index]
         angle = math.atan2(next_point[1] - point[1], next_point[0] - point[0])
-        theme.draw_arrow(surface, point, angle, self.display.seat_colors[player_index], length=22)
+        theme.draw_arrow(surface, point, angle, theme.readable_on(cell_fill), length=22)
 
     def _draw_home_lanes(self, surface: pygame.Surface) -> None:
         """Draw each player's private colored path into the center."""

@@ -23,9 +23,10 @@ import pygame
 
 import main
 import ui
-from board_render import BoardRenderer, _square_home_rects
+import visual_theme as theme
+from board_render import START_CELL_BRIGHTEN, BoardRenderer, _square_home_rects
 from game import LudoGame, LudoRules
-from settings import SCREEN_HEIGHT, SCREEN_WIDTH
+from settings import MIN_LABEL_CONTRAST, SCREEN_HEIGHT, SCREEN_WIDTH, seat_colors
 
 # Yard parking slots are drawn as rings of this radius (see _draw_yard_slots).
 YARD_SLOT_RADIUS = 24
@@ -150,6 +151,12 @@ class SetupPanelTests(unittest.TestCase):
                 )
         self.assertLessEqual(main._setup_option_row(2).left_button.bottom + gap, main.SETUP_RULES_HEADER_Y)
         self.assertLessEqual(buttons["toggle_three_sixes"].bottom + gap, main.SETUP_NAME_HEADER_Y)
+
+
+def rgb(color: pygame.Color) -> tuple[int, int, int]:
+    """Return a sampled pixel's colour as a plain RGB triple."""
+
+    return (color.r, color.g, color.b)
 
 
 def luminance(color) -> float:
@@ -306,6 +313,73 @@ class StackReadabilityTests(unittest.TestCase):
                                 head,
                                 f"pawn {later} covers the number of pawn {key}",
                             )
+
+
+class SeatMarkingContrastTests(unittest.TestCase):
+    """Markings drawn on seat colours (arrows, pawn numbers, names) are readable."""
+
+    fonts: dict[str, pygame.font.Font]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame and the app fonts once for the contrast checks."""
+
+        pygame.init()
+        cls.fonts = ui.make_fonts()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the contrast checks."""
+
+        pygame.quit()
+
+    def all_seat_colors(self) -> set[tuple[int, int, int]]:
+        """Return every seat colour used by any supported board."""
+
+        return {color for count in (4, 5, 6) for color in seat_colors(count)}
+
+    def test_contrast_ratio_matches_the_wcag_formula(self) -> None:
+        """Black on white is 21:1 and any colour against itself is 1:1."""
+
+        self.assertAlmostEqual(theme.contrast_ratio((0, 0, 0), (255, 255, 255)), 21.0, places=2)
+        self.assertAlmostEqual(theme.contrast_ratio((120, 30, 200), (120, 30, 200)), 1.0)
+
+    def test_readable_label_colour_contrasts_with_every_seat_colour(self) -> None:
+        """The label colour picked for each seat colour reaches MIN_LABEL_CONTRAST."""
+
+        for color in self.all_seat_colors():
+            with self.subTest(color=color):
+                self.assertGreaterEqual(theme.contrast_ratio(theme.readable_on(color), color), MIN_LABEL_CONTRAST)
+
+    def test_start_arrows_stand_out_from_their_start_cells(self) -> None:
+        """Each start square's arrow contrasts with the square it is drawn on."""
+
+        for count in (4, 5, 6):
+            surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            renderer = BoardRenderer(make_game(count).layout)
+            renderer.draw_static(surface)
+            for seat, start in enumerate(renderer.layout.start_indices):
+                with self.subTest(total_players=count, seat=seat):
+                    x, y = renderer.display.track_positions[start]
+                    arrow = rgb(surface.get_at((int(x), int(y))))
+                    cell = theme.brighten(seat_colors(count)[seat], START_CELL_BRIGHTEN)
+                    self.assertGreaterEqual(theme.contrast_ratio(arrow, cell), MIN_LABEL_CONTRAST)
+
+    def test_pawn_numbers_stand_out_on_every_seat_colour(self) -> None:
+        """A pawn's number contrasts with the pawn's own colour."""
+
+        for color in self.all_seat_colors():
+            with self.subTest(color=color):
+                surface = pygame.Surface((80, 80))
+                theme.draw_token_pin(surface, (40, 36), color, radius=15, label="4", fonts=self.fonts)
+                image = self.fonts["tiny"].render("4", True, (255, 255, 255))
+                ink = image.get_bounding_rect().move(image.get_rect(center=(40, 36)).topleft)
+                best = max(
+                    theme.contrast_ratio(rgb(surface.get_at((x, y))), color)
+                    for x in range(ink.left, ink.right)
+                    for y in range(ink.top, ink.bottom)
+                )
+                self.assertGreaterEqual(best, MIN_LABEL_CONTRAST)
 
 
 if __name__ == "__main__":

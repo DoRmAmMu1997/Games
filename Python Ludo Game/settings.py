@@ -81,6 +81,11 @@ INK = (20, 24, 26)
 GOLD = (224, 181, 76)
 SUCCESS = (110, 205, 140)
 DANGER = (224, 84, 84)
+# Labels and markings drawn on a seat colour (pawn numbers, name banners,
+# start arrows) must reach at least this WCAG contrast ratio against it. 3:1
+# is the WCAG minimum for large text and graphics; white is kept wherever it
+# reaches this, and dark ink takes over on light seats such as yellow.
+MIN_LABEL_CONTRAST = 3.0
 DISABLED = (88, 98, 102)        # muted grey for a disabled button's border and label
 DISABLED_FILL = (26, 32, 36)    # darker than PANEL_CARD, so a disabled button reads as "off"
 
