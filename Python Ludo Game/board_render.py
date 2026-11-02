@@ -9,10 +9,11 @@ import pygame
 
 import visual_theme as theme
 from models import Move
-from settings import GOLD, WHITE, seat_colors
+from settings import GOLD, STACK_SPACING, TOKEN_HIT_RADIUS, TOKEN_PIN_RADIUS, WHITE, seat_colors
 
 Point = tuple[float, float]
 Color = tuple[int, int, int]
+TokenKey = tuple[int, int]
 GRID_CELLS = 15
 SQUARE_CELL = 42
 SQUARE_LEFT = 135
@@ -142,18 +143,70 @@ class BoardRenderer:
         self._draw_track(surface)
         self._draw_home_lanes(surface)
         self._draw_center_home(surface, game)
-        self._draw_move_highlights(surface, legal_moves)
-        self._draw_tokens(surface, game, fonts, animated_positions)
+        pins = self.token_pins(game, animated_positions)
+        self._draw_move_highlights(surface, legal_moves, pins)
+        self._draw_tokens(surface, game, fonts, pins)
 
-    def move_at_pos(self, pos: tuple[int, int], moves: list[Move]) -> Move | None:
-        """Return the legal move whose token was clicked, if any."""
+    def token_pins(
+        self,
+        game,
+        animated_positions: dict[TokenKey, Point] | None = None,
+    ) -> dict[TokenKey, tuple[Point, int]]:
+        """Return every pawn's drawn ``(centre, radius)``, in drawing order.
 
+        This is the ONLY place that decides where a pawn appears on screen.
+        Pawns whose logical cells round to the same point (any colours, on a
+        safe square, a start square, a lane cell, or the finish) fan out
+        around that point; a lone pawn sits exactly on its cell centre.
+        Drawing, move highlights, and click hit-testing all read these pins,
+        so a click always measures against what the player actually sees.
+
+        ``animated_positions`` holds the shell's in-flight pixel for a pawn
+        that is still hopping; the fan offset is added on top of it.
+        """
+
+        animated_positions = animated_positions or {}
+        cells: dict[tuple[int, int], list[TokenKey]] = {}
+        bases: dict[TokenKey, Point] = {}
+        for player_index, player in enumerate(game.players):
+            for token_index, token in enumerate(player.tokens):
+                key = (player_index, token_index)
+                base = self.position_for(player_index, token.steps, token_index)
+                bases[key] = base
+                cells.setdefault((round(base[0]), round(base[1])), []).append(key)
+
+        pins: dict[TokenKey, tuple[Point, int]] = {}
+        for player_index, player in enumerate(game.players):
+            for token_index in range(len(player.tokens)):
+                key = (player_index, token_index)
+                base = bases[key]
+                occupants = cells[(round(base[0]), round(base[1]))]
+                offset = _stack_offset(occupants.index(key), len(occupants))
+                drawn = animated_positions.get(key, base)
+                pins[key] = ((drawn[0] + offset[0], drawn[1] + offset[1]), TOKEN_PIN_RADIUS)
+        return pins
+
+    def move_at_pos(self, pos: tuple[int, int], moves: list[Move], game) -> Move | None:
+        """Return the legal move whose drawn pawn is nearest the click, if any.
+
+        Every highlighted pawn within ``TOKEN_HIT_RADIUS`` of the click is a
+        candidate and the closest one wins. Taking the first match instead
+        would let a neighbouring pawn steal the click wherever two hit
+        circles overlap, which happens on the tight 6P board.
+        """
+
+        pins = self.token_pins(game)
         px, py = pos
+        candidates: list[tuple[float, Move]] = []
         for move in moves:
-            center = self.position_for(move.player_index, move.from_steps, move.token_index)
-            if math.hypot(px - center[0], py - center[1]) <= self.cell_radius + 18:
-                return move
-        return None
+            center, _radius = pins[(move.player_index, move.token_index)]
+            distance = math.hypot(px - center[0], py - center[1])
+            if distance <= TOKEN_HIT_RADIUS:
+                candidates.append((distance, move))
+        if not candidates:
+            return None
+        # ``min`` keeps the first of equally near candidates, so ties are stable.
+        return min(candidates, key=lambda candidate: candidate[0])[1]
 
     def position_for(self, player_index: int, steps: int, token_index: int = 0) -> Point:
         """Return the rendered coordinate for a token.
@@ -415,11 +468,16 @@ class BoardRenderer:
         pygame.draw.circle(surface, theme.WALLPAPER_BLUE, (cx, cy), 17)
         pygame.draw.circle(surface, WHITE, (cx, cy), 5)
 
-    def _draw_move_highlights(self, surface: pygame.Surface, moves: list[Move]) -> None:
-        """Ring clickable tokens and their destinations for a human turn."""
+    def _draw_move_highlights(
+        self,
+        surface: pygame.Surface,
+        moves: list[Move],
+        pins: dict[TokenKey, tuple[Point, int]],
+    ) -> None:
+        """Ring clickable pawns (where they are drawn) and their destinations."""
 
         for move in moves:
-            start = self.position_for(move.player_index, move.from_steps, move.token_index)
+            start, _radius = pins[(move.player_index, move.token_index)]
             pygame.draw.circle(surface, WHITE, _ipoint(start), self.cell_radius + 18, 4)
             landing = self.position_for(move.player_index, move.to_steps, move.token_index)
             pygame.draw.circle(surface, GOLD, _ipoint(landing), self.cell_radius + 21, 4)
@@ -429,25 +487,13 @@ class BoardRenderer:
         surface: pygame.Surface,
         game,
         fonts: dict[str, pygame.font.Font],
-        animated_positions: dict[tuple[int, int], tuple[float, float]],
+        pins: dict[TokenKey, tuple[Point, int]],
     ) -> None:
-        """Draw all player pawns as glossy pin-shaped tokens."""
+        """Draw all player pawns as glossy pin-shaped tokens at their pins."""
 
-        stack_offsets: dict[tuple[int, int], int] = {}
-        for player_index, player in enumerate(game.players):
-            for token_index, token in enumerate(player.tokens):
-                base = animated_positions.get(
-                    (player_index, token_index),
-                    self.position_for(player_index, token.steps, token_index),
-                )
-                track_index = self.layout.track_index(player_index, token.steps)
-                offset = (0, 0)
-                if track_index is not None:
-                    count = stack_offsets.get((player_index, track_index), 0)
-                    stack_offsets[(player_index, track_index)] = count + 1
-                    offset = ((count % 2) * 12 - 6, (count // 2) * 12 - 6)
-                center = (base[0] + offset[0], base[1] + offset[1])
-                theme.draw_token_pin(surface, center, player.color, radius=15, label=str(token_index + 1), fonts=fonts)
+        for (player_index, token_index), (center, radius) in pins.items():
+            color = game.players[player_index].color
+            theme.draw_token_pin(surface, center, color, radius=radius, label=str(token_index + 1), fonts=fonts)
 
 
 def _display_layout_for(layout) -> DisplayLayout:
@@ -808,6 +854,24 @@ def _offset_point(base: Point, outward: Point, tangent: Point, along: float, acr
         base[0] + outward[0] * along + tangent[0] * across,
         base[1] + outward[1] * along + tangent[1] * across,
     )
+
+
+def _stack_offset(slot: int, count: int) -> Point:
+    """Return pawn ``slot``'s offset from the centre of a cell shared by ``count`` pawns.
+
+    The pawns sit on the corners of a regular ``count``-sided polygon whose
+    sides are ``STACK_SPACING`` long, so neighbours are always the same
+    distance apart. Beginner note: a regular polygon with side ``s`` and
+    ``k`` corners has corner radius ``s / (2 * sin(pi / k))``. The first
+    corner is turned so the polygon's top edge is flat, which reads like a
+    neat row of pawns. A lone pawn gets no offset at all.
+    """
+
+    if count <= 1:
+        return (0.0, 0.0)
+    radius = STACK_SPACING / (2 * math.sin(math.pi / count))
+    angle = -math.pi / 2 - math.pi / count + math.tau * slot / count
+    return (math.cos(angle) * radius, math.sin(angle) * radius)
 
 
 def _owner_for_start(index: int, start_indices: tuple[int, ...]) -> int | None:

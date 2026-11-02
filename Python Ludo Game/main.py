@@ -478,7 +478,7 @@ class LudoApp:
         ):
             # Human token clicks are only accepted when the engine is
             # waiting for a move after a roll.
-            move = self.renderer.move_at_pos(pos, self.visible_moves)
+            move = self.renderer.move_at_pos(pos, self.visible_moves, self.game)
             if move is not None:
                 self._apply_move(move)
 

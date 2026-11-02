@@ -34,6 +34,16 @@ DICE_ANIM_MS = 350
 # per second: fast enough not to drag, slow enough to follow each hop.
 TOKEN_HOP_SPEED = 460.0
 
+# Token pins (the drawn pawns) and their click targets.
+TOKEN_PIN_RADIUS = 15  # radius of a pawn's coloured head, in pixels
+# A click selects the nearest highlighted pawn whose drawn centre lies within
+# this many pixels: generous enough for quick clicks, and "nearest" keeps it
+# exact when neighbouring pawns' circles overlap on the tight 6P board.
+TOKEN_HIT_RADIUS = 33
+# Pawns sharing one cell fan out around its centre so each stays visible.
+# Neighbouring pawns in a fan sit this many pixels apart.
+STACK_SPACING = 12
+
 
 # ---------------------------------------------------------------------------
 # Rules defaults
