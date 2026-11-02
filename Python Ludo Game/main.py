@@ -110,13 +110,19 @@ PLAY_PROMPT_RECT = pygame.Rect(PLAY_DICE_TRAY_RECT.x + 104, PLAY_DICE_TRAY_RECT.
 PLAY_PROMPT_LINE_GAP = 2
 # The right-hand column holds the roster, then the move buttons, then the
 # table log. Nothing here may overlap the board: a full six-player roster
-# ends at y = 90 + 5 * 52 + 40 = 390, so the move buttons start below it.
+# ends at y = 90 + 5 * 54 + 48 = 408, so the move buttons start below it.
 PLAY_ROSTER_X = 932
 PLAY_ROSTER_Y = 90
 PLAY_ROSTER_WIDTH = 254
-PLAY_ROSTER_STEP = 52
-PLAY_ROSTER_CHIP_HEIGHT = 40
-PLAY_MOVE_START = (PLAY_ROSTER_X, 410)
+PLAY_ROSTER_STEP = 54
+# A chip holds two text lines (name, then home/captures). 48 px fits them
+# with the tallest platform fonts (21 px + 18 px DejaVu Sans) plus margins.
+PLAY_ROSTER_CHIP_HEIGHT = 48
+PLAY_ROSTER_TEXT_X = 44         # chip text starts here, right of the colour dot
+PLAY_ROSTER_TEXT_PADDING = 10   # clear space between the text and the chip's right edge
+PLAY_ROSTER_TAG_GAP = 8         # least space between the name and its Human/AI tag
+PLAY_ROSTER_LINE_GAP = 2        # space between the chip's two text lines
+PLAY_MOVE_START = (PLAY_ROSTER_X, 420)
 PLAY_MOVE_SIZE = (PLAY_ROSTER_WIDTH, 38)
 PLAY_MOVE_GAP = 8
 # The log's bottom edge lines up with the dice tray and New button (y = 876).
@@ -1040,23 +1046,31 @@ class LudoApp:
         if self.game is None:
             return
         ui.draw_text(self.window, self.fonts["header"], "Players", (PLAY_ROSTER_X, PLAY_ROSTER_Y - 42), WHITE)
+        name_font, tiny = self.fonts["small"], self.fonts["tiny"]
+        # The name line and the stats line are centred as one block, so they
+        # stay inside the chip whatever line heights this platform's fonts use.
+        block_height = name_font.get_height() + PLAY_ROSTER_LINE_GAP + tiny.get_height()
         for index, player in enumerate(self.game.players):
-            rect = pygame.Rect(
-                PLAY_ROSTER_X, PLAY_ROSTER_Y + index * PLAY_ROSTER_STEP, PLAY_ROSTER_WIDTH, PLAY_ROSTER_CHIP_HEIGHT
-            )
+            rect = _roster_chip_rect(index)
             border = player.color if index == self.game.current else PANEL_EDGE
             theme.draw_shadowed_rect(self.window, rect, theme.HUD_DARK, border=border, radius=12, shadow_offset=(0, 4))
             pygame.draw.circle(self.window, player.color, (rect.x + 22, rect.centery), 12)
-            ui.draw_text(self.window, self.fonts["small"], player.name[:18], (rect.x + 44, rect.y + 7), WHITE)
+            text_x = rect.x + PLAY_ROSTER_TEXT_X
+            text_right = rect.right - PLAY_ROSTER_TEXT_PADDING
+            name_y = rect.centery - block_height // 2
+            stats_y = name_y + name_font.get_height() + PLAY_ROSTER_LINE_GAP
+            # The Human/AI-profile tag sits at the right end of the name line;
+            # the name gets whatever width is left and is ellipsized to fit.
             tag = "Human" if player.is_human else self.game.ai_profile.title()
+            tag_width = tiny.size(tag)[0]
+            name_width = text_right - text_x - tag_width - PLAY_ROSTER_TAG_GAP
+            name = ui.ellipsize(name_font, player.name, name_width)
+            ui.draw_text(self.window, name_font, name, (text_x, name_y), WHITE)
+            tag_y = name_y + name_font.get_height() - tiny.get_height()
+            ui.draw_text(self.window, tiny, tag, (text_right - tag_width, tag_y), SOFT)
             done = player.finished_count(self.game.layout.finish_steps)
-            ui.draw_text(
-                self.window,
-                self.fonts["tiny"],
-                f"{tag}  Home {done}/4  Captures {player.captures}",
-                (rect.x + 44, rect.y + 25),
-                SOFT,
-            )
+            stats = ui.ellipsize(tiny, f"Home {done}/4  Captures {player.captures}", text_right - text_x)
+            ui.draw_text(self.window, tiny, stats, (text_x, stats_y), SOFT)
 
     def _draw_play_button(self, button: ui.Button, mouse: tuple[int, int]) -> None:
         """Draw gameplay buttons with the new table-HUD treatment."""
@@ -1156,6 +1170,13 @@ class LudoApp:
         )
         for button in self.buttons:
             button.draw(self.window, self.fonts, mouse)
+
+
+def _roster_chip_rect(index: int) -> pygame.Rect:
+    """Return the play-screen rectangle of roster chip ``index`` (one per seat)."""
+
+    y = PLAY_ROSTER_Y + index * PLAY_ROSTER_STEP
+    return pygame.Rect(PLAY_ROSTER_X, y, PLAY_ROSTER_WIDTH, PLAY_ROSTER_CHIP_HEIGHT)
 
 
 def _move_button_rect(index: int) -> pygame.Rect:

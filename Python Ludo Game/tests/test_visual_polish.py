@@ -11,6 +11,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -197,6 +198,57 @@ class ButtonStateTests(unittest.TestCase):
             luminance(surface.get_at((x, y))) for x in range(rect.x, rect.right) for y in range(rect.y, rect.bottom)
         )
         self.assertLess(brightest, 170)
+
+
+class RosterChipTests(unittest.TestCase):
+    """Every line of text on a roster chip stays inside that chip."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once for the roster checks."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the roster checks."""
+
+        pygame.quit()
+
+    def test_roster_text_fits_inside_each_chip(self) -> None:
+        """Long names and big counters are fitted to the chip, never drawn past it."""
+
+        app = main.LudoApp(persist=False)
+        self.addCleanup(setattr, app, "running", False)
+        players = [("W" * 18, True)] + [(f"AI {seat} (Purple)", False) for seat in range(1, 6)]
+        game = LudoGame(players, LudoRules(total_players=6), seed=1, ai_profile="aggressive")
+        for player in game.players:
+            player.captures = 99
+            for token in player.tokens:
+                token.steps = game.layout.finish_steps
+        app.start_game(game)
+        chips = [main._roster_chip_rect(index) for index in range(6)]
+        drawn: list[pygame.Rect] = []
+        real_draw_text = ui.draw_text
+
+        def record(surface, font, text, pos, *args, **kwargs) -> None:
+            """Remember the box of every text drawn inside a roster chip, then draw it."""
+
+            box = pygame.Rect((int(pos[0]), int(pos[1])), font.size(text))
+            if any(chip.collidepoint(box.topleft) for chip in chips):
+                drawn.append(box)
+            real_draw_text(surface, font, text, pos, *args, **kwargs)
+
+        with mock.patch.object(ui, "draw_text", side_effect=record):
+            app._draw_player_roster()
+
+        self.assertEqual(len(drawn), 18, "expected a name, a seat tag, and a stats line per chip")
+        for box in drawn:
+            chip = next(chip for chip in chips if chip.collidepoint(box.topleft))
+            with self.subTest(box=box):
+                self.assertTrue(chip.inflate(-8, -4).contains(box), f"{box} spills out of {chip}")
+                others = [other for other in drawn if other is not box and chip.collidepoint(other.topleft)]
+                self.assertEqual(box.collidelistall(others), [], f"{box} overlaps another line on its chip")
 
 
 if __name__ == "__main__":
