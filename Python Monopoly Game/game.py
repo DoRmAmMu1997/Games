@@ -221,8 +221,10 @@ class MonopolyGame:
         """Pay a debt; if `payer` cannot, raise funds, then maybe go bankrupt.
 
         `payee` is the player who is owed the money, or None for the bank.
+        A bankrupt player has nothing left and owes nothing more, so any
+        later debt aimed at them is ignored.
         """
-        if amount <= 0:
+        if amount <= 0 or payer.bankrupt:
             return
         if payer.cash < amount:
             # Try to cover the shortfall by selling houses and mortgaging.
@@ -426,9 +428,13 @@ class MonopolyGame:
             self.charge(player, JAIL_FINE)
             player.in_jail = False
             player.jail_turns = 0
-            if self.phase == "playing":
-                self._step_forward(player, total)
-                self._resolve_landing(player)
+            if player.bankrupt:
+                # The fine bankrupted them: only a solvent player steps
+                # forward and resolves the landing.
+                self._continue_after_landing()
+                return
+            self._step_forward(player, total)
+            self._resolve_landing(player)
             if self.awaiting != "buy_or_auction":
                 self._continue_after_landing()
         else:
@@ -436,15 +442,19 @@ class MonopolyGame:
             self.awaiting = "post_roll"
 
     def pay_jail_fine(self) -> None:
-        """Current player pays the fine to get out of jail before rolling."""
+        """Current player pays the fine to get out of jail before rolling.
+
+        Paying early is optional, so it is refused (like `buy_property`)
+        unless the fine is covered by the cash in hand -- it can never
+        bankrupt anyone.
+        """
         player = self.current_player
-        if self.awaiting != "pre_roll" or not player.in_jail:
+        if self.awaiting != "pre_roll" or not player.in_jail or player.cash < JAIL_FINE:
             return
         self.charge(player, JAIL_FINE)
-        if self.phase == "playing":
-            player.in_jail = False
-            player.jail_turns = 0
-            self._note(f"{player.name} pays the ${JAIL_FINE} fine and is free.")
+        player.in_jail = False
+        player.jail_turns = 0
+        self._note(f"{player.name} pays the ${JAIL_FINE} fine and is free.")
 
     def use_jail_card(self) -> None:
         """Current player spends a Get Out of Jail Free card before rolling."""

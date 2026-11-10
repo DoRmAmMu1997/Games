@@ -60,7 +60,8 @@ the board, buying properties, and trying to bankrupt everyone else.
 - **Trade** properties, cash, and Get Out of Jail Free cards with any other
   player.
 - Land on **Go To Jail** (or roll three doubles, or draw the jail card) and
-  you go to jail; pay $50, use a jail card, or roll for doubles to get out.
+  you go to jail; pay $50 (with the cash in hand), use a jail card, or roll
+  for doubles to get out.
 - Pass **GO** to collect $200.
 - Last player not bankrupt **wins**.
 
