@@ -495,6 +495,28 @@ def _blit_wrapped(surface, font, text, rect, color) -> None:
 # --------------------------------------------------------------------------
 # Action bar
 # --------------------------------------------------------------------------
+# Action-bar button slots: two columns by four rows inside the bottom bar.
+# The prompt text sits in its own strip ABOVE the bar, so the first row of
+# buttons can start at the very top of the bar without ever covering it.
+# The last row ends at 872, inside the bar's bottom edge at 874.
+_BAR_COLS = (892, 1086)
+_BAR_ROWS = (700, 744, 788, 832)
+_BTN_W, _BTN_H = 182, 40
+
+
+def action_bar_layout() -> dict:
+    """Return the action bar's prompt strip and button bar rectangles."""
+    return {
+        "prompt": pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 214, PANEL_WIDTH + 8, 26),
+        "bar": pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 184, PANEL_WIDTH + 8, 178),
+    }
+
+
+def bar_slot_rect(slot: int) -> pygame.Rect:
+    """Return the rectangle for action-bar button number `slot` (0-7)."""
+    return pygame.Rect(_BAR_COLS[slot % 2], _BAR_ROWS[slot // 2], _BTN_W, _BTN_H)
+
+
 def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
     """Draw the bottom action bar: a prompt strip and the button bar.
 
@@ -507,15 +529,15 @@ def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
     """
     # Slim prompt strip, just above the bar. One line of text fits; longer
     # prompts get truncated rather than wrapped under a button.
-    prompt_strip = pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 214,
-                               PANEL_WIDTH + 8, 26)
+    layout = action_bar_layout()
+    prompt_strip = layout["prompt"]
     pygame.draw.rect(surface, PANEL_CARD, prompt_strip, border_radius=8)
     pygame.draw.rect(surface, INK, prompt_strip, 1, border_radius=8)
     _blit_wrapped(surface, fonts["small"], prompt,
                   pygame.Rect(prompt_strip.x + 12, prompt_strip.y + 4,
                               prompt_strip.width - 24, 20), WHITE)
 
-    bar = pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 184, PANEL_WIDTH + 8, 178)
+    bar = layout["bar"]
     pygame.draw.rect(surface, PANEL_CARD, bar, border_radius=8)
     pygame.draw.rect(surface, INK, bar, 1, border_radius=8)
     for button in buttons:
@@ -525,11 +547,25 @@ def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
 # --------------------------------------------------------------------------
 # Auction overlay
 # --------------------------------------------------------------------------
+def auction_layout() -> dict:
+    """Compute the auction dialog's panel and its Bid / Pass button rects.
+
+    Both the drawing code and main.py's button builder use this, so the
+    drawn dialog and the clickable buttons always agree.
+    """
+    panel = pygame.Rect(0, 0, 460, 280)
+    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    return {
+        "panel": panel,
+        "bid": pygame.Rect(panel.centerx - 200, panel.bottom - 52, 190, 40),
+        "pass": pygame.Rect(panel.centerx + 10, panel.bottom - 52, 190, 40),
+    }
+
+
 def draw_auction(surface, fonts, game, buttons, mouse) -> None:
     """Draw the auction dialog over the board."""
     _dim(surface)
-    panel = pygame.Rect(0, 0, 460, 280)
-    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    panel = auction_layout()["panel"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
     auction = game.auction

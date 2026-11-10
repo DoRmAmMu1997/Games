@@ -25,8 +25,10 @@ import pygame
 from test_raise_funds import collect_each_debt, rent_debt
 
 import main
+import ui
 from game import MonopolyGame
 from main import MonopolyApp
+from settings import SCREEN_HEIGHT, SCREEN_WIDTH
 
 
 def click(app: MonopolyApp, key: str) -> None:
@@ -161,6 +163,32 @@ class CorruptFileTests(SeededSaveDirTestCase):
         self.assertEqual((self.folder / "savegame.bad.json").read_text(), "[1, 2, 3]")
         self.assertFalse((self.folder / "savegame.json").exists())
         self.assertTrue((self.folder / "error.log").exists())
+
+
+class LayoutHelperTests(ShellTestCase):
+    """Shared ui.py layout helpers keep drawn and clickable rects in step."""
+
+    def test_every_action_bar_slot_sits_inside_the_bar(self) -> None:
+        """All eight button slots fit inside the bar, and the bar inside the window."""
+        bar = ui.action_bar_layout()["bar"]
+
+        self.assertTrue(pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT).contains(bar))
+        for slot in range(8):
+            with self.subTest(slot=slot):
+                self.assertTrue(bar.contains(ui.bar_slot_rect(slot)))
+
+    def test_auction_buttons_use_the_shared_auction_layout(self) -> None:
+        """Bid and Pass are built from ui.auction_layout and sit inside its panel."""
+        game = MonopolyGame([("Human", True), ("Iris", False)], seed=1)
+        game._start_auction(1)
+        app = self.make_app(game)
+        layout = ui.auction_layout()
+
+        rects = {b.key: b.rect for b in app._playing_buttons()}
+
+        self.assertEqual(rects, {"bid": layout["bid"], "pass": layout["pass"]})
+        for rect in rects.values():
+            self.assertTrue(layout["panel"].contains(rect))
 
 
 class RaiseFundsBarTests(ShellTestCase):

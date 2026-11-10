@@ -41,14 +41,6 @@ from settings import (
     WINDOW_TITLE,
 )
 
-# Action-bar button slots: two columns by four rows inside the bottom panel.
-# The prompt text now sits in its own strip ABOVE the bar (drawn by
-# `ui.draw_action_bar`), so the first row of buttons can start at the very
-# top of the bar without ever covering the prompt.
-_BAR_COLS = (892, 1086)
-_BAR_ROWS = (700, 748, 796, 844)
-_BTN_W, _BTN_H = 182, 40
-
 
 class TradeDraft(TradeOffer, total=False):
     """A human's in-progress trade offer plus the dialog's scroll offsets.
@@ -59,13 +51,6 @@ class TradeDraft(TradeOffer, total=False):
 
     give_scroll: int
     get_scroll: int
-
-
-def _bar_rect(slot: int):
-    """Return the rectangle for action-bar button number `slot` (0-7)."""
-    col = _BAR_COLS[slot % 2]
-    row = _BAR_ROWS[slot // 2]
-    return pygame.Rect(col, row, _BTN_W, _BTN_H)
 
 
 def _resource_path(name: str) -> str:
@@ -943,7 +928,7 @@ class MonopolyApp:
             return self._auction_buttons(actor)
         if self.mode in ("build", "sell", "mortgage"):
             # Board-click modes need only a way back out.
-            return [ui.Button(_bar_rect(0), "Done", "done", color=(46, 116, 78))]
+            return [ui.Button(ui.bar_slot_rect(0), "Done", "done", color=(46, 116, 78))]
         return self._action_bar_buttons(actor)
 
     def _trade_dialog_buttons(self) -> list:
@@ -1021,16 +1006,13 @@ class MonopolyApp:
         game = self._require_game()
         auction = game.auction
         assert auction is not None, "auction buttons only build during an auction"
-        panel = pygame.Rect(0, 0, 460, 280)
-        panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+        layout = ui.auction_layout()
         step = max(10, game.board[auction["position"]].price // 20)
         can_bid = (auction["high_bid"] + step) <= actor.cash
         return [
-            ui.Button((panel.centerx - 200, panel.bottom - 52, 190, 40),
-                      f"Bid +${step}", "bid", enabled=can_bid,
+            ui.Button(layout["bid"], f"Bid +${step}", "bid", enabled=can_bid,
                       color=(46, 116, 78)),
-            ui.Button((panel.centerx + 10, panel.bottom - 52, 190, 40),
-                      "Pass", "pass", color=(150, 60, 60)),
+            ui.Button(layout["pass"], "Pass", "pass", color=(150, 60, 60)),
         ]
 
     def _action_bar_buttons(self, actor) -> list:
@@ -1042,45 +1024,45 @@ class MonopolyApp:
                        for pos in game.properties_of(actor))
         if state == "pre_roll":
             if actor.in_jail:
-                buttons.append(ui.Button(_bar_rect(0), "Roll Dice", "roll",
+                buttons.append(ui.Button(ui.bar_slot_rect(0), "Roll Dice", "roll",
                                          color=(46, 116, 78)))
-                buttons.append(ui.Button(_bar_rect(1), "Pay $50", "jail_pay",
+                buttons.append(ui.Button(ui.bar_slot_rect(1), "Pay $50", "jail_pay",
                                          enabled=actor.cash >= 50))
-                buttons.append(ui.Button(_bar_rect(2), "Use Jail Card", "jail_card",
+                buttons.append(ui.Button(ui.bar_slot_rect(2), "Use Jail Card", "jail_card",
                                          enabled=actor.jail_cards > 0))
             else:
-                buttons.append(ui.Button(_bar_rect(0), "Roll Dice", "roll",
+                buttons.append(ui.Button(ui.bar_slot_rect(0), "Roll Dice", "roll",
                                          color=(46, 116, 78)))
-                buttons.append(ui.Button(_bar_rect(1), "Build Houses", "build"))
-                buttons.append(ui.Button(_bar_rect(2), "Sell Buildings", "sell",
+                buttons.append(ui.Button(ui.bar_slot_rect(1), "Build Houses", "build"))
+                buttons.append(ui.Button(ui.bar_slot_rect(2), "Sell Buildings", "sell",
                                          enabled=can_sell))
-                buttons.append(ui.Button(_bar_rect(3), "Mortgage", "mortgage"))
-                buttons.append(ui.Button(_bar_rect(4), "Trade", "trade"))
-                buttons.append(ui.Button(_bar_rect(5), "Save & Quit", "save_quit"))
-                buttons.append(ui.Button(_bar_rect(6), "Assets", "assets"))
+                buttons.append(ui.Button(ui.bar_slot_rect(3), "Mortgage", "mortgage"))
+                buttons.append(ui.Button(ui.bar_slot_rect(4), "Trade", "trade"))
+                buttons.append(ui.Button(ui.bar_slot_rect(5), "Save & Quit", "save_quit"))
+                buttons.append(ui.Button(ui.bar_slot_rect(6), "Assets", "assets"))
         elif state == "buy_or_auction" and game.pending_purchase is not None:
             space = game.board[game.pending_purchase]
-            buttons.append(ui.Button(_bar_rect(0), f"Buy (${space.price})", "buy",
+            buttons.append(ui.Button(ui.bar_slot_rect(0), f"Buy (${space.price})", "buy",
                                      enabled=actor.cash >= space.price,
                                      color=(46, 116, 78)))
-            buttons.append(ui.Button(_bar_rect(1), "Auction", "auction_decline"))
+            buttons.append(ui.Button(ui.bar_slot_rect(1), "Auction", "auction_decline"))
         elif state == "post_roll":
-            buttons.append(ui.Button(_bar_rect(0), "End Turn", "end_turn",
+            buttons.append(ui.Button(ui.bar_slot_rect(0), "End Turn", "end_turn",
                                      color=(46, 116, 78)))
-            buttons.append(ui.Button(_bar_rect(1), "Build Houses", "build"))
-            buttons.append(ui.Button(_bar_rect(2), "Sell Buildings", "sell",
+            buttons.append(ui.Button(ui.bar_slot_rect(1), "Build Houses", "build"))
+            buttons.append(ui.Button(ui.bar_slot_rect(2), "Sell Buildings", "sell",
                                      enabled=can_sell))
-            buttons.append(ui.Button(_bar_rect(3), "Mortgage", "mortgage"))
-            buttons.append(ui.Button(_bar_rect(4), "Trade", "trade"))
-            buttons.append(ui.Button(_bar_rect(5), "Assets", "assets"))
+            buttons.append(ui.Button(ui.bar_slot_rect(3), "Mortgage", "mortgage"))
+            buttons.append(ui.Button(ui.bar_slot_rect(4), "Trade", "trade"))
+            buttons.append(ui.Button(ui.bar_slot_rect(5), "Assets", "assets"))
         elif state == "raise_funds" and game.debts:
             # The debtor sells and mortgages in the asset manager, then pays
             # (once their cash covers the oldest debt) or concedes.
             owed = game.debts[0]["amount"]
-            buttons.append(ui.Button(_bar_rect(0), f"Pay ${owed}", "pay_debts",
+            buttons.append(ui.Button(ui.bar_slot_rect(0), f"Pay ${owed}", "pay_debts",
                                      enabled=actor.cash >= owed, color=(46, 116, 78)))
-            buttons.append(ui.Button(_bar_rect(1), "Assets", "assets"))
-            buttons.append(ui.Button(_bar_rect(2), "Declare Bankruptcy",
+            buttons.append(ui.Button(ui.bar_slot_rect(1), "Assets", "assets"))
+            buttons.append(ui.Button(ui.bar_slot_rect(2), "Declare Bankruptcy",
                                      "declare_bankruptcy", color=(150, 60, 60)))
         return buttons
 
