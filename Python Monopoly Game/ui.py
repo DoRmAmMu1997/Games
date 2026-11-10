@@ -474,19 +474,34 @@ def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None
             _text(surface, fonts, "tiny", marker, (row.right - 16, row.y + 5), GOLD)
 
 
-def _blit_wrapped(surface, font, text, rect, color) -> None:
-    """Word-wrap `text` inside `rect` and draw it."""
-    words = text.split()
+def _wrap_lines(font, text: str, width: int) -> list[str]:
+    """Greedily word-wrap `text` into lines no wider than `width` pixels."""
     lines, current = [], ""
-    for word in words:
+    for word in text.split():
         trial = f"{current} {word}".strip()
-        if font.size(trial)[0] <= rect.width:
+        if font.size(trial)[0] <= width:
             current = trial
         else:
-            lines.append(current)
+            if current:
+                lines.append(current)
             current = word
     if current:
         lines.append(current)
+    return lines
+
+
+def _fit_text(font, text: str, width: int) -> str:
+    """Return `text`, shortened with "..." if needed to fit `width` pixels."""
+    if font.size(text)[0] <= width:
+        return text
+    while text and font.size(text + "...")[0] > width:
+        text = text[:-1]
+    return text.rstrip() + "..."
+
+
+def _blit_wrapped(surface, font, text, rect, color) -> None:
+    """Word-wrap `text` inside `rect` and draw it."""
+    lines = _wrap_lines(font, text, rect.width)
     for i, line in enumerate(lines):
         glyph = font.render(line, True, color)
         surface.blit(glyph, (rect.x, rect.y + i * 18))
@@ -729,11 +744,94 @@ def _draw_trade_scroll_glyphs(surface, layout, side: str, cx: int) -> None:
 # --------------------------------------------------------------------------
 # Trade response + game over
 # --------------------------------------------------------------------------
+#: Lines shown per side of an incoming offer; a longer side shows one fewer
+#: and ends with a "+N more" line, so both columns stay a fixed height.
+TRADE_RESPONSE_ROWS = 6
+_RESPONSE_PITCH = 18          # pixels between list lines
+
+
+def trade_response_layout() -> dict:
+    """Compute the trade-response dialog: panel, two columns and Accept/Reject.
+
+    main.py builds the buttons from this and `draw_trade_response` draws
+    from it, so the dialog and its clickable buttons always agree. Text
+    must stay above `limit`, clear of the button row.
+    """
+    panel = pygame.Rect(0, 0, 600, 400)
+    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    column_w = (panel.width - 80) // 2
+    column_h = 26 + TRADE_RESPONSE_ROWS * _RESPONSE_PITCH
+    return {
+        "panel": panel,
+        "receive": pygame.Rect(panel.x + 30, panel.y + 96, column_w, column_h),
+        "give": pygame.Rect(panel.right - 30 - column_w, panel.y + 96, column_w, column_h),
+        "accept": pygame.Rect(panel.centerx - 210, panel.bottom - 56, 190, 40),
+        "reject": pygame.Rect(panel.centerx + 20, panel.bottom - 56, 190, 40),
+        "limit": panel.bottom - 64,
+    }
+
+
+def offer_side_lines(game, side) -> list[str]:
+    """Readable lines for one side of a trade offer (or "Nothing")."""
+    lines = [game.board[pos].name for pos in side["props"]]
+    if side["cash"]:
+        lines.append(f"${side['cash']} cash")
+    return lines or ["Nothing"]
+
+
+def _capped(lines: list[str], cap: int) -> list[str]:
+    """Keep at most `cap` lines, ending with "+N more" when some are hidden."""
+    if len(lines) <= cap:
+        return lines
+    return [*lines[:cap - 1], f"+{len(lines) - cap + 1} more"]
+
+
+def trade_response_plan(game, offer, fonts) -> list:
+    """Place every line of an incoming offer: two capped columns, then notes.
+
+    Returns (font key, text, colour, rect) items for `draw_trade_response`.
+    Each line is shortened to its column's measured width; the mortgage
+    consequence notes follow below the longer column and stop before the
+    layout's `limit`, so nothing reaches the Accept/Reject row.
+    """
+    layout = trade_response_layout()
+    items = []
+
+    def place(key: str, text: str, color, x: int, y: int, width: int) -> int:
+        """Fit one line at (x, y), record it, and return its height."""
+        font = fonts[key]
+        text = _fit_text(font, text, width)
+        rect = pygame.Rect((x, y), font.size(text))
+        items.append((key, text, color, rect))
+        return rect.height
+
+    bottom = layout["receive"].y
+    # What the proposer gives is what the human receives, and vice versa.
+    for column, side, header, color in (("receive", offer["give"], "You receive", SUCCESS),
+                                        ("give", offer["get"], "You give", DANGER)):
+        box = layout[column]
+        place("small", header, color, box.x, box.y, box.width)
+        y = box.y + 26
+        for line in _capped(offer_side_lines(game, side), TRADE_RESPONSE_ROWS):
+            place("tiny", line, WHITE, box.x + 10, y, box.width - 10)
+            y += _RESPONSE_PITCH
+        bottom = max(bottom, y)
+
+    panel = layout["panel"]
+    y = bottom + 10
+    for note in game.trade_consequence_lines(offer):
+        for line in _wrap_lines(fonts["tiny"], note, panel.width - 60):
+            if y + max(_RESPONSE_PITCH, fonts["tiny"].get_height()) > layout["limit"]:
+                return items
+            place("tiny", line, GOLD, panel.x + 30, y, panel.width - 60)
+            y += _RESPONSE_PITCH
+    return items
+
+
 def draw_trade_response(surface, fonts, game, buttons, mouse) -> None:
     """Draw the dialog asking a human to accept or reject an offer."""
     _dim(surface)
-    panel = pygame.Rect(0, 0, 560, 360)
-    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    panel = trade_response_layout()["panel"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
     offer = game.pending_trade
@@ -741,31 +839,9 @@ def draw_trade_response(surface, fonts, game, buttons, mouse) -> None:
     _text(surface, fonts, "big", "TRADE OFFER", (panel.centerx, panel.y + 26),
           GOLD, center=True)
     _text(surface, fonts, "small", f"{proposer.name} offers you:",
-          (panel.x + 30, panel.y + 70), WHITE)
-
-    you_get = offer["give"]      # what the proposer gives = what you receive
-    you_give = offer["get"]
-    y = panel.y + 100
-    _text(surface, fonts, "small", "You receive:", (panel.x + 30, y), SUCCESS)
-    y += 24
-    for pos in you_get["props"]:
-        _text(surface, fonts, "tiny", "- " + game.board[pos].name, (panel.x + 44, y))
-        y += 18
-    if you_get["cash"]:
-        _text(surface, fonts, "tiny", f"- ${you_get['cash']} cash", (panel.x + 44, y))
-        y += 18
-    y += 8
-    _text(surface, fonts, "small", "You give:", (panel.x + 30, y), DANGER)
-    y += 24
-    for pos in you_give["props"]:
-        _text(surface, fonts, "tiny", "- " + game.board[pos].name, (panel.x + 44, y))
-        y += 18
-    if you_give["cash"]:
-        _text(surface, fonts, "tiny", f"- ${you_give['cash']} cash", (panel.x + 44, y))
-    consequence_y = panel.bottom - 100
-    for line in game.trade_consequence_lines(offer):
-        _text(surface, fonts, "tiny", line, (panel.x + 30, consequence_y), GOLD)
-        consequence_y += 18
+          (panel.x + 30, panel.y + 62), WHITE)
+    for key, text, color, rect in trade_response_plan(game, offer, fonts):
+        surface.blit(fonts[key].render(text, True, color), rect)
     for button in buttons:
         button.draw(surface, fonts, mouse)
 

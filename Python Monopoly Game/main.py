@@ -992,13 +992,10 @@ class MonopolyApp:
 
     def _trade_response_buttons(self) -> list:
         """Accept/Reject buttons for an incoming trade offer."""
-        panel = pygame.Rect(0, 0, 560, 360)
-        panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+        layout = ui.trade_response_layout()
         return [
-            ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
-                      "Accept", "trade_accept", color=(46, 116, 78)),
-            ui.Button((panel.centerx + 20, panel.bottom - 56, 190, 40),
-                      "Reject", "trade_reject", color=(150, 60, 60)),
+            ui.Button(layout["accept"], "Accept", "trade_accept", color=(46, 116, 78)),
+            ui.Button(layout["reject"], "Reject", "trade_reject", color=(150, 60, 60)),
         ]
 
     def _auction_buttons(self, actor) -> list:

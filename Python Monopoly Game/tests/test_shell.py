@@ -191,6 +191,56 @@ class LayoutHelperTests(ShellTestCase):
             self.assertTrue(layout["panel"].contains(rect))
 
 
+def big_incoming_offer() -> MonopolyGame:
+    """An AI offer to the human with eight titles a side, cash and mortgages."""
+    game = MonopolyGame([("Human", True), ("Iris", False), ("Knox", False)], seed=3)
+    theirs, mine = (5, 6, 8, 9, 11, 13, 14, 15), (21, 23, 24, 25, 26, 27, 29, 28)
+    game.owners.update(dict.fromkeys(theirs, 1) | dict.fromkeys(mine, 0))
+    game.mortgaged.update((5, 15, 21))
+    game.current = 1
+    game.pending_trade = {"from": 1, "to": 0,
+                          "give": {"props": list(theirs), "cash": 120, "jail": 0},
+                          "get": {"props": list(mine), "cash": 0, "jail": 0}}
+    game._awaiting_before_trade = "post_roll"
+    game.awaiting = "trade_response"
+    return game
+
+
+class TradeResponseDialogTests(ShellTestCase):
+    """An incoming offer reads in two capped columns that never reach the buttons."""
+
+    def test_offer_columns_cap_rows_and_stay_clear_of_the_buttons(self) -> None:
+        """Long sides end in "+N more"; every line sits above panel.bottom - 64."""
+        game = big_incoming_offer()
+        layout = ui.trade_response_layout()
+        assert game.pending_trade is not None
+        plan = ui.trade_response_plan(game, game.pending_trade, ui.make_fonts())
+
+        panel = layout["panel"]
+        for _key, text, _color, rect in plan:
+            with self.subTest(text=text):
+                self.assertGreaterEqual(rect.left, panel.left + 20)
+                self.assertLessEqual(rect.right, panel.right - 20)
+                self.assertLessEqual(rect.bottom, panel.bottom - 64)
+        texts = [text for _key, text, _color, _rect in plan]
+        self.assertIn("+4 more", texts)      # 8 titles + cash: 5 shown, then "+4 more"
+        self.assertIn("+3 more", texts)      # 8 titles: 5 shown, then "+3 more"
+        self.assertTrue(any("interest" in text for text in texts))
+        for column in ("receive", "give"):
+            inside = [rect for _k, _t, _c, rect in plan if layout[column].collidepoint(rect.topleft)]
+            self.assertLessEqual(len(inside), ui.TRADE_RESPONSE_ROWS + 1)   # + the header
+
+    def test_accept_and_reject_come_from_the_shared_layout(self) -> None:
+        """main.py's Accept/Reject buttons are the layout's rects, inside its panel."""
+        app = self.make_app(big_incoming_offer())
+        layout = ui.trade_response_layout()
+
+        rects = {b.key: b.rect for b in app._playing_buttons()}
+
+        self.assertEqual(rects, {"trade_accept": layout["accept"], "trade_reject": layout["reject"]})
+        app._draw()                          # the dialog renders without error
+
+
 class RaiseFundsBarTests(ShellTestCase):
     """The debtor gets Pay, Assets and Declare Bankruptcy while raising funds."""
 
