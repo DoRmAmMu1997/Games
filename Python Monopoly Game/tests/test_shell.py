@@ -350,6 +350,63 @@ class SaveAfterDoubleTests(SeededSaveDirTestCase):
         self.assertEqual((resumed.awaiting, resumed.doubles_count), ("pre_roll", 1))
 
 
+def spectator_game() -> MonopolyGame:
+    """The only human has gone bankrupt; three AIs play on, Iris to move."""
+    game = human_turn()
+    game.players[0].bankrupt = True
+    game.players[0].cash = 0
+    game.current = 1
+    return game
+
+
+class SpectatorTests(SeededSaveDirTestCase):
+    """With no solvent human left, the human may fast-forward or concede."""
+
+    def test_spectator_bar_appears_once_no_solvent_human_remains(self) -> None:
+        """Only Fast-forward and Concede / Main Menu are offered, and they are clickable."""
+        app = self.make_app(spectator_game())
+
+        self.assertEqual(set(button_states(app)), {"fast_forward", "concede"})
+
+    def test_fast_forward_runs_the_ai_without_delay(self) -> None:
+        """Before fast-forward the AI waits its delay; after it, it acts every frame."""
+        game = spectator_game()
+        app = self.make_app(game)
+        app._update(False)                       # seeds token positions
+        log_length = len(game.log)
+
+        app._update(False)
+        self.assertEqual(len(game.log), log_length)
+        click(app, "fast_forward")
+        app._update(False)
+
+        self.assertTrue(app.fast_forward)
+        self.assertGreater(len(game.log), log_length)
+
+    def test_concede_records_a_loss_and_clears_the_save(self) -> None:
+        """Concede counts a game (not a human win), deletes the save, returns to setup."""
+        app = self.make_app(spectator_game())
+
+        click(app, "concede")
+
+        self.assertEqual(app.screen, "setup")
+        self.assertIsNone(app.game)
+        stats = json.loads((self.folder / "stats.json").read_text())
+        self.assertEqual(stats, {"games": 4, "human_wins": 1})
+        self.assertFalse((self.folder / "savegame.json").exists())
+
+    def test_no_autosave_while_spectating(self) -> None:
+        """A turn change while only AIs remain does not overwrite the save."""
+        before = self.snapshot()
+        game = spectator_game()
+        app = self.make_app(game)
+
+        game.current = 2
+        app._update(False)
+
+        self.assertEqual(self.snapshot(), before)
+
+
 class RaiseFundsBarTests(ShellTestCase):
     """The debtor gets Pay, Assets and Declare Bankruptcy while raising funds."""
 

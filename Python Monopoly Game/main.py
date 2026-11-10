@@ -188,6 +188,7 @@ class MonopolyApp:
         self.trade: TradeDraft | None = None
         self.asset_position: int | None = None
         self.ai_timer = 0
+        self.fast_forward = False   # spectator: run the AI with no delay
         self.message = ""
         self.stats = load_stats()
         self.buttons: list = []
@@ -215,6 +216,7 @@ class MonopolyApp:
         self.mode = "normal"
         self.asset_position = None
         self.ai_timer = 0
+        self.fast_forward = False
         self.message = ""
         # Reset the visuals so the next frame places tokens / dice from scratch.
         self.token_px = {}
@@ -237,6 +239,12 @@ class MonopolyApp:
         game = self.game
         assert game is not None, "no active game on this screen"
         return game
+
+    def _spectating(self) -> bool:
+        """True once no solvent human remains and the AIs play on alone."""
+        game = self.game
+        return (game is not None and game.phase == "playing"
+                and not any(p.is_human and not p.bankrupt for p in game.players))
 
     def _end_game(self) -> None:
         """Record the result and move to the end screen."""
@@ -297,10 +305,11 @@ class MonopolyApp:
             return
 
         # Autosave once per completed turn: the engine advances `current` to
-        # the next player when a turn ends, for both humans and AI.
+        # the next player when a turn ends, for both humans and AI. Not while
+        # spectating: the humans are out, so there is nothing to resume.
         if game.current != self._autosave_current:
             self._autosave_current = game.current
-            if self.persist:
+            if self.persist and not self._spectating():
                 save_game(game)
 
         elapsed = self.clock.get_time()
@@ -367,13 +376,15 @@ class MonopolyApp:
             self.dice_show = game.dice
 
         # AI driver: pace it, and pause while an animation is still playing.
+        # The self-test and a spectator's fast-forward skip both waits.
         actor = game.players[game.actor()]
         if actor.is_human:
             return                       # wait for the human's clicks
-        if not autotest and (animating_tokens or self.dice_anim_remaining_ms > 0):
+        hurry = autotest or self.fast_forward
+        if not hurry and (animating_tokens or self.dice_anim_remaining_ms > 0):
             return
         self.ai_timer += elapsed
-        if autotest or self.ai_timer >= AI_TURN_DELAY_MS:
+        if hurry or self.ai_timer >= AI_TURN_DELAY_MS:
             self.ai_timer = 0
             ai.take_action(game)
 
@@ -389,7 +400,7 @@ class MonopolyApp:
         elif self.screen == "playing":
             game = self._require_game()
             actor = game.players[game.actor()]
-            if not actor.is_human:
+            if not actor.is_human and not self._spectating():
                 return                   # ignore clicks during AI turns
             if self.mode in ("build", "sell", "mortgage"):
                 if not self._click_button(pos):      # the "Done" button
@@ -577,6 +588,14 @@ class MonopolyApp:
             game.pay_debts()
         elif key == "declare_bankruptcy":
             game.declare_bankruptcy()
+        elif key == "fast_forward":
+            self.fast_forward = True
+        elif key == "concede":
+            # Leaving a game no human can win still counts as a game played
+            # (and not a human win); the save is cleared with it.
+            self._end_game()
+            self.screen = "setup"
+            self.game = None
         else:
             return False
         return True
@@ -872,6 +891,8 @@ class MonopolyApp:
         """A short instruction line for the action bar."""
         game = self._require_game()
         actor = game.players[game.actor()]
+        if self._spectating():
+            return "You are out: watch, fast-forward or concede."
         if not actor.is_human:
             # AI player names already carry an "(AI)" suffix -- don't add it
             # again here or the prompt reads "Mira (AI) (AI) is taking...".
@@ -933,6 +954,13 @@ class MonopolyApp:
         """
         game = self._require_game()
         actor = game.players[game.actor()]
+        if self._spectating():
+            return [
+                ui.Button(ui.bar_slot_rect(0), "Fast-forward", "fast_forward",
+                          enabled=not self.fast_forward, color=(46, 116, 78)),
+                ui.Button(ui.bar_slot_rect(1), "Concede / Main Menu", "concede",
+                          color=(150, 60, 60)),
+            ]
         if not actor.is_human:
             return []
         if self.mode == "trade" and self.trade is not None:

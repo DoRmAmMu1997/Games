@@ -89,6 +89,9 @@ the board, buying properties, and trying to bankrupt everyone else.
   shows what you owe with **Pay $X** (enabled once your cash covers it),
   **Assets** (sell buildings and mortgage titles there) and **Declare
   Bankruptcy**.
+- **Spectating:** once every human is bankrupt, the AIs play on. Click
+  **Fast-forward** to run them without the pause between moves, or
+  **Concede / Main Menu** to record the game as played and leave.
 - **Auctions** open their own dialog with a **Bid +$X** button and **Pass**.
 - **Bankruptcy auctions** say when a released Bank title is being auctioned,
   so a chain of forced auctions has context.
