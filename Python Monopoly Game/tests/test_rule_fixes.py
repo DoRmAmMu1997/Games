@@ -143,7 +143,7 @@ class TradeInterestTests(unittest.TestCase):
         game.owners[39] = 0
         game.mortgaged.add(39)
         game.players[1].cash = 5
-        offer = {
+        offer: dict = {
             "from": 0,
             "to": 1,
             "give": {"props": [39], "cash": 0, "jail": 0},
