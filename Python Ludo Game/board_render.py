@@ -12,6 +12,7 @@ from models import Move
 from settings import (
     GOLD,
     HOME_LENGTH,
+    PAIR_NEIGHBOUR_RANGE,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     STACK_PIN_RADIUS,
@@ -217,17 +218,56 @@ class BoardRenderer:
                 bases[key] = base
                 cells.setdefault((round(base[0]), round(base[1])), []).append(key)
 
+        # A pair fans out side by side with its nearest occupied neighbour cell
+        # (perpendicular to the line joining them), so two stacks on adjacent
+        # cells sit a full cell apart even where the path bends. With no
+        # neighbour in range, it fans out across its own path instead.
+        across: dict[tuple[int, int], Point] = {}
+        for cell, occupants in cells.items():
+            if len(occupants) != 2:
+                continue
+            here = bases[occupants[0]]
+            nearest = min(
+                (
+                    (math.dist(here, bases[others[0]]), bases[others[0]])
+                    for other, others in cells.items()
+                    if other != cell
+                ),
+                default=None,
+            )
+            if nearest is not None and nearest[0] <= PAIR_NEIGHBOUR_RANGE:
+                toward = (nearest[1][0] - here[0], nearest[1][1] - here[1])
+                across[cell] = _pair_axis(toward)
+            else:
+                player_index, token_index = occupants[0]
+                steps = game.players[player_index].tokens[token_index].steps
+                across[cell] = _pair_axis(self._path_direction(player_index, steps))
+
         pins: dict[TokenKey, tuple[Point, int]] = {}
         for player_index, player in enumerate(game.players):
             for token_index in range(len(player.tokens)):
                 key = (player_index, token_index)
                 base = bases[key]
-                occupants = cells[(round(base[0]), round(base[1]))]
-                offset = _stack_offset(occupants.index(key), len(occupants))
+                cell = (round(base[0]), round(base[1]))
+                occupants = cells[cell]
+                offset = _stack_offset(occupants.index(key), len(occupants), across.get(cell))
                 drawn = animated_positions.get(key, base)
                 radius = TOKEN_PIN_RADIUS if len(occupants) == 1 else STACK_PIN_RADIUS
                 pins[key] = ((drawn[0] + offset[0], drawn[1] + offset[1]), radius)
         return pins
+
+    def _path_direction(self, player_index: int, steps: int) -> Point:
+        """Return the on-screen direction of a pawn's path through its cell at ``steps``.
+
+        The direction runs from the pawn's previous cell to its next one, so
+        on a corner it follows the bend's middle rather than either leg. At
+        either end of the path the cell itself stands in for the missing
+        neighbour.
+        """
+
+        behind = self.position_for(player_index, max(0, steps - 1))
+        ahead = self.position_for(player_index, min(self.layout.finish_steps, steps + 1))
+        return (ahead[0] - behind[0], ahead[1] - behind[1])
 
     def move_at_pos(self, pos: tuple[int, int], moves: list[Move], game) -> Move | None:
         """Return the legal move whose drawn pawn is nearest the click, if any.
@@ -941,7 +981,7 @@ def _draw_edged_ring(surface: pygame.Surface, center: Point, radius: int, color:
     pygame.draw.circle(surface, color, point, radius, HIGHLIGHT_RING_WIDTH)
 
 
-def _stack_offset(slot: int, count: int) -> Point:
+def _stack_offset(slot: int, count: int, across: Point | None = None) -> Point:
     """Return pawn ``slot``'s offset from the centre of a cell shared by ``count`` pawns.
 
     The pawns sit on the corners of a regular ``count``-sided polygon whose
@@ -950,13 +990,34 @@ def _stack_offset(slot: int, count: int) -> Point:
     ``k`` corners has corner radius ``s / (2 * sin(pi / k))``. The first
     corner is turned so the polygon's top edge is flat, which reads like a
     neat row of pawns. A lone pawn gets no offset at all.
+
+    A pair given an ``across`` axis (a unit vector across its path) sits on
+    that axis instead, the second pawn on its positive side.
     """
 
     if count <= 1:
         return (0.0, 0.0)
+    if count == 2 and across is not None:
+        distance = (slot - 0.5) * STACK_SPACING
+        return (across[0] * distance, across[1] * distance)
     radius = STACK_SPACING / (2 * math.sin(math.pi / count))
     angle = -math.pi / 2 - math.pi / count + math.tau * slot / count
     return (math.cos(angle) * radius, math.sin(angle) * radius)
+
+
+def _pair_axis(direction: Point) -> Point:
+    """Return the unit vector across ``direction``, pointing down (or right).
+
+    Pawns are drawn in order, so the pair's second pawn lands on top. Putting
+    it below (or, on a vertical path, to the right of) the first one keeps
+    the first pawn's number clear of the second pawn's downward pointer.
+    """
+
+    length = math.hypot(*direction) or 1.0
+    ax, ay = -direction[1] / length, direction[0] / length
+    if ay < -1e-9 or (abs(ay) <= 1e-9 and ax < 0):
+        ax, ay = -ax, -ay
+    return (ax, ay)
 
 
 def _owner_for_start(index: int, start_indices: tuple[int, ...]) -> int | None:

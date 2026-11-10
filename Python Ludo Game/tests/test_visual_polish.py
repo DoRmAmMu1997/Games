@@ -342,6 +342,50 @@ class StackReadabilityTests(unittest.TestCase):
                             )
 
 
+class AdjacentPairTests(StackReadabilityTests):
+    """Pawn pairs on neighbouring cells never hide each other's numbers."""
+
+    def assert_numbers_visible(self, game: LudoGame) -> None:
+        """Fail if any pawn number is covered by the head of any pawn drawn after it."""
+
+        pins = BoardRenderer(game.layout).token_pins(game)
+        order = list(pins)
+        for position, key in enumerate(order):
+            ink = self.label_ink(str(key[1] + 1), pins[key][0])
+            for later in order[position + 1:]:
+                (cx, cy), radius = pins[later]
+                nearest_x = min(max(cx, ink.left), ink.right)
+                nearest_y = min(max(cy, ink.top), ink.bottom)
+                gap = ((cx - nearest_x) ** 2 + (cy - nearest_y) ** 2) ** 0.5
+                self.assertGreaterEqual(gap, radius + PIN_RING_WIDTH + LABEL_CLEARANCE, f"{later} covers {key}")
+
+    def test_pairs_on_adjacent_lane_cells_stay_readable(self) -> None:
+        """Two pairs on a seat's first two home-lane cells keep all four numbers visible."""
+
+        for count in (4, 5, 6):
+            for seat in range(count):
+                with self.subTest(total_players=count, seat=seat):
+                    game = make_game(count)
+                    for index, token in enumerate(game.players[seat].tokens):
+                        token.steps = game.layout.lap_length + index // 2
+                    self.assert_numbers_visible(game)
+
+    def test_pairs_on_adjacent_track_cells_stay_readable(self) -> None:
+        """Two pairs on any two neighbouring cells of seat 0's path keep all four numbers visible.
+
+        Every placement is checked, corners included: that is where pairs
+        fanned across their own paths used to point at each other.
+        """
+
+        for count in (4, 5, 6):
+            for start in range(make_game(count).layout.finish_steps):
+                with self.subTest(total_players=count, steps=start):
+                    game = make_game(count)
+                    for index, token in enumerate(game.players[0].tokens):
+                        token.steps = start + index // 2
+                    self.assert_numbers_visible(game)
+
+
 class SeatMarkingContrastTests(unittest.TestCase):
     """Markings drawn on seat colours (arrows, pawn numbers, names) are readable."""
 

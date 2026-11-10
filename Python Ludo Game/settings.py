@@ -54,6 +54,10 @@ TOKEN_HIT_RADIUS = 33
 # within about one cell of its square.
 STACK_SPACING = 26
 STACK_PIN_RADIUS = 11
+# A pair whose nearest occupied cell is within this many pixels lines up side
+# by side with it; beyond that it fans out across its own path. 80 px covers a
+# neighbouring cell (33-59 px away) plus the reach of a full fan around it.
+PAIR_NEIGHBOUR_RANGE = 80
 
 
 # ---------------------------------------------------------------------------
