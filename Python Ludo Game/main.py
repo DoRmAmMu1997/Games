@@ -1061,7 +1061,7 @@ class LudoApp:
         # physical board-game table where the dice sit beside the board.
         tray = PLAY_DICE_TRAY_RECT
         theme.draw_dice_tray(self.window, tray, die_value, self.fonts, accent=current.color)
-        theme.draw_player_banner(self.window, PLAY_TRAY_BANNER_RECT, current.color, current.name[:18], self.fonts)
+        theme.draw_player_banner(self.window, PLAY_TRAY_BANNER_RECT, current.color, current.name, self.fonts)
 
         ui.draw_wrapped(
             self.window,

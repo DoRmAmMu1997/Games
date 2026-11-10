@@ -11,6 +11,7 @@ import math
 
 import pygame
 
+import ui
 from settings import LABEL_DARK, LABEL_LIGHT, WHITE
 
 WALLPAPER_BLUE = (30, 123, 197)
@@ -26,6 +27,7 @@ SHADOW_CACHE_LIMIT = 256
 HUD_DARK = (14, 22, 31)
 HUD_EDGE = (255, 214, 56)
 PILL_SHADE = 20  # a pill button's fill is its colour darkened by this much
+BANNER_TEXT_PADDING = 8  # clear space between a banner's name and its ends
 # The soft light pool behind the board: full strength in the middle, then it
 # fades to nothing over its outer GLOW_FADE share, drawn as rings GLOW_STEP px
 # apart (small steps keep the fade smooth, with no visible rim).
@@ -264,9 +266,14 @@ def draw_player_banner(
     text: str,
     fonts: dict[str, pygame.font.Font],
 ) -> None:
-    """Draw the colored player tab used around the board and in the HUD."""
+    """Draw the colored player tab used around the board and in the HUD.
+
+    A name too wide for the tab is shortened with "..." by its rendered
+    width, keeping ``BANNER_TEXT_PADDING`` clear at each end.
+    """
 
     draw_shadowed_rect(surface, rect, color, border=BOARD_EDGE, radius=8, shadow_offset=(0, 4))
+    text = ui.ellipsize(fonts["small"], text, rect.width - 2 * BANNER_TEXT_PADDING)
     label = fonts["small"].render(text, True, readable_on(color))
     surface.blit(label, label.get_rect(center=rect.center))
 

@@ -27,6 +27,7 @@ import main
 import ui
 import visual_theme as theme
 from board_render import (
+    BANNER_WIDTH,
     START_CELL_BRIGHTEN,
     YARD_RING_DARKEN,
     YARD_SLOT_RADIUS,
@@ -171,12 +172,19 @@ class RecordingFont:
 
         self.font = font
         self.colors: list[tuple[int, int, int]] = []
+        self.texts: list[str] = []
 
     def render(self, text: str, antialias: bool, color, *args) -> pygame.Surface:
-        """Record ``color`` as an RGB triple, then render with the real font."""
+        """Record ``text`` and ``color`` (as an RGB triple), then render with the real font."""
 
         self.colors.append((color[0], color[1], color[2]))
+        self.texts.append(text)
         return self.font.render(text, antialias, color, *args)
+
+    def size(self, text: str) -> tuple[int, int]:
+        """Measure ``text`` with the real font."""
+
+        return self.font.size(text)
 
 
 def rgb(color: pygame.Color) -> tuple[int, int, int]:
@@ -884,6 +892,49 @@ class AntialiasedCircleTests(unittest.TestCase):
         renderer._draw_yard_slots(surface, ((50.0, 50.0),), color)
         ring = theme.darken(color, YARD_RING_DARKEN)
         self.assertTrue(self.edge_has_blend(surface, (50, 50), YARD_SLOT_RADIUS, ring, color))
+
+
+class BannerNameFitTests(unittest.TestCase):
+    """Player names on banners are fitted to the banner by rendered width."""
+
+    fonts: dict[str, pygame.font.Font]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame and the app fonts once for the banner checks."""
+
+        pygame.init()
+        cls.fonts = ui.make_fonts()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the banner checks."""
+
+        pygame.quit()
+
+    def banner_text(self, name: str, rect: pygame.Rect) -> str:
+        """Draw a banner for ``name`` and return the text it actually rendered."""
+
+        recorder = RecordingFont(self.fonts["small"])
+        fonts = {"small": cast(pygame.font.Font, recorder)}
+        theme.draw_player_banner(pygame.Surface((400, 100)), rect, (46, 101, 218), name, fonts)
+        self.assertEqual(len(recorder.texts), 1)
+        return recorder.texts[0]
+
+    def test_wide_names_are_ellipsized_inside_the_banner(self) -> None:
+        """A wide name on a board tab or the tray banner ends in "..." and fits with padding."""
+
+        for width in (BANNER_WIDTH, main.PLAY_TRAY_BANNER_RECT.width):
+            with self.subTest(width=width):
+                rect = pygame.Rect(10, 10, width, 28)
+                text = self.banner_text("W" * 18, rect)
+                self.assertTrue(text.endswith("..."))
+                self.assertLessEqual(self.fonts["small"].size(text)[0], rect.width - 2 * theme.BANNER_TEXT_PADDING)
+
+    def test_short_names_are_drawn_whole(self) -> None:
+        """A name that fits is drawn unchanged, with no ellipsis."""
+
+        self.assertEqual(self.banner_text("AI 5 (Orange)", pygame.Rect(10, 10, 150, 28)), "AI 5 (Orange)")
 
 
 class StepperSymbolTests(unittest.TestCase):

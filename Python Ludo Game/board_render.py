@@ -372,7 +372,7 @@ class BoardRenderer:
 
         for player_index, rect in enumerate(self.banner_rects()):
             color = self.display.seat_colors[player_index]
-            theme.draw_player_banner(surface, rect, color, game.players[player_index].name[:16], fonts)
+            theme.draw_player_banner(surface, rect, color, game.players[player_index].name, fonts)
 
     def _draw_square_homes(self, surface: pygame.Surface, game, fonts: dict[str, pygame.font.Font]) -> None:
         """Draw the four square yards plus each player's name banner."""
