@@ -16,7 +16,7 @@ if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
 import ai
-from game import MonopolyGame
+from game import MonopolyGame, TradeOffer
 
 # The dark-blue colour group -- exactly two members.
 DARK_BLUE_LOW, DARK_BLUE_HIGH = 37, 39
@@ -68,7 +68,7 @@ class AITradeProposalTests(unittest.TestCase):
         game.owners[DARK_BLUE_LOW] = ai_player.index
         game.owners[DARK_BLUE_HIGH] = human.index
 
-        swap = {
+        swap: TradeOffer = {
             "from": ai_player.index, "to": human.index,
             "give": {"props": [DARK_BLUE_LOW], "cash": 0, "jail": 0},
             "get": {"props": [DARK_BLUE_HIGH], "cash": 0, "jail": 0},

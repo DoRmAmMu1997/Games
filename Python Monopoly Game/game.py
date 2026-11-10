@@ -21,6 +21,7 @@ Beginner note:
 from __future__ import annotations
 
 import random
+from typing import TypedDict
 
 import board_data
 import cards as cards_module
@@ -45,6 +46,20 @@ TURN_SAFETY_CAP = 3000
 # Saves without this field came from the initial game release. Version 2 adds
 # named AI profiles and guards future loaders from guessing at unknown payloads.
 SAVE_VERSION = 2
+
+
+class TradeSide(TypedDict):
+    """One side of a trade offer: the titles, cash and jail cards handed over."""
+
+    props: list[int]
+    cash: int
+    jail: int
+
+
+# A trade offer: `from` proposes it to `to`. `give` is what `from` hands over
+# and `get` is what `from` receives. "from" is a Python keyword, so this
+# TypedDict has to use the functional syntax.
+TradeOffer = TypedDict("TradeOffer", {"from": int, "to": int, "give": TradeSide, "get": TradeSide})
 
 
 class MonopolyGame:
@@ -98,7 +113,7 @@ class MonopolyGame:
         self.pending_purchase: int | None = None
         self.auction: dict | None = None
         self.bankruptcy_auction_queue: list[int] = []
-        self.pending_trade: dict | None = None
+        self.pending_trade: TradeOffer | None = None
         self._awaiting_before_trade = "pre_roll"
         self._trades_proposed = 0       # trade offers made this turn (AI cap)
 
@@ -965,7 +980,7 @@ class MonopolyGame:
     # ----------------------------------------------------------------------
     # Trading
     # ----------------------------------------------------------------------
-    def trade_consequence_lines(self, offer: dict) -> list[str]:
+    def trade_consequence_lines(self, offer: TradeOffer) -> list[str]:
         """Summarise immediate mortgage costs before a trade is accepted."""
         try:
             incoming = (
@@ -982,7 +997,7 @@ class MonopolyGame:
                     f"{recipient.name} owes ${interest} mortgage transfer interest.")
         return lines
 
-    def trade_error(self, offer: dict) -> str | None:
+    def trade_error(self, offer: TradeOffer) -> str | None:
         """Return a readable reason an offer is illegal, or None if legal."""
         try:
             giver = self.players[offer["from"]]
@@ -1014,15 +1029,15 @@ class MonopolyGame:
                 return f"{owner.name} needs ${interest} cash for mortgage transfer interest."
         return None
 
-    def trade_is_legal(self, offer: dict) -> bool:
+    def trade_is_legal(self, offer: TradeOffer) -> bool:
         """Check a trade offer is valid before it is proposed or accepted.
 
-        An `offer` is a dict with `from`, `to`, and the two sides' `props`
-        (lists of positions), `cash` and `jail` (jail-card counts).
+        An `offer` is a `TradeOffer`: `from`, `to`, and the two sides'
+        `props` (lists of positions), `cash` and `jail` (jail-card counts).
         """
         return self.trade_error(offer) is None
 
-    def propose_trade(self, offer: dict) -> bool:
+    def propose_trade(self, offer: TradeOffer) -> bool:
         """The current player offers a trade; the target must then respond."""
         if self.awaiting not in ("pre_roll", "post_roll"):
             return False
@@ -1049,7 +1064,7 @@ class MonopolyGame:
         self.pending_trade = None
         self.awaiting = self._awaiting_before_trade
 
-    def _execute_trade(self, offer: dict) -> None:
+    def _execute_trade(self, offer: TradeOffer) -> None:
         """Swap the cash, properties and jail cards described by an offer."""
         giver = self.players[offer["from"]]
         taker = self.players[offer["to"]]

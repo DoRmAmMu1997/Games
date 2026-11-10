@@ -19,6 +19,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import pygame
 
@@ -26,7 +27,7 @@ import ai
 import board_render
 import ui
 from board_data import THEME_ORDER
-from game import MonopolyGame
+from game import MonopolyGame, TradeOffer
 from settings import (
     AI_TURN_DELAY_MS,
     BG,
@@ -47,6 +48,17 @@ from settings import (
 _BAR_COLS = (892, 1086)
 _BAR_ROWS = (700, 748, 796, 844)
 _BTN_W, _BTN_H = 182, 40
+
+
+class TradeDraft(TradeOffer, total=False):
+    """A human's in-progress trade offer plus the dialog's scroll offsets.
+
+    The engine only reads the `TradeOffer` keys; the two scroll offsets
+    remember how far each side's title list is scrolled in the dialog.
+    """
+
+    give_scroll: int
+    get_scroll: int
 
 
 def _bar_rect(slot: int):
@@ -161,7 +173,7 @@ class MonopolyApp:
 
         # In-game interaction state.
         self.mode = "normal"   # "normal", "build", "sell", "mortgage", "assets", "trade"
-        self.trade: dict | None = None
+        self.trade: TradeDraft | None = None
         self.asset_position: int | None = None
         self.ai_timer = 0
         self.message = ""
@@ -435,10 +447,9 @@ class MonopolyApp:
         if trade is None:
             return
         layout = ui.trade_layout(self._require_game(), trade)
-        for key, side in (("give_rows", "give"), ("get_rows", "get")):
+        for key, props in (("give_rows", trade["give"]["props"]), ("get_rows", trade["get"]["props"])):
             for row, position in layout[key]:
                 if row.collidepoint(pos):
-                    props = trade[side]["props"]
                     if position in props:
                         props.remove(position)
                     else:
@@ -677,7 +688,7 @@ class MonopolyApp:
         trade["give_scroll"] = 0
         trade["get_scroll"] = 0
 
-    def _adjust_trade_cash(self, side: str, delta: int) -> None:
+    def _adjust_trade_cash(self, side: Literal["give", "get"], delta: int) -> None:
         """Step the cash on one side of the in-progress trade offer."""
         game = self._require_game()
         trade = self.trade
@@ -699,12 +710,12 @@ class MonopolyApp:
             return
         game = self._require_game()
         panel = ui.trade_layout(game, trade)["panel"]
-        side = "give" if mouse_pos[0] < panel.centerx else "get"
-        owner_idx = trade["from"] if side == "give" else trade["to"]
+        on_give_side = mouse_pos[0] < panel.centerx
+        owner_idx = trade["from"] if on_give_side else trade["to"]
         owner = game.players[owner_idx]
         max_scroll = max(0, len(game.properties_of(owner))
                          - ui.TRADE_VISIBLE_ROWS)
-        key = f"{side}_scroll"
+        key: Literal["give_scroll", "get_scroll"] = "give_scroll" if on_give_side else "get_scroll"
         current = trade.get(key, 0)
         step = -1 if wheel_dy > 0 else 1
         trade[key] = max(0, min(current + step, max_scroll))

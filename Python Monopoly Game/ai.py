@@ -20,7 +20,7 @@ import board_data
 from settings import JAIL_FINE
 
 if TYPE_CHECKING:
-    from game import MonopolyGame
+    from game import MonopolyGame, TradeOffer, TradeSide
     from player import Player
 
 # Colour groups roughly ordered by how rewarding they are to develop -- the
@@ -319,10 +319,10 @@ def _auction_ceiling(game: MonopolyGame, player: Player, position: int) -> int:
 # --------------------------------------------------------------------------
 # Trading
 # --------------------------------------------------------------------------
-def propose_trade(game: MonopolyGame, player: Player) -> dict | None:
+def propose_trade(game: MonopolyGame, player: Player) -> TradeOffer | None:
     """Look for a trade that completes one of this AI's colour groups.
 
-    Returns an offer dict, or None. The AI prefers a swap that *also* completes
+    Returns a TradeOffer, or None. The AI prefers a swap that *also* completes
     a monopoly for the partner -- a deal both sides love -- and otherwise puts
     in enough cash to make the partner say yes.
     """
@@ -352,10 +352,10 @@ def _missing_one(game: MonopolyGame, player: Player, group: str) -> int | None:
     return None
 
 
-def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int) -> dict | None:
+def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int) -> TradeOffer | None:
     """Build an offer to win `wanted` that both `player` and `partner` accept."""
-    give: dict = {"props": [], "cash": 0, "jail": 0}
-    get: dict = {"props": [wanted], "cash": 0, "jail": 0}
+    give: TradeSide = {"props": [], "cash": 0, "jail": 0}
+    get: TradeSide = {"props": [wanted], "cash": 0, "jail": 0}
     # The best sweetener is a property that completes a monopoly for the
     # partner -- but never one from the group the AI is itself completing,
     # or the AI would trade away the very tile it is bargaining for.
@@ -371,7 +371,7 @@ def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int
     # property), which is why we return as soon as the partner says yes.
     for cash in range(0, affordable + 1, 25):
         give["cash"] = cash
-        offer = {"from": player.index, "to": partner.index, "give": give, "get": get}
+        offer: TradeOffer = {"from": player.index, "to": partner.index, "give": give, "get": get}
         if not game.trade_is_legal(offer):
             return None
         if evaluate_offer(game, partner, offer):
@@ -405,7 +405,7 @@ def _property_completing_for(game: MonopolyGame, giver: Player, partner: Player,
     return None
 
 
-def evaluate_offer(game: MonopolyGame, player: Player, offer: dict | None) -> bool:
+def evaluate_offer(game: MonopolyGame, player: Player, offer: TradeOffer | None) -> bool:
     """Return True if `player` should accept the trade `offer`."""
     if offer is None or not game.trade_is_legal(offer):
         return False
@@ -414,7 +414,7 @@ def evaluate_offer(game: MonopolyGame, player: Player, offer: dict | None) -> bo
     return _trade_swing(game, player, offer) >= _profile(game).trade_accept_margin
 
 
-def _trade_swing(game: MonopolyGame, evaluator: Player, offer: dict) -> int:
+def _trade_swing(game: MonopolyGame, evaluator: Player, offer: TradeOffer) -> int:
     """Estimate how much the trade is worth to `evaluator` (may be negative).
 
     Raw asset values are compared, then big adjustments are applied: gaining a
@@ -442,7 +442,7 @@ def _trade_swing(game: MonopolyGame, evaluator: Player, offer: dict) -> int:
     return swing
 
 
-def _bundle_value(game: MonopolyGame, bundle: dict) -> int:
+def _bundle_value(game: MonopolyGame, bundle: TradeSide) -> int:
     """The plain asset value of one side of a trade (cash + property + cards)."""
     total = bundle["cash"] + bundle["jail"] * 50
     for pos in bundle["props"]:
