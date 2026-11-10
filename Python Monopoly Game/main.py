@@ -461,21 +461,24 @@ class MonopolyApp:
 
         The button keys form disjoint families (setup screen, turn actions,
         the asset manager, and the trade dialog), so each family lives in its
-        own handler and the first one that recognises the key wins.
+        own handler and the first one that recognises the key wins. Quit and
+        New Game come first: they also appear with no game in progress (the
+        setup screen), where the game-dependent handlers cannot run.
         """
+        if key == "new_game":
+            self.screen = "setup"
+            self.game = None
+            return
+        if key == "quit":
+            self.running = False
+            return
         if self._on_setup_button(key):
             return
         if self._on_turn_button(key):
             return
         if self._on_asset_button(key):
             return
-        if self._on_trade_button(key):
-            return
-        if key == "new_game":
-            self.screen = "setup"
-            self.game = None
-        elif key == "quit":
-            self.running = False
+        self._on_trade_button(key)
 
     def _on_setup_button(self, key: str) -> bool:
         """Handle setup-screen controls; True if `key` belonged here."""

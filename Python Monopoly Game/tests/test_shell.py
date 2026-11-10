@@ -58,6 +58,19 @@ class ShellTestCase(unittest.TestCase):
         return app
 
 
+class AppLifecycleTests(ShellTestCase):
+    """Buttons that exist with no game in progress still work."""
+
+    def test_quit_on_setup_screen_stops_the_app(self) -> None:
+        """Quit on the setup screen closes the app instead of asserting on no game."""
+        app = MonopolyApp()
+        self.assertEqual(app.screen, "setup")
+
+        click(app, "quit")
+
+        self.assertFalse(app.running)
+
+
 class RaiseFundsBarTests(ShellTestCase):
     """The debtor gets Pay, Assets and Declare Bankruptcy while raising funds."""
 
