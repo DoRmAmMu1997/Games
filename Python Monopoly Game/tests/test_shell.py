@@ -22,6 +22,7 @@ if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
 import pygame
+from test_engine_regressions import rig_rolls
 from test_raise_funds import collect_each_debt, rent_debt
 
 import board_render
@@ -309,6 +310,44 @@ class BoardClickModeTests(ShellTestCase):
                 app.message = "stale"
                 app._on_button(key)
                 self.assertEqual(app.message, "")
+
+
+class JailBarTests(ShellTestCase):
+    """A jailed human may still manage assets and trade before rolling."""
+
+    def test_jailed_human_pre_roll_bar_offers_mortgage_assets_and_trade(self) -> None:
+        """The jail bar adds Mortgage, Assets and Trade beside Roll, Pay and Card."""
+        game = human_turn()
+        human = game.players[0]
+        human.position, human.in_jail = 10, True
+        game.owners[1] = 0
+        app = self.make_app(game)
+
+        states = button_states(app)
+
+        for key in ("roll", "jail_pay", "jail_card", "mortgage", "assets", "trade"):
+            self.assertIn(key, states)
+        click(app, "trade")
+        self.assertEqual(app.mode, "trade")
+
+
+class SaveAfterDoubleTests(SeededSaveDirTestCase):
+    """Save & Quit between doubles keeps the three-doubles count."""
+
+    def test_save_and_quit_after_a_double_keeps_doubles_count(self) -> None:
+        """A save taken after one double resumes on the extra roll, count intact."""
+        game = human_turn()
+        rig_rolls(game, 2, 2)                 # GO + 4: Income Tax, then roll again
+        app = MonopolyApp()
+        app.start_game(game)
+        click(app, "roll")
+        self.assertEqual((game.awaiting, game.doubles_count), ("pre_roll", 1))
+
+        click(app, "save_quit")
+        resumed = main.load_saved_game()
+
+        assert resumed is not None
+        self.assertEqual((resumed.awaiting, resumed.doubles_count), ("pre_roll", 1))
 
 
 class RaiseFundsBarTests(ShellTestCase):

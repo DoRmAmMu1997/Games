@@ -1044,6 +1044,11 @@ class MonopolyApp:
                                          enabled=actor.cash >= 50))
                 buttons.append(ui.Button(ui.bar_slot_rect(2), "Use Jail Card", "jail_card",
                                          enabled=actor.jail_cards > 0))
+                # Jail only stops movement: the engine still allows asset
+                # management and trading before the roll.
+                buttons.append(ui.Button(ui.bar_slot_rect(3), "Mortgage", "mortgage"))
+                buttons.append(ui.Button(ui.bar_slot_rect(4), "Trade", "trade"))
+                buttons.append(ui.Button(ui.bar_slot_rect(5), "Assets", "assets"))
             else:
                 buttons.append(ui.Button(ui.bar_slot_rect(0), "Roll Dice", "roll",
                                          color=(46, 116, 78)))
