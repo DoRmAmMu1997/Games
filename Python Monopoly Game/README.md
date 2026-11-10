@@ -116,6 +116,10 @@ and rents -- only the names change.
 - **Classic-rule fixes** -- Bank bankruptcies auction released titles, sold
   buildings obey even-selling rules, and transferred mortgaged titles charge
   the new owner immediate mortgage interest.
+- **Bankrupt estates** -- a player bankrupted by another player hands that
+  creditor their cash, titles and Get Out of Jail Free cards (the cards go
+  back to their decks if the creditor cannot cover the mortgage interest);
+  bankrupt to the Bank, the titles are auctioned and the cards are returned.
 - **Decision clarity** -- owned-title asset management shows deed detail,
   legal action reasons, mortgage-transfer consequences, and Bank bankruptcy
   auction context before the player commits.

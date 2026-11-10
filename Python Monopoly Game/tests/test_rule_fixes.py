@@ -251,5 +251,66 @@ class UnmortgageCostTests(unittest.TestCase):
             self.assertIsNone(ai._best_unmortgage(game, rich_ai))
 
 
+def hand_jail_card(game: MonopolyGame, player_index: int, deck_name: str) -> int:
+    """Take a deck's Get Out of Jail Free card out of the pile and give it to a player.
+
+    Returns the card's index in the deck's master list so a test can check
+    whether the card later went back into the pile.
+    """
+    deck = game._deck(deck_name)
+    index = next(i for i, card in enumerate(deck.master) if card["kind"] == "jail_card")
+    deck.order.remove(index)
+    game.grant_jail_card(game.players[player_index], deck_name)
+    return index
+
+
+class BankruptJailCardTests(unittest.TestCase):
+    """A bankrupt player's Get Out of Jail Free cards go to their creditor."""
+
+    def test_bankrupt_players_jail_cards_pass_to_solvent_creditor(self) -> None:
+        """Bankrupt to a player, the held card and its deck tag change hands."""
+        game = make_game()
+        debtor, creditor = game.players[0], game.players[1]
+        card = hand_jail_card(game, debtor.index, "chance")
+        debtor.cash = 0
+
+        game.transfer(debtor, creditor, 50)
+
+        self.assertTrue(debtor.bankrupt)
+        self.assertEqual((debtor.jail_cards, debtor.jail_card_decks), (0, []))
+        self.assertEqual((creditor.jail_cards, creditor.jail_card_decks), (1, ["chance"]))
+        self.assertNotIn(card, game.chance.order)
+
+    def test_jail_cards_return_to_decks_when_creditor_cannot_pay_interest(self) -> None:
+        """A creditor bankrupted by the transfer interest gets no jail card."""
+        game = make_game()
+        debtor, creditor = game.players[0], game.players[1]
+        card = hand_jail_card(game, debtor.index, "chest")
+        give_group(game, debtor.index, (37, 39))
+        game.mortgaged.update((37, 39))
+        debtor.cash = 0
+        creditor.cash = 0
+
+        game.transfer(debtor, creditor, 50)
+
+        self.assertTrue(creditor.bankrupt)
+        self.assertEqual(creditor.jail_cards, 0)
+        self.assertIn(card, game.chest.order)
+
+    def test_jail_cards_return_to_decks_on_bank_bankruptcy(self) -> None:
+        """Bankrupt to the Bank, held jail cards go back to their decks."""
+        game = make_game()
+        debtor = game.players[0]
+        card = hand_jail_card(game, debtor.index, "chance")
+        debtor.cash = 0
+
+        game.charge(debtor, 100)
+
+        self.assertTrue(debtor.bankrupt)
+        self.assertEqual(debtor.jail_cards, 0)
+        self.assertIn(card, game.chance.order)
+        self.assertTrue(all(p.jail_cards == 0 for p in game.players))
+
+
 if __name__ == "__main__":
     unittest.main()

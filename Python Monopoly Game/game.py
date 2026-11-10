@@ -305,9 +305,14 @@ class MonopolyGame:
             self._start_next_bankruptcy_auction()
         player.cash = 0
 
-        # Any held jail cards go back to their decks.
-        for deck_name in player.jail_card_decks:
-            self._deck(deck_name).return_jail_card()
+        # Held jail cards pass to a creditor who is still solvent after the
+        # transfer interest; otherwise they go back to their decks.
+        if creditor is not None and not creditor.bankrupt:
+            creditor.jail_cards += player.jail_cards
+            creditor.jail_card_decks.extend(player.jail_card_decks)
+        else:
+            for deck_name in player.jail_card_decks:
+                self._deck(deck_name).return_jail_card()
         player.jail_cards = 0
         player.jail_card_decks = []
 
