@@ -24,6 +24,7 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 from test_raise_funds import collect_each_debt, rent_debt
 
+import board_render
 import main
 import ui
 from game import MonopolyGame
@@ -239,6 +240,75 @@ class TradeResponseDialogTests(ShellTestCase):
 
         self.assertEqual(rects, {"trade_accept": layout["accept"], "trade_reject": layout["reject"]})
         app._draw()                          # the dialog renders without error
+
+
+def human_turn(**state) -> MonopolyGame:
+    """A seeded four-seat game on the human's turn, with engine state overrides."""
+    game = MonopolyGame([("Human", True), ("Iris", False), ("Knox", False), ("Mira", False)], seed=6)
+    for key, value in state.items():
+        setattr(game, key, value)
+    return game
+
+
+class BoardClickModeTests(ShellTestCase):
+    """Board-click modes highlight real options and explain refusals."""
+
+    def test_mortgage_mode_highlights_titles_that_can_be_mortgaged_or_lifted(self) -> None:
+        """Developed groups and unaffordable lifts are not offered as clickable."""
+        game = human_turn(awaiting="post_roll")
+        human = game.players[0]
+        for pos in (1, 3, 5, 12, 39):
+            game.owners[pos] = 0
+        game.houses[1] = 1                  # brown is developed: neither title can mortgage
+        game.mortgaged.update((12, 39))     # $83 to lift 12, $220 to lift 39
+        human.cash = 100
+        app = self.make_app(game)
+        app.mode = "mortgage"
+
+        self.assertEqual(sorted(app._board_highlights()), [5, 12])
+
+    def test_refused_board_click_shows_the_engine_reason_until_done(self) -> None:
+        """Clicking a title that cannot take a house says why; Done clears it."""
+        game = human_turn(awaiting="post_roll")
+        game.owners[5] = 0
+        app = self.make_app(game)
+        click(app, "build")
+
+        app._handle_click(board_render.space_rect(5).center)
+
+        self.assertEqual(app._prompt(), "Only streets can take buildings.")
+        click(app, "done")
+        self.assertEqual(app.message, "")
+        self.assertEqual(app.mode, "normal")
+
+    def test_engine_actions_clear_a_stale_message(self) -> None:
+        """Every engine-dispatching button starts from a clean prompt."""
+        offer = {"from": 1, "to": 0, "give": {"props": [], "cash": 10, "jail": 0},
+                 "get": {"props": [], "cash": 0, "jail": 0}}
+        cases: dict[str, dict] = {
+            "roll": {},
+            "end_turn": {"awaiting": "post_roll"},
+            "buy": {"awaiting": "buy_or_auction", "pending_purchase": 1},
+            "auction_decline": {"awaiting": "buy_or_auction", "pending_purchase": 1},
+            "trade_accept": {"awaiting": "trade_response", "pending_trade": dict(offer),
+                             "_awaiting_before_trade": "post_roll"},
+            "trade_reject": {"awaiting": "trade_response", "pending_trade": dict(offer),
+                             "_awaiting_before_trade": "post_roll"},
+        }
+        for key, state in cases.items():
+            with self.subTest(key=key):
+                app = self.make_app(human_turn(**state))
+                app.message = "stale"
+                app._on_button(key)
+                self.assertEqual(app.message, "")
+        for key in ("bid", "pass"):
+            with self.subTest(key=key):
+                game = human_turn()
+                game._start_auction(1)
+                app = self.make_app(game)
+                app.message = "stale"
+                app._on_button(key)
+                self.assertEqual(app.message, "")
 
 
 class RaiseFundsBarTests(ShellTestCase):

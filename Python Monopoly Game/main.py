@@ -438,19 +438,25 @@ class MonopolyApp:
             self.name_fields[i] += event.unicode
 
     def _click_board(self, pos: tuple[int, int]) -> None:
-        """In build/sell/mortgage mode, act on the board space clicked."""
+        """In build/sell/mortgage mode, act on the board space clicked.
+
+        A refused click shows the engine's reason in the prompt (until the
+        next click or Done), instead of silently doing nothing.
+        """
         game = self._require_game()
         for position in range(40):
             if board_render.space_rect(position).collidepoint(pos):
+                player = game.players[game.actor()]
                 if self.mode == "build":
-                    game.build_house(position)
+                    action, done = "build", game.build_house(position)
                 elif self.mode == "sell":
-                    game.sell_house(position)
-                elif self.mode == "mortgage":
-                    if position in game.mortgaged:
-                        game.unmortgage(position)
-                    else:
-                        game.mortgage(position)
+                    action, done = "sell", game.sell_house(position)
+                elif position in game.mortgaged:
+                    action, done = "unmortgage", game.unmortgage(position)
+                else:
+                    action, done = "mortgage", game.mortgage(position)
+                self.message = "" if done else str(
+                    game.asset_actions_for(player, position)[action]["reason"])
                 return
 
     def _click_trade(self, pos: tuple[int, int]) -> None:
@@ -530,6 +536,10 @@ class MonopolyApp:
     def _on_turn_button(self, key: str) -> bool:
         """Handle in-turn actions and auctions; True if `key` belonged here."""
         game = self._require_game()
+        if key in ("roll", "jail_pay", "jail_card", "buy", "auction_decline", "end_turn",
+                   "bid", "pass", "pay_debts", "declare_bankruptcy"):
+            # A new engine action starts from a clean prompt.
+            self.message = ""
         if key == "roll":
             game.roll_dice()
         elif key == "jail_pay":
@@ -548,6 +558,7 @@ class MonopolyApp:
             self.mode = "mortgage"
         elif key == "done":
             self.mode = "normal"
+            self.message = ""
         elif key == "end_turn":
             game.end_turn()
         elif key == "save_quit":
@@ -620,8 +631,10 @@ class MonopolyApp:
         elif key == "trade_cancel":
             self.mode = "normal"
         elif key == "trade_accept":
+            self.message = ""
             game.respond_trade(True)
         elif key == "trade_reject":
+            self.message = ""
             game.respond_trade(False)
         else:
             return False
@@ -806,24 +819,9 @@ class MonopolyApp:
         assert renderer is not None, "renderer exists whenever a game does"
         self.window.fill(BG)
 
-        # Yellow rings on the spaces the human can act on in board-click modes.
-        highlights: list = []
-        if self.mode == "build":
-            human = game.current_player
-            highlights = [pos for pos in range(40)
-                          if game.can_build(human, pos)]
-        elif self.mode == "mortgage":
-            human = game.current_player
-            highlights = [pos for pos in game.properties_of(human)
-                          if game.houses.get(pos, 0) == 0]
-        elif self.mode == "sell":
-            human = game.current_player
-            highlights = [pos for pos in game.properties_of(human)
-                          if game.can_sell_building(human, pos)]
-
         renderer.draw(self.window, game, self.fonts,
                       token_pixels=self.token_px,
-                      highlight_positions=highlights)
+                      highlight_positions=self._board_highlights())
         ui.draw_panel(self.window, self.fonts, game, mouse)
 
         board_centre = (20 + (SCREEN_HEIGHT - 40) // 2, 20 + (SCREEN_HEIGHT - 40) // 2)
@@ -851,6 +849,25 @@ class MonopolyApp:
             ui.draw_trade_response(self.window, self.fonts, game,
                                    self.buttons, mouse)
 
+    def _board_highlights(self) -> list[int]:
+        """Spaces the human can act on in the current board-click mode.
+
+        These get a yellow ring: buildable streets in build mode, titles
+        that can be mortgaged or lifted in mortgage mode, and sellable
+        streets in sell mode.
+        """
+        game = self._require_game()
+        human = game.players[game.actor()]
+        if self.mode == "build":
+            return [pos for pos in range(40) if game.can_build(human, pos)]
+        if self.mode == "mortgage":
+            return [pos for pos in game.properties_of(human)
+                    if game.can_mortgage(human, pos) or game.can_unmortgage(human, pos)]
+        if self.mode == "sell":
+            return [pos for pos in game.properties_of(human)
+                    if game.can_sell_building(human, pos)]
+        return []
+
     def _prompt(self) -> str:
         """A short instruction line for the action bar."""
         game = self._require_game()
@@ -860,11 +877,11 @@ class MonopolyApp:
             # again here or the prompt reads "Mira (AI) (AI) is taking...".
             return f"{actor.name} is taking their turn..."
         if self.mode == "build":
-            return "Click a property in one of your monopolies to build. Then Done."
+            return self.message or "Click a property in one of your monopolies to build. Then Done."
         if self.mode == "mortgage":
-            return "Click a property to mortgage it, or a mortgaged one to lift it."
+            return self.message or "Click a property to mortgage it, or a mortgaged one to lift it."
         if self.mode == "sell":
-            return "Click a developed street to sell one building back. Then Done."
+            return self.message or "Click a developed street to sell one building back. Then Done."
         if self.mode == "assets":
             return self.message or "Manage one title with deed detail and legal actions."
         if self.message:
