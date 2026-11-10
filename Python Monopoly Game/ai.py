@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import board_data
-from settings import JAIL_FINE
+from settings import JAIL_FINE, TRADE_RETRY_COOLDOWN_TURNS
 
 if TYPE_CHECKING:
     from game import MonopolyGame, TradeOffer, TradeSide
@@ -324,7 +324,8 @@ def propose_trade(game: MonopolyGame, player: Player) -> TradeOffer | None:
 
     Returns a TradeOffer, or None. The AI prefers a swap that *also* completes
     a monopoly for the partner -- a deal both sides love -- and otherwise puts
-    in enough cash to make the partner say yes.
+    in enough cash to make the partner say yes. A partner who rejected an
+    offer for the same title is left alone for TRADE_RETRY_COOLDOWN_TURNS.
     """
     for group in board_data.COLOR_GROUPS:
         wanted = _missing_one(game, player, group)
@@ -334,6 +335,9 @@ def propose_trade(game: MonopolyGame, player: Player) -> TradeOffer | None:
             continue
         partner = game.players[game.owners[wanted]]
         if partner.bankrupt:
+            continue
+        rejected_on = game._rejected_offers.get((player.index, partner.index, wanted))
+        if rejected_on is not None and game.turn_count - rejected_on < TRADE_RETRY_COOLDOWN_TURNS:
             continue
         offer = _make_offer(game, player, partner, wanted)
         if offer is not None:

@@ -22,6 +22,7 @@ from test_foundation_improvements import give_group, make_game
 import ai
 import simulation
 from game import MonopolyGame
+from settings import TRADE_RETRY_COOLDOWN_TURNS
 
 
 def plain_street_value(game, position: int) -> int:
@@ -64,6 +65,36 @@ class OwnedTitleValuationTests(unittest.TestCase):
 
         self.assertGreater(held_value, lone_value)
         self.assertEqual(held_value, round(plain_street_value(held, 1) * ai.GROUP_COMPLETION_MULT))
+
+
+class TradeMemoryTests(unittest.TestCase):
+    """The AI remembers a rejected trade instead of nagging every turn."""
+
+    def test_ai_waits_before_reproposing_a_rejected_trade(self) -> None:
+        """A rejected offer for a title is not re-sent until the cooldown passes.
+
+        Iris needs the human's brown title to complete her group. After
+        the human rejects her offer she skips that partner and title for
+        TRADE_RETRY_COOLDOWN_TURNS turns, then may ask again.
+        """
+        game = make_game()
+        human, iris = game.players[0], game.players[1]
+        give_group(game, iris.index, (1,))
+        give_group(game, human.index, (3,))
+        iris.cash = 5000
+        game.current = iris.index
+
+        offer = ai.propose_trade(game, iris)
+        assert offer is not None, "precondition: Iris wants the brown title"
+        self.assertTrue(game.propose_trade(offer))
+        game.respond_trade(False)
+
+        self.assertIsNone(ai.propose_trade(game, iris))
+        game.turn_count += TRADE_RETRY_COOLDOWN_TURNS - 1
+        self.assertIsNone(ai.propose_trade(game, iris))
+        game.turn_count += 1
+        self.assertIsNotNone(ai.propose_trade(game, iris))
+        self.assertNotIn("_rejected_offers", game.to_dict())
 
 
 class SimulationMetricTests(unittest.TestCase):

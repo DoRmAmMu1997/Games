@@ -116,6 +116,10 @@ class MonopolyGame:
         self.pending_trade: TradeOffer | None = None
         self._awaiting_before_trade = "pre_roll"
         self._trades_proposed = 0       # trade offers made this turn (AI cap)
+        # (from, to, wanted title) -> turn_count when that offer was rejected.
+        # The AI reads it to wait before asking again; it is transient and
+        # never saved.
+        self._rejected_offers: dict[tuple[int, int, int], int] = {}
 
         # Internal flags used while resolving a single roll.
         self._normal_double = False     # may the current player roll again?
@@ -1061,6 +1065,8 @@ class MonopolyGame:
             self._note(f"{self.players[offer['to']].name} accepts the trade.")
         else:
             self._note(f"{self.players[offer['to']].name} rejects the trade.")
+            for wanted in offer["get"]["props"]:
+                self._rejected_offers[(offer["from"], offer["to"], wanted)] = self.turn_count
         self.pending_trade = None
         self.awaiting = self._awaiting_before_trade
 

@@ -64,6 +64,12 @@ GO_TO_JAIL_POSITION = 30
 # --------------------------------------------------------------------------
 AI_TURN_DELAY_MS = 750        # pause between AI actions so a human can watch
 
+# After a player rejects an AI's offer for a title, that AI waits this many
+# turns before asking the same player for the same title again. Without it
+# the AI re-sends the identical offer every turn; 16 turns is about four
+# laps of a 4-player table, long enough for cash and boards to change.
+TRADE_RETRY_COOLDOWN_TURNS = 16
+
 # Tokens hop space-by-space around the board after a dice roll. This is the
 # travel speed in pixels per second; teleports (jail, some cards) slide
 # directly instead of hopping.
