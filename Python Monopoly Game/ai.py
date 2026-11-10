@@ -116,7 +116,11 @@ def property_value(game: MonopolyGame, player: Player, position: int,
 
     if space.kind == "street":
         value += space.rent[-1] * STREET_TOP_RENT_WEIGHT
-        if _completes_group(game, player, position):
+        if _in_monopoly(game, player, position):
+            # An owned title inside a held monopoly: losing it breaks the
+            # group, so it is worth as much as the title that completed it.
+            value *= GROUP_COMPLETION_MULT
+        elif _completes_group(game, player, position):
             value *= GROUP_COMPLETION_MULT
         elif _owns_some_of_group(game, player, position):
             value *= PARTIAL_GROUP_MULT
@@ -461,12 +465,16 @@ def _group_of(game: MonopolyGame, position: int) -> str | None:
 
 
 def _owns_some_of_group(game: MonopolyGame, player: Player, position: int) -> bool:
-    """True if `player` already owns at least one space in this street's group."""
+    """True if `player` owns at least one OTHER space in this street's group.
+
+    `position` itself is ignored, so a title the player already holds alone
+    does not count as a partial group.
+    """
     group = _group_of(game, position)
     if not group:
         return False
     return any(game.owners.get(pos) == player.index
-               for pos in board_data.COLOR_GROUPS[group])
+               for pos in board_data.COLOR_GROUPS[group] if pos != position)
 
 
 def _in_monopoly(game: MonopolyGame, player: Player, position: int) -> bool:
@@ -476,9 +484,13 @@ def _in_monopoly(game: MonopolyGame, player: Player, position: int) -> bool:
 
 
 def _completes_group(game: MonopolyGame, player: Player, position: int) -> bool:
-    """True if buying `position` would complete a colour group for `player`."""
+    """True if buying `position` would complete a colour group for `player`.
+
+    A title the player already owns cannot be bought again, so it never
+    "completes" anything (a held monopoly is `_in_monopoly` instead).
+    """
     group = _group_of(game, position)
-    if not group:
+    if not group or game.owners.get(position) == player.index:
         return False
     members = board_data.COLOR_GROUPS[group]
     owned = sum(1 for pos in members if game.owners.get(pos) == player.index)
