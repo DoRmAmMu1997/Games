@@ -5,6 +5,15 @@ waiting for, decides what the current AI player should do, and calls exactly
 one engine action -- so the caller can step the AI one move at a time (the UI
 inserts a short pause between moves so a human can follow along).
 
+Two moves are deliberately compound, because their parts only make sense
+together:
+- Breaking a housing shortage: when the Bank has no houses left and a held
+  group is one house per lot short of hotels, the AI sells one house from
+  its lowest-priority developed group and builds it onto that group in the
+  same move. (A later move builds the hotel, which returns four houses.)
+- Settling a debt in raise_funds (a defensive fallback; AI payers normally
+  never wait there): sell and mortgage, then pay, or concede.
+
 The AI is a *heuristic* player: it follows sensible rules of thumb -- grab
 property early, complete colour groups, build on them, keep a cash cushion,
 bid to a property's worth, and trade to finish monopolies. It is a tough
@@ -198,6 +207,8 @@ def _do_post_roll(game: MonopolyGame, player: Player) -> None:
         _trace(game, player, f"builds into {game.board[target].group} pressure.")
         game.build_house(target)
         return
+    if _break_housing_shortage(game, player):
+        return
     if game._trades_proposed == 0:
         proposal = propose_trade(game, player)
         if proposal is not None:
@@ -245,6 +256,41 @@ def _best_build(game: MonopolyGame, player: Player) -> int | None:
                 if player.cash - cost >= profile.build_reserve:
                     return pos
     return None
+
+
+def _break_housing_shortage(game: MonopolyGame, player: Player) -> bool:
+    """Move one house onto a group that is one house per lot short of hotels.
+
+    Only when the Bank has no houses (but has a hotel): a held group whose
+    lots all sit at 4 houses except some at 3 cannot finish, so the AI sells
+    one house evenly from its lowest-priority other developed group and
+    builds it onto a 3-house lot -- one compound move. Once every lot is at
+    4, the normal build step adds a hotel, which returns four houses to the
+    Bank. Returns True if the move was made.
+    """
+    if game.bank_houses != 0 or game.bank_hotels <= 0:
+        return False
+    profile = _profile(game)
+    for group in GROUP_BUILD_PRIORITY:
+        members = board_data.COLOR_GROUPS[group]
+        levels = [game.houses.get(pos, 0) for pos in members]
+        if not game.has_monopoly(player, group) or 3 not in levels or not set(levels) <= {3, 4}:
+            continue
+        target = next(pos for pos in members if game.houses.get(pos, 0) == 3)
+        if player.cash - game.board[target].house_cost < profile.build_reserve:
+            continue
+        for donor_group in reversed(GROUP_BUILD_PRIORITY):
+            donors = board_data.COLOR_GROUPS[donor_group]
+            top = max(game.houses.get(pos, 0) for pos in donors)
+            if donor_group == group or not game.has_monopoly(player, donor_group) or not 1 <= top <= 4:
+                continue
+            donor = next(pos for pos in donors if game.houses.get(pos, 0) == top)
+            if not game.sell_house(donor):
+                return False
+            game.build_house(target)
+            _trace(game, player, f"moves a {donor_group} house to reach {group} hotels.")
+            return True
+    return False
 
 
 def _best_unmortgage(game: MonopolyGame, player: Player) -> int | None:

@@ -97,6 +97,38 @@ class TradeMemoryTests(unittest.TestCase):
         self.assertNotIn("_rejected_offers", game.to_dict())
 
 
+class HousingShortageTests(unittest.TestCase):
+    """The AI moves a house to finish a group when the Bank has none left."""
+
+    def test_ai_breaks_housing_shortage_to_reach_hotels(self) -> None:
+        """With no houses in the Bank, Iris sells one brown house to build orange.
+
+        Orange sits at 3/4/4 -- one house short of hotels -- and brown is her
+        lowest-priority developed group. One AI move sells evenly from brown
+        and builds the last orange house; the next builds a hotel, which
+        hands four houses back to the Bank.
+        """
+        game = make_game()
+        iris = game.players[1]
+        give_group(game, iris.index, (16, 18, 19, 1, 3))
+        game.houses = {16: 3, 18: 4, 19: 4, 1: 2, 3: 2}
+        game.bank_houses = 0
+        iris.cash = 2000
+        game.current = iris.index
+        game.awaiting = "post_roll"
+
+        ai.take_action(game)
+
+        self.assertEqual([game.houses[pos] for pos in (16, 18, 19)], [4, 4, 4])
+        self.assertEqual(sorted(game.houses[pos] for pos in (1, 3)), [1, 2])
+        self.assertEqual(game.bank_houses, 0)
+
+        ai.take_action(game)
+
+        self.assertIn(5, [game.houses[pos] for pos in (16, 18, 19)])
+        self.assertEqual(game.bank_houses, 4)
+
+
 class SimulationMetricTests(unittest.TestCase):
     """The tuning simulation reports what actually happened in a game."""
 
