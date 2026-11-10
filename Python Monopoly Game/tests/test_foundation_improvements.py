@@ -12,7 +12,7 @@ if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
 import ai
-from game import MonopolyGame
+from game import MonopolyGame, TradeOffer
 
 
 def make_game(seed: int = 7) -> MonopolyGame:
@@ -99,7 +99,7 @@ class OfficialRuleFoundationTests(unittest.TestCase):
         game.mortgaged.add(39)
         receiver = game.players[1]
         before = receiver.cash
-        offer = {
+        offer: TradeOffer = {
             "from": 0,
             "to": 1,
             "give": {"props": [39], "cash": 0, "jail": 0},
@@ -118,7 +118,7 @@ class OfficialRuleFoundationTests(unittest.TestCase):
         game = make_game()
         game.owners[39] = 0
         game.mortgaged.add(39)
-        offer = {
+        offer: TradeOffer = {
             "from": 0,
             "to": 1,
             "give": {"props": [39], "cash": 0, "jail": 0},

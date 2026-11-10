@@ -12,12 +12,20 @@ Point = tuple[float, float]
 
 @dataclass(frozen=True)
 class BoardLayout:
-    """All track, home-lane, and yard coordinates for one player count.
+    """Authoritative track indices for one player count, plus fallback pixels.
 
-    The rules engine uses indexes and step counts, while the renderer needs
-    screen coordinates. This object is the translation table between those two
-    worlds. It is immutable so tests, AI, and drawing code can all share it
-    without worrying that one layer will move the board underneath another.
+    The rules engine works in indexes and step counts: where each seat starts,
+    which squares are safe, how long a lap is, and where the home lane begins.
+    This object owns those numbers. It is immutable so tests, AI, and drawing
+    code can all share it without worrying that one layer will move the board
+    underneath another.
+
+    The pixel fields (``track_positions``, ``home_lanes``, ``yard_positions``,
+    ``center``, ``radius``) describe a plain regular polygon. They are only the
+    headless fallback for code that runs without a renderer, such as the
+    shell's animation targets before a ``BoardRenderer`` exists. Every
+    on-screen coordinate the player actually sees comes from
+    ``board_render.DisplayLayout`` instead.
     """
 
     total_players: int
@@ -95,24 +103,38 @@ class BoardLayout:
         return self.total_players * SEGMENT_LENGTH
 
     @property
+    def lap_length(self) -> int:
+        """Number of shared-track cells one token visits before its home column.
+
+        Beginner note: a classic board has 52 shared squares, but a token
+        never lands on the square just behind its own start. It turns into
+        its home column from the square before that, so one lap is
+        ``track_length - 1`` cells (51 on the four-player board). Every rule
+        that asks "is this token still on the shared track?" uses this
+        number.
+        """
+
+        return self.track_length - 1
+
+    @property
     def finish_steps(self) -> int:
         """Relative step value that means a token is fully home."""
 
-        return self.track_length + HOME_LENGTH - 1
+        return self.lap_length + HOME_LENGTH - 1
 
     def track_index(self, player_index: int, steps: int) -> int | None:
-        """Return the absolute main-track index for ``steps`` or ``None`` in home."""
+        """Return the absolute main-track index for ``steps`` or ``None`` off the lap."""
 
-        if steps < 0 or steps >= self.track_length:
+        if steps < 0 or steps >= self.lap_length:
             return None
         return (self.start_indices[player_index] + steps) % self.track_length
 
     def home_lane_index(self, steps: int) -> int | None:
         """Return the lane cell index for home-lane progress."""
 
-        if steps < self.track_length:
+        if steps < self.lap_length:
             return None
-        lane_index = steps - self.track_length
+        lane_index = steps - self.lap_length
         return lane_index if 0 <= lane_index < HOME_LENGTH else None
 
     def position_for(self, player_index: int, steps: int, token_index: int = 0) -> Point:
@@ -129,9 +151,16 @@ class BoardLayout:
         return self.home_lanes[player_index][lane_index]
 
     def steps_to_reach(self, player_index: int, absolute_track_index: int) -> int:
-        """Return the owning-player-relative progress for a track index."""
+        """Return the owning-player-relative progress for a track index.
 
-        return (absolute_track_index - self.start_indices[player_index]) % self.track_length
+        Raises ``ValueError`` for the seat's skipped corner (the cell just
+        behind its own start), because that seat's lap never visits it.
+        """
+
+        steps = (absolute_track_index - self.start_indices[player_index]) % self.track_length
+        if steps >= self.lap_length:
+            raise ValueError("this seat's lap skips the cell just behind its start")
+        return steps
 
     def previous_index(self, absolute_track_index: int, distance: int) -> int:
         """Walk backward around the circular track by ``distance`` cells."""

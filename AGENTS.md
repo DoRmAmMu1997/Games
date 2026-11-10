@@ -42,10 +42,12 @@ deduplicate across game folders.
 Games/
 ├── AGENTS.md / CLAUDE.md        -- this guide (CLAUDE.md just imports it)
 ├── README.md                    -- player-facing overview
+├── LICENSE                      -- MIT license
 ├── pyproject.toml               -- ruff + mypy + bandit config (repo-wide)
 ├── requirements-dev.txt         -- exact-pinned dev/CI toolchain
 ├── .pre-commit-config.yaml      -- check-only hooks (never rewrite files)
 ├── .github/workflows/quality-and-security.yml
+├── .github/dependabot.yaml      -- weekly version-update PRs (pip, pre-commit, actions)
 └── Python <Name> Game/          -- one self-contained game per folder
     ├── main.py                  -- entry point (Solitaire: solitaire.py)
     ├── game.py                  -- UI-free rules engine (pygame games)
@@ -82,7 +84,7 @@ animation state, and persistence. Keep it that way:
 
 ## 5. Coding conventions
 
-- Python 3.11+; `from __future__ import annotations`; modern typing
+- Python 3.12+; `from __future__ import annotations`; modern typing
   (`X | None`, pep585 builtins). Line length 120 (ruff enforces).
 - **Self-contained games.** Never import across game folders and never
   create a shared package. Small helpers (`_atomic_write`, `_log_error`,
@@ -119,7 +121,7 @@ Install once: `pip install -r requirements-dev.txt` plus
 requirements file provides pygame-ce for all three).
 
 From the repo root, all of these must pass — CI runs exactly this set on
-Python 3.11 and 3.13:
+Python 3.12, 3.13 and 3.14:
 
 ```powershell
 # Headless env for the pygame games (PowerShell syntax)
@@ -147,7 +149,9 @@ Hard rules:
 - If you change a CI command, change the identical command here in §6 in the
   same commit.
 - Tool versions are pinned in `requirements-dev.txt` and mirrored in
-  `.pre-commit-config.yaml` (the ruff rev) — bump them together.
+  `.pre-commit-config.yaml` (the ruff rev) — bump them together. Dependabot's
+  `dev-toolchain` multi-ecosystem group already does this in one PR; keep
+  both entries in that group if you edit `.github/dependabot.yaml`.
 - Pre-commit hooks are check-only; never add hooks that rewrite files.
 
 ## 7. Windows / PowerShell gotchas

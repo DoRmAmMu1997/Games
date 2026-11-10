@@ -23,7 +23,7 @@ thirteen themed boards, auctions, trading, and save & resume.
 
 ## Requirements
 
-- Python 3.11 or newer.
+- Python 3.12 or newer.
 - `pygame-ce`.
 
 Install dependencies once with:
@@ -60,8 +60,14 @@ the board, buying properties, and trying to bankrupt everyone else.
 - **Trade** properties, cash, and Get Out of Jail Free cards with any other
   player.
 - Land on **Go To Jail** (or roll three doubles, or draw the jail card) and
-  you go to jail; pay $50, use a jail card, or roll for doubles to get out.
+  you go to jail; pay $50 (with the cash in hand), use a jail card, or roll
+  for doubles to get out.
 - Pass **GO** to collect $200.
+- **Short of cash?** If you owe more than you hold but selling buildings and
+  mortgaging titles would cover it, the game pauses so you can raise the
+  money yourself and then pay -- or concede and declare bankruptcy, which
+  hands your cash, buildings' sale value and titles to whoever you owe. If
+  even selling everything could not cover the debt, you go bankrupt at once.
 - Last player not bankrupt **wins**.
 
 ## Controls
@@ -79,6 +85,13 @@ the board, buying properties, and trying to bankrupt everyone else.
   any highlighted property to act on it, then **Done**.
 - **Property inspection:** hover any board space to see a deed-style summary
   in the board centre with ownership, rent, mortgage, and development detail.
+- **Raising funds:** when you owe more cash than you hold, the action bar
+  shows what you owe with **Pay $X** (enabled once your cash covers it),
+  **Assets** (sell buildings and mortgage titles there) and **Declare
+  Bankruptcy**.
+- **Spectating:** once every human is bankrupt, the AIs play on. Click
+  **Fast-forward** to run them without the pause between moves, or
+  **Concede / Main Menu** to record the game as played and leave.
 - **Auctions** open their own dialog with a **Bid +$X** button and **Pass**.
 - **Bankruptcy auctions** say when a released Bank title is being auctioned,
   so a chain of forced auctions has context.
@@ -115,6 +128,10 @@ and rents -- only the names change.
 - **Classic-rule fixes** -- Bank bankruptcies auction released titles, sold
   buildings obey even-selling rules, and transferred mortgaged titles charge
   the new owner immediate mortgage interest.
+- **Bankrupt estates** -- a player bankrupted by another player hands that
+  creditor their cash, titles and Get Out of Jail Free cards (the cards go
+  back to their decks if the creditor cannot cover the mortgage interest);
+  bankrupt to the Bank, the titles are auctioned and the cards are returned.
 - **Decision clarity** -- owned-title asset management shows deed detail,
   legal action reasons, mortgage-transfer consequences, and Bank bankruptcy
   auction context before the player commits.
@@ -188,7 +205,8 @@ The computer players are **heuristic**, not optimal. They:
   progress, group completion, and strategic blocking;
 - once they own a complete group, build houses evenly while keeping cash in
   reserve;
-- mortgage low-value land first when forced to raise money;
+- when forced to raise money, mortgage idle low-value land (undeveloped
+  titles outside a monopoly, cheapest first) before selling any houses;
 - pay or use a card to escape jail in the early game when there is still
   land to grab, and stay in jail late;
 - propose trades that complete a colour group for them -- preferring swaps
@@ -197,3 +215,10 @@ The computer players are **heuristic**, not optimal. They:
 `cautious`, `standard`, and `sharp` setup profiles tune reserves, bidding
 aggression, blocking pressure, and trade margins without changing the rules
 engine.
+
+## License
+
+Part of this repository, released under the MIT License — see [LICENSE](../LICENSE).
+
+MONOPOLY is a trademark of Hasbro. This is an unofficial fan-made game and is not affiliated
+with, endorsed by, or sponsored by Hasbro.

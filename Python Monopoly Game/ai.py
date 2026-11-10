@@ -5,6 +5,15 @@ waiting for, decides what the current AI player should do, and calls exactly
 one engine action -- so the caller can step the AI one move at a time (the UI
 inserts a short pause between moves so a human can follow along).
 
+Two moves are deliberately compound, because their parts only make sense
+together:
+- Breaking a housing shortage: when the Bank has no houses left and a held
+  group is one house per lot short of hotels, the AI sells one house from
+  its lowest-priority developed group and builds it onto that group in the
+  same move. (A later move builds the hotel, which returns four houses.)
+- Settling a debt in raise_funds (a defensive fallback; AI payers normally
+  never wait there): sell and mortgage, then pay, or concede.
+
 The AI is a *heuristic* player: it follows sensible rules of thumb -- grab
 property early, complete colour groups, build on them, keep a cash cushion,
 bid to a property's worth, and trade to finish monopolies. It is a tough
@@ -17,10 +26,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import board_data
-from settings import JAIL_FINE
+from settings import JAIL_FINE, TRADE_RETRY_COOLDOWN_TURNS
 
 if TYPE_CHECKING:
-    from game import MonopolyGame
+    from game import MonopolyGame, TradeOffer, TradeSide
     from player import Player
 
 # Colour groups roughly ordered by how rewarding they are to develop -- the
@@ -116,7 +125,11 @@ def property_value(game: MonopolyGame, player: Player, position: int,
 
     if space.kind == "street":
         value += space.rent[-1] * STREET_TOP_RENT_WEIGHT
-        if _completes_group(game, player, position):
+        if _in_monopoly(game, player, position):
+            # An owned title inside a held monopoly: losing it breaks the
+            # group, so it is worth as much as the title that completed it.
+            value *= GROUP_COMPLETION_MULT
+        elif _completes_group(game, player, position):
             value *= GROUP_COMPLETION_MULT
         elif _owns_some_of_group(game, player, position):
             value *= PARTIAL_GROUP_MULT
@@ -154,6 +167,21 @@ def take_action(game: MonopolyGame) -> None:
         _trace(game, player, "accepts a trade on value." if accept
                else "rejects a weak trade.")
         game.respond_trade(accept)
+    elif state == "raise_funds":
+        _do_raise_funds(game, player)
+
+
+def _do_raise_funds(game: MonopolyGame, player: Player) -> None:
+    """Settle a debt this AI is somehow waiting on, so play never stalls.
+
+    AI payers are always settled automatically and never wait in
+    raise_funds; this is a defensive fallback. The AI sells and mortgages
+    what it can, pays if that covers the debt, and otherwise concedes.
+    """
+    game._raise_funds(player, game.debts[0]["amount"])
+    game.pay_debts()
+    if game.awaiting == "raise_funds" and game.actor() == player.index:
+        game.declare_bankruptcy()
 
 
 # --------------------------------------------------------------------------
@@ -178,6 +206,8 @@ def _do_post_roll(game: MonopolyGame, player: Player) -> None:
     if target is not None:
         _trace(game, player, f"builds into {game.board[target].group} pressure.")
         game.build_house(target)
+        return
+    if _break_housing_shortage(game, player):
         return
     if game._trades_proposed == 0:
         proposal = propose_trade(game, player)
@@ -228,6 +258,41 @@ def _best_build(game: MonopolyGame, player: Player) -> int | None:
     return None
 
 
+def _break_housing_shortage(game: MonopolyGame, player: Player) -> bool:
+    """Move one house onto a group that is one house per lot short of hotels.
+
+    Only when the Bank has no houses (but has a hotel): a held group whose
+    lots all sit at 4 houses except some at 3 cannot finish, so the AI sells
+    one house evenly from its lowest-priority other developed group and
+    builds it onto a 3-house lot -- one compound move. Once every lot is at
+    4, the normal build step adds a hotel, which returns four houses to the
+    Bank. Returns True if the move was made.
+    """
+    if game.bank_houses != 0 or game.bank_hotels <= 0:
+        return False
+    profile = _profile(game)
+    for group in GROUP_BUILD_PRIORITY:
+        members = board_data.COLOR_GROUPS[group]
+        levels = [game.houses.get(pos, 0) for pos in members]
+        if not game.has_monopoly(player, group) or 3 not in levels or not set(levels) <= {3, 4}:
+            continue
+        target = next(pos for pos in members if game.houses.get(pos, 0) == 3)
+        if player.cash - game.board[target].house_cost < profile.build_reserve:
+            continue
+        for donor_group in reversed(GROUP_BUILD_PRIORITY):
+            donors = board_data.COLOR_GROUPS[donor_group]
+            top = max(game.houses.get(pos, 0) for pos in donors)
+            if donor_group == group or not game.has_monopoly(player, donor_group) or not 1 <= top <= 4:
+                continue
+            donor = next(pos for pos in donors if game.houses.get(pos, 0) == top)
+            if not game.sell_house(donor):
+                return False
+            game.build_house(target)
+            _trace(game, player, f"moves a {donor_group} house to reach {group} hotels.")
+            return True
+    return False
+
+
 def _best_unmortgage(game: MonopolyGame, player: Player) -> int | None:
     """Return a mortgaged property worth lifting now, or None.
 
@@ -241,7 +306,7 @@ def _best_unmortgage(game: MonopolyGame, player: Player) -> int | None:
         return None
     mortgaged.sort(key=lambda pos: not _in_monopoly(game, player, pos))
     for pos in mortgaged:
-        cost = round(game.board[pos].mortgage * 1.1)
+        cost = game.unmortgage_cost(pos)
         if player.cash - cost >= _profile(game).cash_cushion:
             return pos
     return None
@@ -315,12 +380,13 @@ def _auction_ceiling(game: MonopolyGame, player: Player, position: int) -> int:
 # --------------------------------------------------------------------------
 # Trading
 # --------------------------------------------------------------------------
-def propose_trade(game: MonopolyGame, player: Player) -> dict | None:
+def propose_trade(game: MonopolyGame, player: Player) -> TradeOffer | None:
     """Look for a trade that completes one of this AI's colour groups.
 
-    Returns an offer dict, or None. The AI prefers a swap that *also* completes
+    Returns a TradeOffer, or None. The AI prefers a swap that *also* completes
     a monopoly for the partner -- a deal both sides love -- and otherwise puts
-    in enough cash to make the partner say yes.
+    in enough cash to make the partner say yes. A partner who rejected an
+    offer for the same title is left alone for TRADE_RETRY_COOLDOWN_TURNS.
     """
     for group in board_data.COLOR_GROUPS:
         wanted = _missing_one(game, player, group)
@@ -330,6 +396,9 @@ def propose_trade(game: MonopolyGame, player: Player) -> dict | None:
             continue
         partner = game.players[game.owners[wanted]]
         if partner.bankrupt:
+            continue
+        rejected_on = game._rejected_offers.get((player.index, partner.index, wanted))
+        if rejected_on is not None and game.turn_count - rejected_on < TRADE_RETRY_COOLDOWN_TURNS:
             continue
         offer = _make_offer(game, player, partner, wanted)
         if offer is not None:
@@ -348,10 +417,10 @@ def _missing_one(game: MonopolyGame, player: Player, group: str) -> int | None:
     return None
 
 
-def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int) -> dict | None:
+def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int) -> TradeOffer | None:
     """Build an offer to win `wanted` that both `player` and `partner` accept."""
-    give: dict = {"props": [], "cash": 0, "jail": 0}
-    get: dict = {"props": [wanted], "cash": 0, "jail": 0}
+    give: TradeSide = {"props": [], "cash": 0, "jail": 0}
+    get: TradeSide = {"props": [wanted], "cash": 0, "jail": 0}
     # The best sweetener is a property that completes a monopoly for the
     # partner -- but never one from the group the AI is itself completing,
     # or the AI would trade away the very tile it is bargaining for.
@@ -367,7 +436,7 @@ def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int
     # property), which is why we return as soon as the partner says yes.
     for cash in range(0, affordable + 1, 25):
         give["cash"] = cash
-        offer = {"from": player.index, "to": partner.index, "give": give, "get": get}
+        offer: TradeOffer = {"from": player.index, "to": partner.index, "give": give, "get": get}
         if not game.trade_is_legal(offer):
             return None
         if evaluate_offer(game, partner, offer):
@@ -401,7 +470,7 @@ def _property_completing_for(game: MonopolyGame, giver: Player, partner: Player,
     return None
 
 
-def evaluate_offer(game: MonopolyGame, player: Player, offer: dict | None) -> bool:
+def evaluate_offer(game: MonopolyGame, player: Player, offer: TradeOffer | None) -> bool:
     """Return True if `player` should accept the trade `offer`."""
     if offer is None or not game.trade_is_legal(offer):
         return False
@@ -410,7 +479,7 @@ def evaluate_offer(game: MonopolyGame, player: Player, offer: dict | None) -> bo
     return _trade_swing(game, player, offer) >= _profile(game).trade_accept_margin
 
 
-def _trade_swing(game: MonopolyGame, evaluator: Player, offer: dict) -> int:
+def _trade_swing(game: MonopolyGame, evaluator: Player, offer: TradeOffer) -> int:
     """Estimate how much the trade is worth to `evaluator` (may be negative).
 
     Raw asset values are compared, then big adjustments are applied: gaining a
@@ -438,7 +507,7 @@ def _trade_swing(game: MonopolyGame, evaluator: Player, offer: dict) -> int:
     return swing
 
 
-def _bundle_value(game: MonopolyGame, bundle: dict) -> int:
+def _bundle_value(game: MonopolyGame, bundle: TradeSide) -> int:
     """The plain asset value of one side of a trade (cash + property + cards)."""
     total = bundle["cash"] + bundle["jail"] * 50
     for pos in bundle["props"]:
@@ -461,12 +530,16 @@ def _group_of(game: MonopolyGame, position: int) -> str | None:
 
 
 def _owns_some_of_group(game: MonopolyGame, player: Player, position: int) -> bool:
-    """True if `player` already owns at least one space in this street's group."""
+    """True if `player` owns at least one OTHER space in this street's group.
+
+    `position` itself is ignored, so a title the player already holds alone
+    does not count as a partial group.
+    """
     group = _group_of(game, position)
     if not group:
         return False
     return any(game.owners.get(pos) == player.index
-               for pos in board_data.COLOR_GROUPS[group])
+               for pos in board_data.COLOR_GROUPS[group] if pos != position)
 
 
 def _in_monopoly(game: MonopolyGame, player: Player, position: int) -> bool:
@@ -476,9 +549,13 @@ def _in_monopoly(game: MonopolyGame, player: Player, position: int) -> bool:
 
 
 def _completes_group(game: MonopolyGame, player: Player, position: int) -> bool:
-    """True if buying `position` would complete a colour group for `player`."""
+    """True if buying `position` would complete a colour group for `player`.
+
+    A title the player already owns cannot be bought again, so it never
+    "completes" anything (a held monopoly is `_in_monopoly` instead).
+    """
     group = _group_of(game, position)
-    if not group:
+    if not group or game.owners.get(position) == player.index:
         return False
     members = board_data.COLOR_GROUPS[group]
     owned = sum(1 for pos in members if game.owners.get(pos) == player.index)

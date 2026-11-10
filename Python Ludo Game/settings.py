@@ -20,7 +20,8 @@ FPS = 60
 
 # The board lives on the left and the control panel lives on the right. Keeping
 # the logical size fixed makes click handling and PyInstaller builds simpler.
-BOARD_RECT = (30, 30, 840, 840)
+# BOARD_CENTER and BOARD_RADIUS shape BoardLayout's plain polygon, which is only
+# the headless fallback; the drawn boards come from board_render.DisplayLayout.
 BOARD_CENTER = (450, 450)
 BOARD_RADIUS = 330
 PANEL_X = 900
@@ -33,6 +34,30 @@ DICE_ANIM_MS = 350
 # Tokens hop cell-by-cell along the track. This is the travel speed in pixels
 # per second: fast enough not to drag, slow enough to follow each hop.
 TOKEN_HOP_SPEED = 460.0
+
+# LUDO_AUTOTEST=1 plays a hidden, seeded all-AI four-player game for this many
+# frames (the AI acts every frame there), long enough to roll, enter, move, and
+# capture, then exits. The fixed seed makes every autotest run identical.
+AUTOTEST_FRAMES = 120
+AUTOTEST_SEED = 7
+
+# Token pins (the drawn pawns) and their click targets.
+TOKEN_PIN_RADIUS = 15  # radius of a pawn's coloured head, in pixels
+# A click selects the nearest highlighted pawn whose drawn centre lies within
+# this many pixels: generous enough for quick clicks, and "nearest" keeps it
+# exact when neighbouring pawns' circles overlap on the tight 6P board.
+TOKEN_HIT_RADIUS = 33
+# Pawns sharing one cell fan out around its centre so each stays visible.
+# Stacked pawns shrink to STACK_PIN_RADIUS and sit STACK_SPACING pixels apart,
+# which keeps every pawn's number at least 2 px clear of the (white-ringed)
+# heads drawn after it in any common font, while a six-pawn fan still stays
+# within about one cell of its square.
+STACK_SPACING = 26
+STACK_PIN_RADIUS = 11
+# A pair whose nearest occupied cell is within this many pixels lines up side
+# by side with it; beyond that it fans out across its own path. 80 px covers a
+# neighbouring cell (33-59 px away) plus the reach of a full fan around it.
+PAIR_NEIGHBOUR_RANGE = 80
 
 
 # ---------------------------------------------------------------------------
@@ -52,11 +77,6 @@ HOME_LENGTH = 6
 # ---------------------------------------------------------------------------
 # Plain RGB tuples are easy to tweak. The palette avoids needing image assets:
 # every board cell, panel, token, and highlight is drawn procedurally.
-BG = (28, 35, 39)
-BOARD_BG = (232, 226, 205)
-BOARD_LINE = (37, 43, 48)
-TRACK_FILL = (247, 245, 235)
-HOME_FILL = (245, 239, 216)
 PANEL_BG = (20, 27, 31)
 PANEL_CARD = (35, 45, 51)
 PANEL_EDGE = (82, 102, 112)
@@ -66,7 +86,23 @@ INK = (20, 24, 26)
 GOLD = (224, 181, 76)
 SUCCESS = (110, 205, 140)
 DANGER = (224, 84, 84)
-DISABLED = (88, 98, 102)
+# Labels and markings drawn on a seat colour (pawn numbers, name banners,
+# start arrows) use whichever of LABEL_LIGHT or LABEL_DARK contrasts more with
+# that colour (WCAG contrast ratio). With pure white and pure black every seat
+# colour and start-square tint reaches LABEL_CONTRAST_TARGET = 4.5:1 (WCAG AA
+# for normal text; the closest call is purple at 4.6). That leaves real margin
+# above MIN_LABEL_CONTRAST = 3:1, the floor rendered pixels must still clear
+# after a platform's font antialiasing thins the strokes.
+LABEL_LIGHT = (255, 255, 255)
+LABEL_DARK = (0, 0, 0)
+LABEL_CONTRAST_TARGET = 4.5
+MIN_LABEL_CONTRAST = 3.0
+# Setup stepper buttons draw their -, +, <, > as shapes rather than font
+# glyphs, so they are large and exactly centred whatever font is installed.
+STEPPER_SYMBOL_HALF = 8        # half the symbol's span: symbols are 16 px across
+STEPPER_SYMBOL_THICKNESS = 4   # stroke width of the - and + bars
+DISABLED = (88, 98, 102)        # muted grey for a disabled button's border and label
+DISABLED_FILL = (26, 32, 36)    # darker than PANEL_CARD, so a disabled button reads as "off"
 
 # Base token colours. Individual boards pick from these via the seat tables
 # below instead of indexing one shared list, because the classic colour wheel
@@ -105,6 +141,23 @@ def seat_name(total_players: int, seat: int) -> str:
     """Return the colour name for one seat, used in default AI player names."""
 
     return SEAT_COLOR_NAMES[total_players][seat]
+
+
+# ---------------------------------------------------------------------------
+# Window icon
+# ---------------------------------------------------------------------------
+# The window icon is the 256px PNG taken from ludo_icon.ico (pygame cannot
+# decode the .ico itself). If the PNG ever fails to load, main._make_icon draws
+# a simple stand-in: a cream board square holding one dot per classic seat.
+ICON_FILE = "ludo_icon.png"
+ICON_SIZE = 64                      # fallback icon canvas, in pixels
+ICON_BOARD_INSET = 4                # gap between the canvas edge and the board
+ICON_BOARD_SIZE = 56                # side of the cream board square
+ICON_BOARD_RADIUS = 12              # rounded-corner radius of the board
+ICON_BOARD_COLOR = (238, 232, 209)  # cream, like the real board
+ICON_DOT_ORIGIN = 22                # centre of the top-left seat dot
+ICON_DOT_SPACING = 20               # distance between neighbouring dots
+ICON_DOT_RADIUS = 9                 # radius of each seat dot
 
 
 # ---------------------------------------------------------------------------

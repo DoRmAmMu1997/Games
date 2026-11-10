@@ -19,10 +19,12 @@ hopping cell by cell like the popular mobile Ludo apps.
 - `simulation.py` - seeded all-AI runs for tuning.
 - `tests/` - engine, AI, board-geometry, save/load, and Pygame smoke coverage.
 - `requirements.txt`, `Ludo Game.spec` - dependency and PyInstaller recipe.
+- `ludo_icon.ico`, `ludo_icon.png` - the `.exe` icon, and the window icon
+  (the 256px image from inside the `.ico`, which pygame cannot decode).
 
 ## Requirements
 
-- Python 3.11 or newer.
+- Python 3.12 or newer.
 - `pygame-ce`.
 
 Install dependencies once with:
@@ -49,6 +51,9 @@ same direction the tokens move.
 Classic competitive rules are enabled by default:
 
 - Roll a `6` to move a token out of the yard.
+- A lap is 51 squares on the four-player board (64 on five players, 77 on
+  six): a token never lands on the square just behind its own start, and
+  turns straight into its home column from the square before it.
 - Move exactly into the final home cell; overshooting is not legal.
 - Capturing on a non-safe square sends opponent tokens back to their yard.
 - Each start square and each segment star square is safe.
@@ -78,6 +83,9 @@ Run seeded all-AI batches from this folder:
 python simulation.py --games 5 --players 4 --profile tactical --seed 1
 ```
 
+Add `--blockades`, `--no-capture-bonus`, `--no-home-bonus`, or
+`--no-three-sixes` to simulate the same house rules the setup screen offers.
+
 ## Save Data
 
 The game stores data in:
@@ -90,6 +98,16 @@ The game stores data in:
 
 The path is the same from source and from a packaged `.exe`.
 
+Saves written before the 51-square lap still load. They counted one extra
+shared square (the corner just behind each start), so loading shifts them
+onto the shorter lap:
+
+- Tokens in the home column or at home keep their cell and their distance.
+- A token on the old corner steps back one cell to its column entrance and
+  keeps its distance.
+- Tokens on the shared track keep their cell and end up one cell closer to
+  home, because the lap is one cell shorter.
+
 ## Test
 
 From the repository root:
@@ -99,7 +117,8 @@ python -m unittest discover -s "Python Ludo Game\tests" -v
 python -m compileall "Python Ludo Game"
 ```
 
-For a headless Pygame smoke test in PowerShell:
+For a headless Pygame smoke test in PowerShell (it plays a short seeded
+all-AI game in a hidden window and never writes or deletes your saves):
 
 ```powershell
 $env:SDL_VIDEODRIVER='dummy'
@@ -125,3 +144,7 @@ track cells per player segment and 6 home-lane cells per player -- so the
 rules are identical whichever board shape is on screen. The geometry test
 suite locks the visual layout to those rules: track continuity, clockwise
 movement, and start/yard/home alignment are all asserted per player count.
+
+## License
+
+Part of this repository, released under the MIT License — see [LICENSE](../LICENSE).
