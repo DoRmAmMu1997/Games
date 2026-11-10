@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
@@ -19,6 +20,7 @@ if str(GAME_DIR) not in sys.path:
 from test_engine_regressions import rig_rolls
 from test_foundation_improvements import give_group, make_game
 
+import ai
 import cards
 from game import MonopolyGame
 from settings import BANK_HOTELS, JAIL_FINE, JAIL_POSITION, MAX_JAIL_TURNS
@@ -213,6 +215,40 @@ class ChanceDeckTests(unittest.TestCase):
         self.assertEqual(sum(card["kind"] == "nearest_rail" for card in deck), 2)
         self.assertEqual(
             sum(card["kind"] == "advance" and card["pos"] == 0 for card in deck), 1)
+
+
+class UnmortgageCostTests(unittest.TestCase):
+    """One integer helper prices lifting a mortgage everywhere."""
+
+    def test_unmortgage_cost_rounds_ten_percent_interest_up_consistently(self) -> None:
+        """Lifting costs the mortgage plus 10% rounded up, for players and AI.
+
+        A $75 utility mortgage costs $83 (not the $82 that float rounding
+        gave), a $175 one costs $193, and the blocker, the action and the
+        AI all use that same figure.
+        """
+        game = make_game()
+        self.assertEqual(game.unmortgage_cost(12), 83)
+        self.assertEqual(game.unmortgage_cost(37), 193)
+
+        player = game.current_player
+        game.owners[12] = player.index
+        game.mortgaged.add(12)
+        player.cash = 82
+        self.assertEqual(game.asset_actions_for(player, 12)["unmortgage"]["reason"],
+                         "Need $83 to lift this mortgage.")
+        self.assertFalse(game.unmortgage(12))
+        player.cash = 83
+        self.assertTrue(game.unmortgage(12))
+        self.assertEqual(player.cash, 0)
+
+        rich_ai = game.players[1]
+        game.owners[28] = rich_ai.index
+        game.mortgaged.add(28)
+        rich_ai.cash = 1000
+        self.assertEqual(ai._best_unmortgage(game, rich_ai), 28)
+        with mock.patch.object(game, "unmortgage_cost", return_value=900):
+            self.assertIsNone(ai._best_unmortgage(game, rich_ai))
 
 
 if __name__ == "__main__":

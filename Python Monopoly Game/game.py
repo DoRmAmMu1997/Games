@@ -324,9 +324,26 @@ class MonopolyGame:
                 self._note(f"{self.players[self.winner].name} wins the game!")
 
     def mortgage_transfer_interest(self, positions: list[int]) -> int:
-        """Return interest due now if `positions` transfer while mortgaged."""
+        """Return interest due now if `positions` transfer while mortgaged.
+
+        This 10% is rounded DOWN (a $75 mortgage owes $7): it is a one-off
+        charge that the new owner pays on top of later lifting the mortgage
+        at the full `unmortgage_cost`, so the smaller figure is the kinder
+        reading of the rule.
+        """
         return sum(self.board[pos].mortgage // 10
                    for pos in positions if pos in self.mortgaged)
+
+    def unmortgage_cost(self, position: int) -> int:
+        """Return the cash needed to lift the mortgage on `position`.
+
+        That is the mortgage value plus 10% interest, rounded UP to whole
+        dollars with integer maths ($75 -> $83, $175 -> $193). Every caller
+        -- the blocker, the action and the AI -- uses this one helper, so
+        they can never disagree by a dollar the way float rounding did.
+        """
+        mortgage = self.board[position].mortgage
+        return mortgage + (mortgage + 9) // 10
 
     def _charge_mortgage_transfer_interest(self, recipient: Player,
                                            positions: list[int]) -> None:
@@ -846,7 +863,7 @@ class MonopolyGame:
             return blocker
         if position not in self.mortgaged:
             return "This title is not mortgaged."
-        cost = round(self.board[position].mortgage * 1.1)
+        cost = self.unmortgage_cost(position)
         if player.cash < cost:
             return f"Need ${cost} to lift this mortgage."
         return None
@@ -931,7 +948,7 @@ class MonopolyGame:
         player = self.current_player
         if not self.can_unmortgage(player, position):
             return False
-        cost = round(self.board[position].mortgage * 1.1)
+        cost = self.unmortgage_cost(position)
         if player.cash < cost:
             return False
         player.cash -= cost

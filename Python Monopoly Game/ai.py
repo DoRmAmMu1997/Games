@@ -241,7 +241,7 @@ def _best_unmortgage(game: MonopolyGame, player: Player) -> int | None:
         return None
     mortgaged.sort(key=lambda pos: not _in_monopoly(game, player, pos))
     for pos in mortgaged:
-        cost = round(game.board[pos].mortgage * 1.1)
+        cost = game.unmortgage_cost(pos)
         if player.cash - cost >= _profile(game).cash_cushion:
             return pos
     return None
