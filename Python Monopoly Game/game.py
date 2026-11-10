@@ -34,6 +34,7 @@ from settings import (
     JAIL_POSITION,
     LUXURY_TAX,
     MAX_JAIL_TURNS,
+    TOKEN_COLORS,
 )
 
 # Rent a railroad charges for 1/2/3/4 railroads owned by the same player.
@@ -1081,8 +1082,10 @@ class MonopolyGame:
     def to_dict(self) -> dict:
         """Snapshot the whole game as plain data for saving to JSON.
 
-        Saving is only offered between turns (pre_roll / post_roll), so no
-        half-finished auction or trade ever needs to be stored.
+        Saving is only offered in pre_roll / post_roll, so no half-finished
+        auction or trade ever needs to be stored (any other state is
+        normalised to pre_roll). Those states can fall mid-turn, between
+        two doubles, so `doubles_count` is kept for the three-doubles rule.
         """
         return {
             "save_version": SAVE_VERSION,
@@ -1099,11 +1102,23 @@ class MonopolyGame:
             "current": self.current,
             "awaiting": self.awaiting if self.awaiting in ("pre_roll", "post_roll") else "pre_roll",
             "turn_count": self.turn_count,
+            "doubles_count": self.doubles_count,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> MonopolyGame:
-        """Rebuild a game from a `to_dict()` snapshot (used to resume a game)."""
+        """Rebuild a game from a `to_dict()` snapshot (used to resume a game).
+
+        Stored numbers are coerced to int, then the payload is validated: a
+        save whose seats, turn state, titles, buildings or decks could not be
+        resumed raises ValueError, which the loader treats as a bad save.
+
+        Beginner note:
+        - Legitimate saves must still load: a bankrupt current player, titles
+          pointing at a bankrupt seat, zero building entries, a deck missing
+          the jail card a player holds, and first-release saves without the
+          newer fields are all states a real game can be saved in.
+        """
         save_version = int(data.get("save_version", 1))
         if save_version not in (1, SAVE_VERSION):
             raise ValueError(f"Unsupported Monopoly save version: {save_version}")
@@ -1111,18 +1126,33 @@ class MonopolyGame:
         game = cls(specs, theme=data.get("theme", "classic"),
                    ai_profile=data.get("ai_profile", "standard"))
         game.players = [Player.from_dict(p) for p in data["players"]]
-        game.owners = {int(k): v for k, v in data["owners"].items()}
+        game.owners = {int(k): int(v) for k, v in data["owners"].items()}
         game.houses = {int(k): v for k, v in data["houses"].items()}
         game.mortgaged = set(data["mortgaged"])
-        game.bank_houses = data["bank_houses"]
-        game.bank_hotels = data["bank_hotels"]
+        game.bank_houses = int(data["bank_houses"])
+        game.bank_hotels = int(data["bank_hotels"])
         game.chance = cards_module.Deck("chance", cards_module.CHANCE_CARDS,
                                         order=data["chance"])
         game.chest = cards_module.Deck("chest", cards_module.CHEST_CARDS,
                                        order=data["chest"])
-        game.current = data["current"]
+        game.current = int(data["current"])
         game.awaiting = data["awaiting"]
-        game.turn_count = data["turn_count"]
+        game.turn_count = int(data["turn_count"])
+        game.doubles_count = int(data.get("doubles_count", 0))
         game.phase = "playing"
+
+        seats = len(game.players)
+        if not 2 <= seats <= len(TOKEN_COLORS) or any(p.index != seat for seat, p in enumerate(game.players)):
+            raise ValueError("Saved players are inconsistent.")
+        if not 0 <= game.current < seats or game.awaiting not in ("pre_roll", "post_roll"):
+            raise ValueError("Saved turn state cannot be resumed.")
+        if any(not 0 <= pos < len(game.board) or game.board[pos].kind not in ("street", "railroad", "utility")
+               or not 0 <= owner < seats for pos, owner in game.owners.items()):
+            raise ValueError("Saved title ownership is invalid.")
+        if any(not 0 <= level <= 5 for level in game.houses.values()):
+            raise ValueError("Saved building level is invalid.")
+        for deck in (game.chance, game.chest):
+            if not deck.order or any(not 0 <= i < len(deck.master) for i in deck.order):
+                raise ValueError("Saved card deck is invalid.")
         game._note("Resumed a saved game.")
         return game
