@@ -101,12 +101,21 @@ def _atomic_write(path: Path, payload: dict) -> None:
 
 
 def load_stats() -> dict:
-    """Read lifetime stats, returning zeros if none are saved yet."""
+    """Read lifetime stats, returning zeros if none are saved yet.
+
+    A damaged stats file (not a JSON object, or numbers that are not
+    integers) is logged and read as zeros instead of crashing the game.
+    """
     try:
         data = json.loads(STATS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("stats.json is not a JSON object")
         return {"games": int(data.get("games", 0)),
                 "human_wins": int(data.get("human_wins", 0))}
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return {"games": 0, "human_wins": 0}
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError) as error:
+        _log_error(error)
         return {"games": 0, "human_wins": 0}
 
 
@@ -116,11 +125,23 @@ def save_game(game: MonopolyGame) -> None:
 
 
 def load_saved_game() -> MonopolyGame | None:
-    """Load the saved game, or return None if there is no valid save."""
+    """Load the saved game, or return None if there is no valid save.
+
+    A save that cannot be loaded is logged and renamed to
+    savegame.bad.json, so the Resume button disappears instead of failing
+    on every click (and the file is kept for anyone who wants to inspect it).
+    """
     try:
         data = json.loads(SAVEGAME_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("savegame.json is not a JSON object")
         return MonopolyGame.from_dict(data)
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as error:
+        _log_error(error)
+        with contextlib.suppress(OSError):
+            os.replace(SAVEGAME_PATH, SAVEGAME_PATH.with_name("savegame.bad.json"))
         return None
 
 

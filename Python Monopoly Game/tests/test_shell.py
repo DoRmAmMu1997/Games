@@ -136,6 +136,33 @@ class AutotestPersistenceTests(SeededSaveDirTestCase):
         self.assertEqual(self.snapshot(), before)
 
 
+class CorruptFileTests(SeededSaveDirTestCase):
+    """Damaged save files are logged and survived, never crash the app."""
+
+    def test_malformed_stats_load_as_zeros_and_are_logged(self) -> None:
+        """A stats file that is not a usable JSON object reads as no stats yet."""
+        for text in ("[]", '"text"', '{"games": Infinity}'):
+            with self.subTest(text=text):
+                (self.folder / "stats.json").write_text(text)
+
+                self.assertEqual(main.load_stats(), {"games": 0, "human_wins": 0})
+                self.assertTrue((self.folder / "error.log").exists())
+
+    def test_non_dict_save_is_set_aside_and_resume_disappears(self) -> None:
+        """Resume on a save that is not a JSON object renames it to savegame.bad.json."""
+        (self.folder / "savegame.json").write_text("[1, 2, 3]")
+        app = MonopolyApp(persist=False)
+        self.assertIn("resume", button_states(app))
+
+        click(app, "resume")
+
+        self.assertEqual(app.screen, "setup")
+        self.assertNotIn("resume", button_states(app))
+        self.assertEqual((self.folder / "savegame.bad.json").read_text(), "[1, 2, 3]")
+        self.assertFalse((self.folder / "savegame.json").exists())
+        self.assertTrue((self.folder / "error.log").exists())
+
+
 class RaiseFundsBarTests(ShellTestCase):
     """The debtor gets Pay, Assets and Declare Bankruptcy while raising funds."""
 
