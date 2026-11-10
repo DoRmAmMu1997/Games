@@ -544,6 +544,10 @@ class MonopolyApp:
             game.auction_bid(auction["high_bid"] + step)
         elif key == "pass":
             game.auction_pass()
+        elif key == "pay_debts":
+            game.pay_debts()
+        elif key == "declare_bankruptcy":
+            game.declare_bankruptcy()
         else:
             return False
         return True
@@ -643,9 +647,13 @@ class MonopolyApp:
         }
 
     def _open_assets(self) -> None:
-        """Open the title manager with the first owned title selected."""
+        """Open the title manager for the acting player, first title selected.
+
+        The actor is the current player, or a debtor raising funds (who may
+        not be the current player at all).
+        """
         game = self._require_game()
-        owned = sorted(game.properties_of(game.current_player))
+        owned = sorted(game.properties_of(game.players[game.actor()]))
         if not owned:
             self.message = "You do not own any titles yet."
             return
@@ -659,7 +667,7 @@ class MonopolyApp:
             self.message = "Choose a title first."
             return
         game = self._require_game()
-        player = game.current_player
+        player = game.players[game.actor()]
         status = game.asset_actions_for(player, self.asset_position)[action]
         if not status["allowed"]:
             self.message = status["reason"]
@@ -855,6 +863,13 @@ class MonopolyApp:
             return game.auction_context_message()
         if state == "post_roll":
             return f"{actor.name}: build, trade, or end your turn."
+        if state == "raise_funds" and game.debts:
+            owed = game.debts[0]["amount"]
+            payee = game.debts[0]["payee"]
+            to = "the Bank" if payee is None else game.players[payee].name
+            if actor.cash < owed:
+                return f"Raise ${owed - actor.cash} more to pay {to} ${owed}."
+            return f"You can now pay {to} ${owed}."
         if state == "trade_response":
             return "You have received a trade offer."
         return ""
@@ -1025,6 +1040,15 @@ class MonopolyApp:
             buttons.append(ui.Button(_bar_rect(3), "Mortgage", "mortgage"))
             buttons.append(ui.Button(_bar_rect(4), "Trade", "trade"))
             buttons.append(ui.Button(_bar_rect(5), "Assets", "assets"))
+        elif state == "raise_funds" and game.debts:
+            # The debtor sells and mortgages in the asset manager, then pays
+            # (once their cash covers the oldest debt) or concedes.
+            owed = game.debts[0]["amount"]
+            buttons.append(ui.Button(_bar_rect(0), f"Pay ${owed}", "pay_debts",
+                                     enabled=actor.cash >= owed, color=(46, 116, 78)))
+            buttons.append(ui.Button(_bar_rect(1), "Assets", "assets"))
+            buttons.append(ui.Button(_bar_rect(2), "Declare Bankruptcy",
+                                     "declare_bankruptcy", color=(150, 60, 60)))
         return buttons
 
 

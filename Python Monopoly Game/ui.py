@@ -397,9 +397,13 @@ def asset_layout(game, player) -> dict:
 
 
 def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None:
-    """Draw the owned-title manager and engine-authored action reasons."""
+    """Draw the owned-title manager and engine-authored action reasons.
+
+    It manages the acting player's titles: the current player, or a debtor
+    raising funds who may not be the current player.
+    """
     _dim(surface)
-    player = game.current_player
+    player = game.players[game.actor()]
     layout = asset_layout(game, player)
     panel = layout["panel"]
     detail = layout["detail"]

@@ -85,6 +85,10 @@ the board, buying properties, and trying to bankrupt everyone else.
   any highlighted property to act on it, then **Done**.
 - **Property inspection:** hover any board space to see a deed-style summary
   in the board centre with ownership, rent, mortgage, and development detail.
+- **Raising funds:** when you owe more cash than you hold, the action bar
+  shows what you owe with **Pay $X** (enabled once your cash covers it),
+  **Assets** (sell buildings and mortgage titles there) and **Declare
+  Bankruptcy**.
 - **Auctions** open their own dialog with a **Bid +$X** button and **Pass**.
 - **Bankruptcy auctions** say when a released Bank title is being auctioned,
   so a chain of forced auctions has context.
