@@ -158,6 +158,21 @@ def take_action(game: MonopolyGame) -> None:
         _trace(game, player, "accepts a trade on value." if accept
                else "rejects a weak trade.")
         game.respond_trade(accept)
+    elif state == "raise_funds":
+        _do_raise_funds(game, player)
+
+
+def _do_raise_funds(game: MonopolyGame, player: Player) -> None:
+    """Settle a debt this AI is somehow waiting on, so play never stalls.
+
+    AI payers are always settled automatically and never wait in
+    raise_funds; this is a defensive fallback. The AI sells and mortgages
+    what it can, pays if that covers the debt, and otherwise concedes.
+    """
+    game._raise_funds(player, game.debts[0]["amount"])
+    game.pay_debts()
+    if game.awaiting == "raise_funds" and game.actor() == player.index:
+        game.declare_bankruptcy()
 
 
 # --------------------------------------------------------------------------

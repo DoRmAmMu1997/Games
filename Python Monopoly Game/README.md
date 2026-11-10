@@ -63,6 +63,11 @@ the board, buying properties, and trying to bankrupt everyone else.
   you go to jail; pay $50 (with the cash in hand), use a jail card, or roll
   for doubles to get out.
 - Pass **GO** to collect $200.
+- **Short of cash?** If you owe more than you hold but selling buildings and
+  mortgaging titles would cover it, the game pauses so you can raise the
+  money yourself and then pay -- or concede and declare bankruptcy, which
+  hands your cash, buildings' sale value and titles to whoever you owe. If
+  even selling everything could not cover the debt, you go bankrupt at once.
 - Last player not bankrupt **wins**.
 
 ## Controls
@@ -193,7 +198,8 @@ The computer players are **heuristic**, not optimal. They:
   progress, group completion, and strategic blocking;
 - once they own a complete group, build houses evenly while keeping cash in
   reserve;
-- mortgage low-value land first when forced to raise money;
+- when forced to raise money, mortgage idle low-value land (undeveloped
+  titles outside a monopoly, cheapest first) before selling any houses;
 - pay or use a card to escape jail in the early game when there is still
   land to grab, and stay in jail late;
 - propose trades that complete a colour group for them -- preferring swaps
