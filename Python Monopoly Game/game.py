@@ -677,7 +677,12 @@ class MonopolyGame:
         if self.awaiting != "auction" or self.auction is None:
             return
         auction = self.auction
-        auction["active"].remove(auction["current"])
+        seat = auction["active"].index(auction["current"])
+        auction["active"].pop(seat)
+        if auction["active"]:
+            # Give the turn to the bidder seated just before the passer, so
+            # _advance_auction resumes at the passer's clockwise successor.
+            auction["current"] = auction["active"][(seat - 1) % len(auction["active"])]
         self._advance_auction()
 
     def _advance_auction(self) -> None:
@@ -690,12 +695,11 @@ class MonopolyGame:
         if not contenders:
             self._finish_auction()
             return
-        # Advance clockwise from the bidder who just acted. If that bidder
-        # just passed, they have been removed from `active`/`order`, so
-        # `index(...)` would fail -- the `start = -1` fallback then makes the
-        # next iteration land on `order[0]`, the first remaining bidder.
+        # Advance clockwise from the bidder who just acted. A passer has
+        # already handed `current` to the bidder seated just before them,
+        # so `current` is always still in `order` here.
         order = auction["active"]
-        start = order.index(auction["current"]) if auction["current"] in order else -1
+        start = order.index(auction["current"])
         for offset in range(1, len(order) + 1):
             candidate = order[(start + offset) % len(order)]
             if candidate != high_bidder:

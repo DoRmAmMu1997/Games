@@ -113,5 +113,22 @@ class ForcedHotelSaleTests(unittest.TestCase):
                 self.assertEqual(game.bank_hotels, BANK_HOTELS - 1)
 
 
+class AuctionOrderTests(unittest.TestCase):
+    """Auction turns move clockwise even when a bidder passes."""
+
+    def test_auction_pass_hands_the_bid_to_the_passers_clockwise_successor(self) -> None:
+        """After seat 2 passes, seat 3 bids next -- not seat 0 again."""
+        game = make_game()
+        game._start_auction(1)
+
+        game.auction_bid(10)
+        game.auction_bid(20)
+        game.auction_pass()
+
+        assert game.auction is not None
+        self.assertEqual(game.auction["active"], [0, 1, 3])
+        self.assertEqual(game.auction["current"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()
