@@ -19,6 +19,7 @@ if str(GAME_DIR) not in sys.path:
 from test_engine_regressions import rig_rolls
 from test_foundation_improvements import give_group, make_game
 
+import cards
 from game import MonopolyGame
 from settings import BANK_HOTELS, JAIL_FINE, JAIL_POSITION, MAX_JAIL_TURNS
 
@@ -199,6 +200,19 @@ class LastBankruptcyTests(unittest.TestCase):
         self.assertFalse(started)
         self.assertEqual(game.bankruptcy_auction_queue, [])
         self.assertIsNone(game.auction)
+
+
+class ChanceDeckTests(unittest.TestCase):
+    """The Chance deck matches the standard 16-card composition."""
+
+    def test_chance_deck_has_two_nearest_railroad_cards_and_one_advance_to_go(self) -> None:
+        """Standard Chance has two "nearest Railroad" cards and one "Advance to GO"."""
+        deck = cards.CHANCE_CARDS
+
+        self.assertEqual(len(deck), 16)
+        self.assertEqual(sum(card["kind"] == "nearest_rail" for card in deck), 2)
+        self.assertEqual(
+            sum(card["kind"] == "advance" and card["pos"] == 0 for card in deck), 1)
 
 
 if __name__ == "__main__":
