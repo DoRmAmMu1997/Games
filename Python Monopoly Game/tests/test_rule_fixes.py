@@ -19,7 +19,7 @@ if str(GAME_DIR) not in sys.path:
 from test_engine_regressions import rig_rolls
 from test_foundation_improvements import give_group, make_game
 
-from settings import JAIL_FINE, JAIL_POSITION, MAX_JAIL_TURNS
+from settings import BANK_HOTELS, JAIL_FINE, JAIL_POSITION, MAX_JAIL_TURNS
 
 
 class BankruptPlayerTests(unittest.TestCase):
@@ -81,6 +81,36 @@ class BankruptPlayerTests(unittest.TestCase):
         self.assertEqual(game.auction["position"], 1)
         self.assertEqual(game.bankruptcy_auction_queue, [3])
         self.assertEqual(sum("has gone bankrupt" in line for line in game.log), 1)
+
+
+class ForcedHotelSaleTests(unittest.TestCase):
+    """Breaking a hotel to raise cash never overdraws the Bank's houses."""
+
+    def test_forced_hotel_sale_in_house_shortage_keeps_bank_supply_valid(self) -> None:
+        """A forced sale takes only the houses the Bank has; the rest are sold.
+
+        With two houses left the hotel drops to two houses and three
+        buildings' worth of half-price cash is paid; with none left it is
+        sold down to bare land for five buildings' worth.
+        """
+        for bank_houses, level, cash in ((2, 2, 3 * 100 - 50), (0, 0, 5 * 100 - 50)):
+            with self.subTest(bank_houses=bank_houses):
+                game = make_game()
+                debtor = game.players[1]
+                give_group(game, debtor.index, (37, 39))
+                game.houses = {37: 5, 39: 5}
+                game.bank_houses = bank_houses
+                game.bank_hotels = BANK_HOTELS - 2
+                debtor.cash = 0
+
+                game.charge(debtor, 50)
+
+                self.assertFalse(debtor.bankrupt)
+                self.assertEqual(game.houses[37], level)
+                self.assertEqual(game.houses[39], 5)
+                self.assertEqual(debtor.cash, cash)
+                self.assertEqual(game.bank_houses, 0)
+                self.assertEqual(game.bank_hotels, BANK_HOTELS - 1)
 
 
 if __name__ == "__main__":

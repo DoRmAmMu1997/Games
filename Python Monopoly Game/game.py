@@ -865,7 +865,14 @@ class MonopolyGame:
         return self._sell_blocker(player, position) is None
 
     def sell_house(self, position: int, forced: bool = False) -> bool:
-        """Sell one house/hotel back to the bank for half its build cost."""
+        """Sell one building back to the bank for half its build cost.
+
+        Selling a house drops the street one level. Selling a hotel trades
+        it back for four houses from the Bank; in a forced sale during a
+        house shortage the street keeps only the houses the Bank can supply
+        and every building beyond that is sold too, so the Bank's house
+        supply can never go negative.
+        """
         player = self.current_player if not forced else self.owner_of(position)
         if player is None or self.owners.get(position) != player.index:
             return False
@@ -876,13 +883,17 @@ class MonopolyGame:
             return False
         space = self.board[position]
         if level == 5:
-            # Selling a hotel needs four houses available from the bank.
+            # Breaking a hotel needs four houses from the Bank. In a forced
+            # sale during a shortage, take only the houses the Bank has; the
+            # rest are sold.
+            new_level = min(4, self.bank_houses)
             self.bank_hotels += 1
-            self.bank_houses -= 4
+            self.bank_houses -= new_level
         else:
+            new_level = level - 1
             self.bank_houses += 1
-        self.houses[position] = level - 1
-        player.cash += space.house_cost // 2
+        self.houses[position] = new_level
+        player.cash += (level - new_level) * (space.house_cost // 2)
         self._note(f"{player.name} sells a building on {space.name}.")
         return True
 
