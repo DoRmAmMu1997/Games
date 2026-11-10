@@ -10,14 +10,18 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
+from test_engine_regressions import rig_rolls
 from test_foundation_improvements import give_group, make_game
 
 import ai
+import simulation
+from game import MonopolyGame
 
 
 def plain_street_value(game, position: int) -> int:
@@ -60,6 +64,34 @@ class OwnedTitleValuationTests(unittest.TestCase):
 
         self.assertGreater(held_value, lone_value)
         self.assertEqual(held_value, round(plain_street_value(held, 1) * ai.GROUP_COMPLETION_MULT))
+
+
+class SimulationMetricTests(unittest.TestCase):
+    """The tuning simulation reports what actually happened in a game."""
+
+    def test_simulation_counts_back_to_back_bankruptcy_auctions(self) -> None:
+        """Two Bank auctions in a row count as two, even with no gap between them.
+
+        The first AI lands on Income Tax with two titles and no cash, goes
+        bankrupt to the Bank, and both titles are auctioned to cash-less
+        opponents who all pass. The second auction opens in the same
+        action that closes the first, so a "was there an auction before?"
+        check missed it; counting by auction identity does not.
+        """
+
+        def rigged_game(specs, seed=None, ai_profile="standard"):
+            """Build the simulation's game, then set up the bankruptcy."""
+            game = MonopolyGame(specs, seed=seed, ai_profile=ai_profile)
+            give_group(game, 0, (1, 3))
+            for player in game.players:
+                player.cash = 0
+            rig_rolls(game, 1, 3)      # GO + 4 = Income Tax
+            return game
+
+        with mock.patch.object(simulation, "MonopolyGame", rigged_game):
+            metrics = simulation.run_ai_game(seed=1, max_actions=7)
+
+        self.assertEqual(metrics["auction_count"], 2)
 
 
 if __name__ == "__main__":
