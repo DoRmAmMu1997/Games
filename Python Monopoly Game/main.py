@@ -141,7 +141,13 @@ def _clear_saved_game() -> None:
 class MonopolyApp:
     """Owns the window and run loop and routes input to the game engine."""
 
-    def __init__(self) -> None:
+    def __init__(self, persist: bool = True) -> None:
+        """Open the window and set up the setup screen.
+
+        `persist` False (the headless self-test) means the app never writes
+        or deletes the player's saved game or lifetime stats.
+        """
+        self.persist = persist
         # `SCALED` lets pygame stretch our logical 1280x880 surface to fit the
         # physical screen when we toggle into fullscreen (with letterboxing
         # for aspect-ratio mismatch). It also makes `event.pos` and
@@ -233,8 +239,9 @@ class MonopolyApp:
         self.stats["games"] += 1
         if game.winner is not None and game.players[game.winner].is_human:
             self.stats["human_wins"] += 1
-        _atomic_write(STATS_PATH, self.stats)
-        _clear_saved_game()
+        if self.persist:
+            _atomic_write(STATS_PATH, self.stats)
+            _clear_saved_game()
 
     # ------------------------------------------------------------------
     # Main loop
@@ -287,7 +294,8 @@ class MonopolyApp:
         # the next player when a turn ends, for both humans and AI.
         if game.current != self._autosave_current:
             self._autosave_current = game.current
-            save_game(game)
+            if self.persist:
+                save_game(game)
 
         elapsed = self.clock.get_time()
 
@@ -537,7 +545,8 @@ class MonopolyApp:
         elif key == "end_turn":
             game.end_turn()
         elif key == "save_quit":
-            save_game(game)
+            if self.persist:
+                save_game(game)
             self.screen = "setup"
             self.game = None
         elif key == "bid":
@@ -1067,8 +1076,9 @@ def main() -> None:
             with contextlib.suppress(pygame.error):
                 pygame.display.set_icon(pygame.image.load(icon_path))
 
-        app = MonopolyApp()
         autotest = os.environ.get("MONOPOLY_AUTOTEST")
+        # The self-test must never overwrite or delete a player's save/stats.
+        app = MonopolyApp(persist=not autotest)
         if autotest:
             # Headless self-test: jump straight into an all-AI game.
             specs = [(f"AI {i + 1}", False) for i in range(4)]

@@ -7,10 +7,13 @@ is drawn but not wired (or wired but not drawn) fails here.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -21,6 +24,7 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 from test_raise_funds import collect_each_debt, rent_debt
 
+import main
 from game import MonopolyGame
 from main import MonopolyApp
 
@@ -69,6 +73,67 @@ class AppLifecycleTests(ShellTestCase):
         click(app, "quit")
 
         self.assertFalse(app.running)
+
+
+class SeededSaveDirTestCase(ShellTestCase):
+    """Point the app's save files at a temp folder pre-seeded with real data."""
+
+    def setUp(self) -> None:
+        """Create a temp save folder holding stats and a saved game."""
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.folder = Path(temp.name)
+        (self.folder / "stats.json").write_text(json.dumps({"games": 3, "human_wins": 1}))
+        (self.folder / "savegame.json").write_text(json.dumps(MonopolyGame([("A", True), ("B", False)]).to_dict()))
+        for name, path in (("SAVE_DIR", self.folder), ("STATS_PATH", self.folder / "stats.json"),
+                           ("SAVEGAME_PATH", self.folder / "savegame.json")):
+            patcher = mock.patch.object(main, name, path)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def snapshot(self) -> dict[str, bytes]:
+        """Return every file in the save folder with its exact bytes."""
+        return {path.name: path.read_bytes() for path in self.folder.iterdir()}
+
+
+class AutotestPersistenceTests(SeededSaveDirTestCase):
+    """The headless self-test never touches the player's save or stats."""
+
+    def test_autotest_leaves_seeded_save_folder_byte_identical(self) -> None:
+        """MONOPOLY_AUTOTEST builds a non-persisting app: autosave, game over and stats write nothing."""
+        before = self.snapshot()
+        seen: list[MonopolyApp] = []
+
+        def fast_run(app: MonopolyApp, max_frames: int | None = None) -> None:
+            """Stand in for the 4000-frame run: autosave once, then finish the game."""
+            seen.append(app)
+            game = app._require_game()
+            game.current = 1
+            app._update(True)                    # a turn change would autosave
+            for player in game.players[1:]:
+                player.bankrupt = True
+            game._check_for_winner()
+            app._update(True)                    # game over would record stats, clear the save
+
+        with mock.patch.dict(os.environ, {"MONOPOLY_AUTOTEST": "1"}), \
+                mock.patch.object(MonopolyApp, "run", fast_run):
+            main.main()
+        pygame.init()                            # main() quits pygame on exit
+
+        self.assertFalse(seen[0].persist)
+        self.assertEqual(seen[0].screen, "over")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_save_and_quit_writes_nothing_without_persistence(self) -> None:
+        """A non-persisting app's Save & Quit leaves the save folder alone."""
+        before = self.snapshot()
+        app = MonopolyApp(persist=False)
+        app.start_game(MonopolyGame([("Human", True), ("Iris", False)], seed=1))
+
+        click(app, "save_quit")
+
+        self.assertEqual(app.screen, "setup")
+        self.assertEqual(self.snapshot(), before)
 
 
 class RaiseFundsBarTests(ShellTestCase):
