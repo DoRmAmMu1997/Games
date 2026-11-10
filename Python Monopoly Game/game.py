@@ -972,6 +972,13 @@ class MonopolyGame:
                 if group and any(self.houses.get(p, 0) > 0
                                  for p in board_data.COLOR_GROUPS[group]):
                     return "Sell buildings in that color group before trading it."
+        # Each receiver pays 10% interest at once on mortgaged titles, so the
+        # cash they hold after the swap must cover it.
+        for owner, given, received in ((giver, offer["give"], offer["get"]),
+                                       (taker, offer["get"], offer["give"])):
+            interest = self.mortgage_transfer_interest(received["props"])
+            if owner.cash - given["cash"] + received["cash"] < interest:
+                return f"{owner.name} needs ${interest} cash for mortgage transfer interest."
         return None
 
     def trade_is_legal(self, offer: dict) -> bool:

@@ -130,5 +130,35 @@ class AuctionOrderTests(unittest.TestCase):
         self.assertEqual(game.auction["current"], 3)
 
 
+class TradeInterestTests(unittest.TestCase):
+    """A trade must leave each receiver able to pay mortgage interest."""
+
+    def test_trade_rejected_when_receiver_cannot_pay_mortgage_interest(self) -> None:
+        """Iris holds $5 but would owe $20 interest on mortgaged Boardwalk.
+
+        The engine refuses the offer with an interest reason; once the giver
+        adds $15 cash the receiver can cover the interest and it is legal.
+        """
+        game = make_game()
+        game.owners[39] = 0
+        game.mortgaged.add(39)
+        game.players[1].cash = 5
+        offer = {
+            "from": 0,
+            "to": 1,
+            "give": {"props": [39], "cash": 0, "jail": 0},
+            "get": {"props": [], "cash": 0, "jail": 0},
+        }
+
+        error = game.trade_error(offer)
+        self.assertIsNotNone(error)
+        assert error is not None
+        self.assertIn("interest", error)
+        self.assertFalse(game.propose_trade(offer))
+
+        offer["give"]["cash"] = 15
+        self.assertTrue(game.trade_is_legal(offer))
+
+
 if __name__ == "__main__":
     unittest.main()
