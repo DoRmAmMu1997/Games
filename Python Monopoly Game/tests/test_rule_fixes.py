@@ -19,6 +19,7 @@ if str(GAME_DIR) not in sys.path:
 from test_engine_regressions import rig_rolls
 from test_foundation_improvements import give_group, make_game
 
+from game import MonopolyGame
 from settings import BANK_HOTELS, JAIL_FINE, JAIL_POSITION, MAX_JAIL_TURNS
 
 
@@ -158,6 +159,46 @@ class TradeInterestTests(unittest.TestCase):
 
         offer["give"]["cash"] = 15
         self.assertTrue(game.trade_is_legal(offer))
+
+
+class LastBankruptcyTests(unittest.TestCase):
+    """The final bankruptcy ends the game cleanly, whoever is owed."""
+
+    def test_creditor_wins_before_owing_interest_on_last_bankruptcy(self) -> None:
+        """In a 2-player game the creditor wins before any transfer interest.
+
+        The debtor's mortgaged titles pass to a cash-less creditor. Charging
+        interest first would bankrupt the creditor too and open an auction
+        with no bidders; instead the creditor has already won.
+        """
+        game = MonopolyGame([("Debtor", True), ("Creditor", False)], seed=4)
+        debtor, creditor = game.players
+        give_group(game, debtor.index, (37, 39))
+        game.mortgaged.update((37, 39))
+        debtor.cash = 0
+        creditor.cash = 0
+
+        game.transfer(debtor, creditor, 50)
+
+        self.assertTrue(debtor.bankrupt)
+        self.assertFalse(creditor.bankrupt)
+        self.assertEqual(game.phase, "game_over")
+        self.assertEqual(game.winner, creditor.index)
+        self.assertEqual(game.owners, {37: creditor.index, 39: creditor.index})
+        self.assertEqual(creditor.cash, 0)
+
+    def test_bankruptcy_queue_without_bidders_is_dropped(self) -> None:
+        """With no solvent bidder left, queued Bank titles are simply dropped."""
+        game = make_game()
+        for player in game.players:
+            player.bankrupt = True
+        game.bankruptcy_auction_queue = [1, 3]
+
+        started = game._start_next_bankruptcy_auction()
+
+        self.assertFalse(started)
+        self.assertEqual(game.bankruptcy_auction_queue, [])
+        self.assertIsNone(game.auction)
 
 
 if __name__ == "__main__":

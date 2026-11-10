@@ -290,7 +290,11 @@ class MonopolyGame:
             creditor.cash += player.cash
             for pos in owned:
                 self.owners[pos] = creditor.index
-            self._charge_mortgage_transfer_interest(creditor, owned)
+            # If that was the last opponent, the creditor has already won;
+            # transfer interest is only owed while the game goes on.
+            self._check_for_winner()
+            if self.phase == "playing":
+                self._charge_mortgage_transfer_interest(creditor, owned)
         else:
             # Bankrupt to the bank: the Bank clears mortgages, then offers
             # every released property through the same public auction flow.
@@ -648,8 +652,14 @@ class MonopolyGame:
             self._note(f"{self.board[position].name} goes up for auction.")
 
     def _start_next_bankruptcy_auction(self) -> bool:
-        """Start the next Bank auction caused by bankruptcy, if one remains."""
+        """Start the next Bank auction caused by bankruptcy, if one remains.
+
+        With no solvent player left to bid, the queued titles are dropped.
+        """
         if not self.bankruptcy_auction_queue:
+            return False
+        if not self.active_players():
+            self.bankruptcy_auction_queue.clear()
             return False
         self._start_auction(self.bankruptcy_auction_queue.pop(0), context="bankruptcy")
         return True
