@@ -47,6 +47,10 @@ def make_fonts() -> dict:
     }
 
 
+# Clear space kept between a button's label and each side border, in pixels.
+BUTTON_LABEL_MARGIN = 8
+
+
 class Button:
     """A clickable rectangle with a label and a string `key` identifying it."""
 
@@ -73,8 +77,27 @@ class Button:
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
         pygame.draw.rect(surface, INK, self.rect, 2, border_radius=8)
         ink = WHITE if self.enabled else SOFT
-        glyph = fonts["small"].render(self.label, True, ink)
+        text, font = self.fitted_label(fonts)
+        glyph = font.render(text, True, ink)
         surface.blit(glyph, glyph.get_rect(center=self.rect.center))
+
+    def fitted_label(self, fonts: dict) -> tuple[str, pygame.font.Font]:
+        """Return the label text and the font it is drawn in.
+
+        The label keeps BUTTON_LABEL_MARGIN clear on both sides by measured
+        width: the normal button font if it fits, else the smaller one, and
+        as a last resort a shortened label.
+
+        Beginner note:
+        - Never assume a label's width. "arial" is a different typeface on
+          each platform (some are 15% wider), so text that fits on one
+          machine can cross the button border on another.
+        """
+        room = self.rect.width - 2 * BUTTON_LABEL_MARGIN
+        for key in ("small", "tiny"):
+            if fonts[key].size(self.label)[0] <= room:
+                return self.label, fonts[key]
+        return _fit_text(fonts["tiny"], self.label, room), fonts["tiny"]
 
     def hit(self, pos: tuple[int, int]) -> bool:
         """True if `pos` is inside an enabled button."""

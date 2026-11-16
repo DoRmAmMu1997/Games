@@ -407,6 +407,51 @@ class SpectatorTests(SeededSaveDirTestCase):
         self.assertEqual(self.snapshot(), before)
 
 
+class ButtonLabelTests(ShellTestCase):
+    """Button labels fit inside their buttons with a real margin, in any font."""
+
+    def test_every_bar_and_dialog_label_fits_its_button_with_margin(self) -> None:
+        """Each label is drawn in a font that leaves BUTTON_LABEL_MARGIN on both sides.
+
+        "arial" resolves to wider faces on other platforms (DejaVu Sans is
+        about 15% wider), so a label that only just fits here would touch
+        or cross the button border there.
+        """
+        fonts = ui.make_fonts()
+        jailed = human_turn()
+        jailed.players[0].in_jail = True
+        auction = human_turn()
+        auction._start_auction(39)
+        assets = human_turn(awaiting="post_roll")
+        assets.owners.update(dict.fromkeys((5, 15, 25, 35, 12, 28), 0))
+        states = {
+            "spectator": (spectator_game(), "normal"),
+            "raise funds": (rent_debt(), "normal"),
+            "jail": (jailed, "normal"),
+            "pre roll": (human_turn(), "normal"),
+            "post roll": (human_turn(awaiting="post_roll"), "normal"),
+            "buy": (human_turn(awaiting="buy_or_auction", pending_purchase=39), "normal"),
+            "auction": (auction, "normal"),
+            "trade response": (big_incoming_offer(), "normal"),
+            "assets": (assets, "assets"),
+            "trade": (human_turn(awaiting="post_roll"), "trade"),
+        }
+        buttons = [("setup", b) for b in ui.setup_buttons(has_save=True) + ui.confirm_buttons()]
+        for name, (game, mode) in states.items():
+            app = self.make_app(game)
+            if mode != "normal":
+                app._on_button(mode)
+            buttons += [(name, b) for b in app._playing_buttons()]
+
+        for name, button in buttons:
+            with self.subTest(state=name, label=button.label):
+                text, font = button.fitted_label(fonts)
+                self.assertLessEqual(font.size(text)[0],
+                                     button.rect.width - 2 * ui.BUTTON_LABEL_MARGIN)
+                if name in ("spectator", "raise funds", "jail"):
+                    self.assertEqual(text, button.label)     # shown in full, not shortened
+
+
 class RaiseFundsBarTests(ShellTestCase):
     """The debtor gets Pay, Assets and Declare Bankruptcy while raising funds."""
 
