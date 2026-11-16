@@ -635,9 +635,11 @@ def draw_auction(surface, fonts, game, buttons, mouse) -> None:
 # Trade overlay
 # --------------------------------------------------------------------------
 #: How many property rows are visible per side at once before the user has
-#: to scroll. The gap below row 14 leaves space for consequence text before
-#: the cash labels and cash steppers.
-TRADE_VISIBLE_ROWS = 14
+#: to scroll. Below the last row sit the consequence notes, then one stepper
+#: row for cash and one for Get Out of Jail Free cards, then Propose/Cancel.
+TRADE_VISIBLE_ROWS = 12
+_TRADE_HALF_W = 340           # width of each side's column in the trade dialog
+_TRADE_STEPPER_W = 64         # width of one -/+ stepper button
 
 
 def trade_layout(game, trade) -> dict:
@@ -648,11 +650,17 @@ def trade_layout(game, trade) -> dict:
     the layout. The two side lists honour the per-side scroll offsets
     (`give_scroll` / `get_scroll`) so the rendered rows match the clickable
     rows even when the player owns more properties than fit on screen.
+
+    Each side also gets two stepper rows -- cash, then Get Out of Jail Free
+    cards -- as `steppers` (button key -> rect) with a `labels` position
+    beside each, and `notes` is the box for consequence and error text.
     """
     panel = pygame.Rect(0, 0, 800, 700)
     panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
     human = game.players[trade["from"]]
     partner = game.players[trade["to"]]
+    cash_y, jail_y = panel.bottom - 136, panel.bottom - 100
+    notes_top = panel.y + 150 + TRADE_VISIBLE_ROWS * 26 + 20
     layout: dict = {
         "panel": panel,
         "give_rows": [],
@@ -661,9 +669,18 @@ def trade_layout(game, trade) -> dict:
         "give_more_below": False,
         "get_more_above": False,
         "get_more_below": False,
+        "steppers": {},
+        "labels": {},
+        "notes": pygame.Rect(panel.x + 30, notes_top, panel.width - 60, cash_y - 8 - notes_top),
     }
     for side, key, owner, x in (("give", "give_rows", human, panel.x + 30),
                                 ("get", "get_rows", partner, panel.x + 420)):
+        for what, y in (("cash", cash_y), ("jail", jail_y)):
+            up_x = x + _TRADE_HALF_W - _TRADE_STEPPER_W
+            layout["steppers"][f"{side}_{what}_down"] = pygame.Rect(
+                up_x - _TRADE_STEPPER_W - 8, y, _TRADE_STEPPER_W, 30)
+            layout["steppers"][f"{side}_{what}_up"] = pygame.Rect(up_x, y, _TRADE_STEPPER_W, 30)
+            layout["labels"][f"{side}_{what}"] = (x, y + 5)
         props = sorted(game.properties_of(owner))
         # Clamp the stored scroll: properties might have shrunk since the
         # last scroll (e.g. a partner cycle), and an out-of-bounds offset
@@ -674,7 +691,7 @@ def trade_layout(game, trade) -> dict:
         layout[f"{side}_more_below"] = scroll + TRADE_VISIBLE_ROWS < len(props)
         visible_props = props[scroll : scroll + TRADE_VISIBLE_ROWS]
         for i, pos in enumerate(visible_props):
-            row = pygame.Rect(x, panel.y + 150 + i * 26, 340, 24)
+            row = pygame.Rect(x, panel.y + 150 + i * 26, _TRADE_HALF_W, 24)
             layout[key].append((row, pos))
     return layout
 
@@ -724,21 +741,25 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     _draw_trade_scroll_glyphs(surface, layout, "give", panel.x + 30 + 170)
     _draw_trade_scroll_glyphs(surface, layout, "get", panel.x + 420 + 170)
 
-    _text(surface, fonts, "small",
-          f"Cash you give: ${trade['give']['cash']}",
-          (panel.x + 30, panel.bottom - 132), WHITE)
-    _text(surface, fonts, "small",
-          f"Cash you receive: ${trade['get']['cash']}",
-          (panel.x + 420, panel.bottom - 132), WHITE)
-    consequence_y = panel.bottom - 174
-    for line in game.trade_consequence_lines(trade):
-        _text(surface, fonts, "tiny", line, (panel.x + 30, consequence_y), GOLD)
-        consequence_y += 18
+    # One label beside each stepper pair: the cash, then the Get Out of Jail
+    # Free cards, that side puts in (and how many cards that player holds).
+    for side, holder in (("give", game.players[trade["from"]]), ("get", partner)):
+        _text(surface, fonts, "small", f"Cash: ${trade[side]['cash']}",
+              layout["labels"][f"{side}_cash"], WHITE)
+        _text(surface, fonts, "small",
+              f"Jail cards: {trade[side]['jail']} of {holder.jail_cards}",
+              layout["labels"][f"{side}_jail"], WHITE if holder.jail_cards else SOFT)
+
+    # Consequence notes (gold), then why the offer is illegal (red), kept
+    # inside the notes box between the lists and the steppers.
+    notes = layout["notes"]
+    lines = [(line, GOLD) for note in game.trade_consequence_lines(trade)
+             for line in _wrap_lines(fonts["tiny"], note, notes.width)]
     error = game.trade_error(trade)
     if error:
-        _blit_wrapped(surface, fonts["tiny"], error,
-                      pygame.Rect(panel.x + 30, consequence_y, panel.width - 60, 34),
-                      DANGER)
+        lines += [(line, DANGER) for line in _wrap_lines(fonts["tiny"], error, notes.width)]
+    for i, (line, color) in enumerate(lines[:notes.height // 18]):
+        _text(surface, fonts, "tiny", line, (notes.x, notes.y + i * 18), color)
     for button in buttons:
         button.draw(surface, fonts, mouse)
 
@@ -795,10 +816,17 @@ def trade_response_layout() -> dict:
 
 
 def offer_side_lines(game, side) -> list[str]:
-    """Readable lines for one side of a trade offer (or "Nothing")."""
-    lines = [game.board[pos].name for pos in side["props"]]
+    """Readable lines for one side of a trade offer (or "Nothing").
+
+    Cash and Get Out of Jail Free cards come first, so a long list of
+    titles ending in "+N more" can never hide them.
+    """
+    lines = []
     if side["cash"]:
         lines.append(f"${side['cash']} cash")
+    if side["jail"]:
+        lines.append(f"{side['jail']} Get Out of Jail Free card{'s' if side['jail'] > 1 else ''}")
+    lines += [game.board[pos].name for pos in side["props"]]
     return lines or ["Nothing"]
 
 

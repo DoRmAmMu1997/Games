@@ -452,6 +452,72 @@ class ButtonLabelTests(ShellTestCase):
                     self.assertEqual(text, button.label)     # shown in full, not shortened
 
 
+def trade_ready_game() -> MonopolyGame:
+    """The human's post-roll with one jail card each for the human and Iris."""
+    game = human_turn(awaiting="post_roll")
+    game.owners.update({1: 0, 3: 1})
+    game.grant_jail_card(game.players[0], "chance")
+    game.grant_jail_card(game.players[1], "chest")
+    return game
+
+
+class JailCardTradeTests(ShellTestCase):
+    """Get Out of Jail Free cards can be put on either side of a trade."""
+
+    def test_trade_dialog_jail_steppers_are_capped_at_cards_held(self) -> None:
+        """Each side's +/- stepper stops at zero and at the cards that side holds."""
+        app = self.make_app(trade_ready_game())
+        click(app, "trade")
+        trade = app.trade
+        assert trade is not None
+
+        for _ in range(3):
+            click(app, "give_jail_up")
+            click(app, "get_jail_up")
+        self.assertEqual((trade["give"]["jail"], trade["get"]["jail"]), (1, 1))
+        for _ in range(3):
+            click(app, "give_jail_down")
+        self.assertEqual(trade["give"]["jail"], 0)
+
+        click(app, "give_jail_up")
+        click(app, "trade_propose")
+        game = app._require_game()
+        self.assertEqual(game.awaiting, "trade_response")
+        assert game.pending_trade is not None
+        self.assertEqual(game.pending_trade["give"]["jail"], 1)
+
+    def test_trade_steppers_stay_inside_the_dialog_and_never_overlap(self) -> None:
+        """The cash and jail steppers fit the panel, clear of the lists and each other."""
+        game = trade_ready_game()
+        game.owners.update(dict.fromkeys(range(5, 40, 1), 0))     # a long, scrolling list
+        app = self.make_app(game)
+        click(app, "trade")
+        layout = ui.trade_layout(game, app.trade)
+        buttons = {b.key: b.rect for b in app._playing_buttons()}
+        steppers = [buttons[f"{side}_{what}_{way}"] for side in ("give", "get")
+                    for what in ("cash", "jail") for way in ("down", "up")]
+
+        lowest_row = max(row.bottom for row, _pos in layout["give_rows"])
+        for rect in steppers:
+            self.assertTrue(layout["panel"].inflate(-20, -20).contains(rect))
+            self.assertGreater(rect.top, lowest_row)
+            self.assertLess(rect.bottom, buttons["trade_propose"].top)
+        every = list(buttons.values())
+        for i, rect in enumerate(every):
+            self.assertEqual(rect.collidelist(every[i + 1:]), -1)
+
+    def test_incoming_offer_lists_cash_and_jail_cards_first(self) -> None:
+        """Cash and jail cards lead an offer side, so "+N more" never hides them."""
+        game = trade_ready_game()
+        side = {"props": [1, 3, 5, 6, 8, 9, 11], "cash": 75, "jail": 1}
+
+        lines = ui.offer_side_lines(game, side)
+
+        self.assertEqual(lines[:2], ["$75 cash", "1 Get Out of Jail Free card"])
+        self.assertEqual(ui.offer_side_lines(game, {"props": [], "cash": 0, "jail": 2}),
+                         ["2 Get Out of Jail Free cards"])
+
+
 class RaiseFundsBarTests(ShellTestCase):
     """The debtor gets Pay, Assets and Declare Bankruptcy while raising funds."""
 

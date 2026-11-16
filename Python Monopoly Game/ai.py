@@ -429,13 +429,18 @@ def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int
     if swap is not None:
         give["props"].append(swap)
     affordable = max(0, player.cash - _profile(game).cash_cushion)
-    # Search upward for the least cash the partner will accept. The smaller
-    # this number ends up being, the better the deal is for THIS AI -- so the
-    # first cash amount the partner accepts is also the best one we will find
-    # (every larger amount would just give the partner more for the same
-    # property), which is why we return as soon as the partner says yes.
-    for cash in range(0, affordable + 1, 25):
-        give["cash"] = cash
+    # Search upward for the smallest sweetener the partner will accept: cash
+    # in $25 steps plus any Get Out of Jail Free cards held, each worth one
+    # jail fine. At equal value the AI spends cards before cash, because cash
+    # is what it builds with. The smaller the sweetener, the better the deal
+    # is for THIS AI -- so the first one the partner accepts is also the best
+    # one we will find (every larger one would just give the partner more
+    # for the same property), which is why we return as soon as they say yes.
+    sweeteners = sorted(((cash, jail) for cash in range(0, affordable + 1, 25)
+                         for jail in range(player.jail_cards + 1)),
+                        key=lambda pair: (pair[0] + pair[1] * JAIL_FINE, pair[0]))
+    for cash, jail in sweeteners:
+        give["cash"], give["jail"] = cash, jail
         offer: TradeOffer = {"from": player.index, "to": partner.index, "give": give, "get": get}
         if not game.trade_is_legal(offer):
             return None
@@ -509,7 +514,8 @@ def _trade_swing(game: MonopolyGame, evaluator: Player, offer: TradeOffer) -> in
 
 def _bundle_value(game: MonopolyGame, bundle: TradeSide) -> int:
     """The plain asset value of one side of a trade (cash + property + cards)."""
-    total = bundle["cash"] + bundle["jail"] * 50
+    # A Get Out of Jail Free card is worth the fine it saves.
+    total = bundle["cash"] + bundle["jail"] * JAIL_FINE
     for pos in bundle["props"]:
         space = game.board[pos]
         if pos in game.mortgaged:

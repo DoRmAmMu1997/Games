@@ -640,6 +640,14 @@ class MonopolyApp:
             self._adjust_trade_cash("get", 50)
         elif key == "get_cash_down":
             self._adjust_trade_cash("get", -50)
+        elif key == "give_jail_up":
+            self._adjust_trade_jail("give", 1)
+        elif key == "give_jail_down":
+            self._adjust_trade_jail("give", -1)
+        elif key == "get_jail_up":
+            self._adjust_trade_jail("get", 1)
+        elif key == "get_jail_down":
+            self._adjust_trade_jail("get", -1)
         elif key == "trade_propose":
             trade = self.trade
             assert trade is not None, "propose button only exists inside the dialog"
@@ -741,6 +749,7 @@ class MonopolyApp:
         trade["to"] = others[(current + step) % len(others)]
         trade["give"]["props"].clear()
         trade["get"]["props"].clear()
+        trade["get"]["jail"] = 0        # the new partner may hold no cards
         # A new partner usually has a different property list -- reset scroll
         # so the next dialog opens at the top of both columns.
         trade["give_scroll"] = 0
@@ -755,6 +764,19 @@ class MonopolyApp:
         idx = trade["from"] if side == "give" else trade["to"]
         cap = game.players[idx].cash
         trade[side]["cash"] = max(0, min(cap, trade[side]["cash"] + delta))
+
+    def _adjust_trade_jail(self, side: Literal["give", "get"], delta: int) -> None:
+        """Step the Get Out of Jail Free cards on one side of the offer.
+
+        The count stays between zero and the cards that side's player holds.
+        """
+        game = self._require_game()
+        trade = self.trade
+        if trade is None:
+            return
+        idx = trade["from"] if side == "give" else trade["to"]
+        cap = game.players[idx].jail_cards
+        trade[side]["jail"] = max(0, min(cap, trade[side]["jail"] + delta))
 
     def _scroll_trade(self, mouse_pos: tuple[int, int], wheel_dy: int) -> None:
         """Scroll one side of the trade dialog under the mouse cursor.
@@ -977,33 +999,43 @@ class MonopolyApp:
         return self._action_bar_buttons(actor)
 
     def _trade_dialog_buttons(self) -> list:
-        """Buttons for the trade-building dialog."""
+        """Buttons for the trade-building dialog.
+
+        Each side has a cash stepper pair and a Get Out of Jail Free card
+        stepper pair under its column; their rects come from
+        `ui.trade_layout`, which also places the labels beside them.
+        """
         game = self._require_game()
-        panel = ui.trade_layout(game, self.trade)["panel"]
-        return [
+        trade = self.trade
+        assert trade is not None, "trade buttons only build inside the dialog"
+        layout = ui.trade_layout(game, trade)
+        panel, steppers = layout["panel"], layout["steppers"]
+        buttons = [
             # Arrows are placed symmetrically and well clear of the
             # centred "With: NAME" label, however wide the name is.
             ui.Button((panel.centerx - 200, panel.y + 54, 30, 26), "<",
                       "trade_partner_prev"),
             ui.Button((panel.centerx + 170, panel.y + 54, 30, 26), ">",
                       "trade_partner_next"),
-            # Cash buttons sit directly under each column so the "Give"
-            # pair aligns with the give-side row list (x = panel.x + 30)
-            # and the "Get" pair aligns with the get-side rows
-            # (x = panel.x + 420 in the widened panel).
-            ui.Button((panel.x + 30, panel.bottom - 104, 130, 30), "Give -$50",
-                      "give_cash_down"),
-            ui.Button((panel.x + 170, panel.bottom - 104, 130, 30), "Give +$50",
-                      "give_cash_up"),
-            ui.Button((panel.x + 420, panel.bottom - 104, 130, 30), "Get -$50",
-                      "get_cash_down"),
-            ui.Button((panel.x + 560, panel.bottom - 104, 130, 30), "Get +$50",
-                      "get_cash_up"),
+        ]
+        for side, chosen, holder in (("give", trade["give"]["jail"], game.players[trade["from"]]),
+                                     ("get", trade["get"]["jail"], game.players[trade["to"]])):
+            buttons += [
+                ui.Button(steppers[f"{side}_cash_down"], "-$50", f"{side}_cash_down"),
+                ui.Button(steppers[f"{side}_cash_up"], "+$50", f"{side}_cash_up"),
+                # A side can offer no more jail cards than its player holds.
+                ui.Button(steppers[f"{side}_jail_down"], "-1", f"{side}_jail_down",
+                          enabled=chosen > 0),
+                ui.Button(steppers[f"{side}_jail_up"], "+1", f"{side}_jail_up",
+                          enabled=chosen < holder.jail_cards),
+            ]
+        buttons += [
             ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
                       "Propose", "trade_propose", color=(46, 116, 78)),
             ui.Button((panel.centerx + 20, panel.bottom - 56, 190, 40),
                       "Cancel", "trade_cancel"),
         ]
+        return buttons
 
     def _asset_dialog_buttons(self, actor) -> list:
         """Asset-manager buttons: every title row selects a deed; the action

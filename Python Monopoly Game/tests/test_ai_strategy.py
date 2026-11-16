@@ -22,7 +22,7 @@ from test_foundation_improvements import give_group, make_game
 import ai
 import simulation
 from game import MonopolyGame
-from settings import TRADE_RETRY_COOLDOWN_TURNS
+from settings import JAIL_FINE, TRADE_RETRY_COOLDOWN_TURNS
 
 
 def plain_street_value(game, position: int) -> int:
@@ -127,6 +127,38 @@ class HousingShortageTests(unittest.TestCase):
 
         self.assertIn(5, [game.houses[pos] for pos in (16, 18, 19)])
         self.assertEqual(game.bank_houses, 4)
+
+
+class JailCardTradeValueTests(unittest.TestCase):
+    """The AI treats a Get Out of Jail Free card as worth the fine it saves."""
+
+    def test_jail_cards_are_valued_at_the_jail_fine(self) -> None:
+        """Each card on a trade side adds one jail fine to that side's value."""
+        game = make_game()
+
+        self.assertEqual(ai._bundle_value(game, {"props": [], "cash": 10, "jail": 2}),
+                         10 + 2 * JAIL_FINE)
+
+    def test_ai_offer_may_include_jail_cards(self) -> None:
+        """Iris adds her jail cards when her spare cash alone cannot close the deal.
+
+        She can spare only $150 above her cushion, but the human needs $250
+        of value for the brown title; her two cards make up the difference.
+        """
+        game = make_game()
+        human, iris = game.players[0], game.players[1]
+        give_group(game, iris.index, (1,))
+        give_group(game, human.index, (3,))
+        iris.cash = ai.AI_PROFILES["standard"].cash_cushion + 150
+        game.grant_jail_card(iris, "chance")
+        game.grant_jail_card(iris, "chest")
+
+        offer = ai.propose_trade(game, iris)
+
+        assert offer is not None
+        self.assertEqual(offer["get"]["props"], [3])
+        self.assertEqual((offer["give"]["cash"], offer["give"]["jail"]), (150, 2))
+        self.assertTrue(game.trade_is_legal(offer))
 
 
 class SimulationMetricTests(unittest.TestCase):

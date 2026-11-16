@@ -96,9 +96,12 @@ the board, buying properties, and trying to bankrupt everyone else.
 - **Bankruptcy auctions** say when a released Bank title is being auctioned,
   so a chain of forced auctions has context.
 - **Trades** open a dialog where you cycle through partners with `<` / `>`,
-  click property rows to add or remove them from each side, step the cash
-  with the `+$50` / `-$50` buttons, then **Propose** or **Cancel**. Mortgaged
-  titles show the immediate transfer-interest consequence before acceptance.
+  click property rows to add or remove them from each side, step each
+  side's cash with `-$50` / `+$50` and its Get Out of Jail Free cards with
+  `-1` / `+1` (never more than that player holds), then **Propose** or
+  **Cancel**. Mortgaged titles show the immediate transfer-interest
+  consequence before acceptance. An incoming offer lists its cash and jail
+  cards first, then the titles on each side.
 - AI turns play themselves with a short pause and concise log traces for major
   buy, auction, build, mortgage, and trade decisions.
 - Common human-turn keyboard shortcuts are `R` roll, `B` build, `S` sell,
@@ -210,7 +213,9 @@ The computer players are **heuristic**, not optimal. They:
 - pay or use a card to escape jail in the early game when there is still
   land to grab, and stay in jail late;
 - propose trades that complete a colour group for them -- preferring swaps
-  that *also* complete a group for the partner (mutual monopolies are gold).
+  that *also* complete a group for the partner (mutual monopolies are gold),
+  and sweetening with spare Get Out of Jail Free cards (valued at the $50
+  fine) before cash.
 
 `cautious`, `standard`, and `sharp` setup profiles tune reserves, bidding
 aggression, blocking pressure, and trade margins without changing the rules
