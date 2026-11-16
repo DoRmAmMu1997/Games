@@ -38,6 +38,11 @@ CORNER_SIZE = BOARD_SIZE * 0.16
 TILE_LONG = (BOARD_SIZE - CORNER_SIZE * 2) / (SPACES_PER_SIDE - 2)   # tile length
 TILE_SHORT = CORNER_SIZE                                            # tile depth
 
+# A tile's name and price keep this many pixels clear of every tile edge:
+# the 4 px ownership border drawn inside an owned tile, plus 2 px so the
+# text never touches that border.
+TILE_LABEL_INSET = 6
+
 
 # --------------------------------------------------------------------------
 # Core Monopoly rules numbers (changing these changes the game balance)

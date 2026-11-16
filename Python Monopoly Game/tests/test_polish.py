@@ -22,6 +22,7 @@ from test_raise_funds import rent_debt
 from test_shell import ShellTestCase, big_incoming_offer, spectator_game
 
 import board_data
+import board_render
 import ui
 from game import MonopolyGame
 from main import MonopolyApp
@@ -105,6 +106,50 @@ class PromptStripTests(ShellTestCase):
             with self.subTest(state=name):
                 self.assertTrue(prompt)
                 self.assertEqual(ui.prompt_line(fonts, prompt)[0], prompt)
+
+
+class BoardLabelTests(ShellTestCase):
+    """Every tile's name and price fit inside the tile, on every theme."""
+
+    def test_every_board_label_fits_inside_its_tile_on_every_theme(self) -> None:
+        """Label lines fit the tile's width and depth by measurement, and lose no letters.
+
+        The label must also stay clear of the 4 px ownership border, so the
+        room it is measured against is inset from the tile's edges.
+        """
+
+        def letters(text: str) -> str:
+            """Reduce text to its letters, ignoring wrap points and hyphens."""
+            return text.replace(" ", "").replace("-", "")
+
+        fonts = ui.make_fonts()
+        self.assertGreaterEqual(board_render.TILE_LABEL_INSET, 6)
+        for theme in board_data.THEME_ORDER:
+            with self.subTest(theme=theme):
+                problems: list[tuple] = []
+                for space in board_data.build_board(theme):
+                    font, lines = board_render.tile_label(fonts, space)
+                    width, depth = board_render.label_room(space.position)
+                    rect = board_render.space_rect(space.position)
+                    if width > min(rect.size) - 2 * board_render.TILE_LABEL_INSET:
+                        problems.append((space.name, "room wider than the inset tile"))
+                    if any(font.size(line)[0] > width for line in lines):
+                        problems.append((space.name, lines, "too wide"))
+                    if len(lines) * board_render.label_pitch(font) > depth:
+                        problems.append((space.name, lines, "too deep"))
+                    name_lines = lines[:-1] if space.is_ownable else lines
+                    if letters("".join(name_lines)) != letters(space.name):
+                        problems.append((space.name, lines, "letters lost"))
+                    if space.is_ownable and lines[-1] != f"${space.price}":
+                        problems.append((space.name, lines, "price missing"))
+                self.assertEqual(problems, [])
+
+    def test_board_base_renders_for_every_theme(self) -> None:
+        """The static board layer builds for every theme without error."""
+        fonts = ui.make_fonts()
+        for theme in board_data.THEME_ORDER:
+            with self.subTest(theme=theme):
+                board_render.BoardRenderer(board_data.build_board(theme)).build_base(fonts)
 
 
 if __name__ == "__main__":

@@ -38,6 +38,9 @@ def make_fonts() -> dict:
     """Create every font the game uses (called once, after pygame.init)."""
     return {
         "tile": pygame.font.SysFont("arial", 12),
+        # Smaller steps for board labels whose words do not fit at 12 px.
+        "tile_mid": pygame.font.SysFont("arial", 11),
+        "tile_min": pygame.font.SysFont("arial", 10),
         "tiny": pygame.font.SysFont("arial", 14),
         "small": pygame.font.SysFont("arial", 17),
         "med": pygame.font.SysFont("arial", 21, bold=True),
