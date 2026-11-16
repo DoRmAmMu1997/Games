@@ -93,11 +93,8 @@ class Button:
           each platform (some are 15% wider), so text that fits on one
           machine can cross the button border on another.
         """
-        room = self.rect.width - 2 * BUTTON_LABEL_MARGIN
-        for key in ("small", "tiny"):
-            if fonts[key].size(self.label)[0] <= room:
-                return self.label, fonts[key]
-        return _fit_text(fonts["tiny"], self.label, room), fonts["tiny"]
+        return _fit_line(fonts, ("small", "tiny"), self.label,
+                         self.rect.width - 2 * BUTTON_LABEL_MARGIN)
 
     def hit(self, pos: tuple[int, int]) -> bool:
         """True if `pos` is inside an enabled button."""
@@ -513,6 +510,27 @@ def _wrap_lines(font, text: str, width: int) -> list[str]:
     return lines
 
 
+def _fit_line(fonts: dict, keys: tuple[str, ...], text: str, width: int,
+              height: int | None = None) -> tuple[str, pygame.font.Font]:
+    """Pick the first font in `keys` in which `text` fits; return (text, font).
+
+    `keys` lists font names from largest to smallest. A font fits when the
+    measured text is no wider than `width` (and the font no taller than
+    `height`, if given). If none fits, the text is shortened with "..." in
+    the last, smallest font.
+
+    Beginner note:
+    - Sizes are MEASURED with the fonts actually loaded, never guessed from
+      character counts: "arial" is a different typeface on every platform.
+    """
+    for key in keys:
+        font = fonts[key]
+        if font.size(text)[0] <= width and (height is None or font.get_height() <= height):
+            return text, font
+    font = fonts[keys[-1]]
+    return _fit_text(font, text, width), font
+
+
 def _fit_text(font, text: str, width: int) -> str:
     """Return `text`, shortened with "..." if needed to fit `width` pixels."""
     if font.size(text)[0] <= width:
@@ -550,6 +568,22 @@ def action_bar_layout() -> dict:
     }
 
 
+# Clear space kept between the prompt text and each end of its strip.
+PROMPT_MARGIN = 12
+
+
+def prompt_line(fonts: dict, prompt: str) -> tuple[str, pygame.font.Font]:
+    """Return the prompt text and font drawn in the prompt strip.
+
+    The prompt is always ONE line inside the strip: the largest of three
+    fonts that fits by measured width (and leaves 2 px above and below),
+    or a shortened text in the smallest if even that is too wide.
+    """
+    strip = action_bar_layout()["prompt"]
+    return _fit_line(fonts, ("small", "tiny", "tile"), prompt,
+                     strip.width - 2 * PROMPT_MARGIN, strip.height - 4)
+
+
 def bar_slot_rect(slot: int) -> pygame.Rect:
     """Return the rectangle for action-bar button number `slot` (0-7)."""
     return pygame.Rect(_BAR_COLS[slot % 2], _BAR_ROWS[slot // 2], _BTN_W, _BTN_H)
@@ -565,15 +599,15 @@ def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
     "Save & Quit" -- stays inside the visible 880-pixel window even on
     displays that show slightly less than the full screen.
     """
-    # Slim prompt strip, just above the bar. One line of text fits; longer
-    # prompts get truncated rather than wrapped under a button.
+    # Slim prompt strip, just above the bar: one line, fitted by measured
+    # width (see prompt_line) and centred vertically in the strip.
     layout = action_bar_layout()
     prompt_strip = layout["prompt"]
     pygame.draw.rect(surface, PANEL_CARD, prompt_strip, border_radius=8)
     pygame.draw.rect(surface, INK, prompt_strip, 1, border_radius=8)
-    _blit_wrapped(surface, fonts["small"], prompt,
-                  pygame.Rect(prompt_strip.x + 12, prompt_strip.y + 4,
-                              prompt_strip.width - 24, 20), WHITE)
+    text, font = prompt_line(fonts, prompt)
+    glyph = font.render(text, True, WHITE)
+    surface.blit(glyph, glyph.get_rect(midleft=(prompt_strip.x + PROMPT_MARGIN, prompt_strip.centery)))
 
     bar = layout["bar"]
     pygame.draw.rect(surface, PANEL_CARD, bar, border_radius=8)

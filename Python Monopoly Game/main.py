@@ -910,7 +910,11 @@ class MonopolyApp:
         return []
 
     def _prompt(self) -> str:
-        """A short instruction line for the action bar."""
+        """A short instruction line for the action bar.
+
+        Keep these short: the strip shows ONE line, so every fixed prompt
+        here is worded to fit in full with the longest player name.
+        """
         game = self._require_game()
         actor = game.players[game.actor()]
         if self._spectating():
@@ -920,25 +924,28 @@ class MonopolyApp:
             # again here or the prompt reads "Mira (AI) (AI) is taking...".
             return f"{actor.name} is taking their turn..."
         if self.mode == "build":
-            return self.message or "Click a property in one of your monopolies to build. Then Done."
+            return self.message or "Click a ringed street to build, then Done."
         if self.mode == "mortgage":
-            return self.message or "Click a property to mortgage it, or a mortgaged one to lift it."
+            return self.message or "Click a ringed title to mortgage or lift it."
         if self.mode == "sell":
-            return self.message or "Click a developed street to sell one building back. Then Done."
+            return self.message or "Click a ringed street to sell a building."
         if self.mode == "assets":
-            return self.message or "Manage one title with deed detail and legal actions."
+            return self.message or "Pick a title, then choose an action."
         if self.message:
             return self.message
         state = game.awaiting
         if state == "pre_roll":
             if actor.in_jail:
-                return f"{actor.name}: you are in Jail. Pay, use a card, or roll."
+                return f"{actor.name}: in Jail. Pay, use a card or roll."
             return f"{actor.name}: your turn. Roll the dice."
         if state == "buy_or_auction" and game.pending_purchase is not None:
             space = game.board[game.pending_purchase]
-            return f"You landed on {space.name} (${space.price}). Buy it or auction it."
-        if state == "auction":
-            return game.auction_context_message()
+            # The title comes last, so a very long name is what gets shortened.
+            return f"Buy or auction: {space.name} (${space.price})"
+        if state == "auction" and game.auction is not None:
+            # The dialog carries the detail; the strip only says what to do.
+            bank = game.auction.get("context") == "bankruptcy"
+            return "Bank bankruptcy auction: bid or pass." if bank else "Auction: bid or pass."
         if state == "post_roll":
             return f"{actor.name}: build, trade, or end your turn."
         if state == "raise_funds" and game.debts:
