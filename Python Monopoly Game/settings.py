@@ -38,6 +38,13 @@ CORNER_SIZE = BOARD_SIZE * 0.16
 TILE_LONG = (BOARD_SIZE - CORNER_SIZE * 2) / (SPACES_PER_SIDE - 2)   # tile length
 TILE_SHORT = CORNER_SIZE                                            # tile depth
 
+# Radii, in pixels, of the round shapes (all drawn antialiased): a player's
+# token on the board, the token-colour disc on a player card, and one pip
+# on a die face.
+TOKEN_RADIUS = 15
+PLAYER_DISC_RADIUS = 14
+PIP_RADIUS = 5
+
 # A tile's name and price keep this many pixels clear of every tile edge:
 # the 4 px ownership border drawn inside an owned tile, plus 2 px so the
 # text never touches that border.

@@ -25,6 +25,7 @@ from settings import (
     TILE_FACE,
     TILE_LABEL_INSET,
     TOKEN_COLORS,
+    TOKEN_RADIUS,
     UTILITY_COLOR,
     WHITE,
 )
@@ -276,9 +277,10 @@ class BoardRenderer:
                 cx, cy = int(cx), int(cy)
             else:
                 cx, cy = token_center(player.position, player.index)
-            pygame.draw.circle(target, WHITE, (cx, cy), 15)
-            pygame.draw.circle(target, player.token_color, (cx, cy), 13)
-            pygame.draw.circle(target, INK, (cx, cy), 15, 2)
+            # Antialiased discs: a white rim, the player's colour, a dark edge.
+            pygame.draw.aacircle(target, WHITE, (cx, cy), TOKEN_RADIUS)
+            pygame.draw.aacircle(target, player.token_color, (cx, cy), TOKEN_RADIUS - 2)
+            pygame.draw.aacircle(target, INK, (cx, cy), TOKEN_RADIUS, 2)
             label = fonts["tile"].render(str(player.index + 1), True, WHITE)
             target.blit(label, label.get_rect(center=(cx, cy)))
 

@@ -18,6 +18,7 @@ GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
+import pygame
 from test_raise_funds import rent_debt
 from test_shell import ShellTestCase, big_incoming_offer, spectator_game
 
@@ -26,6 +27,7 @@ import board_render
 import ui
 from game import MonopolyGame
 from main import MonopolyApp
+from settings import BOARD_FACE, INK, PANEL_CARD, WHITE
 
 LONG_NAME = "Alexandra Q.xx"        # 14 characters: the longest name setup allows
 
@@ -150,6 +152,53 @@ class BoardLabelTests(ShellTestCase):
         for theme in board_data.THEME_ORDER:
             with self.subTest(theme=theme):
                 board_render.BoardRenderer(board_data.build_board(theme)).build_base(fonts)
+
+
+def rim_blend(surface: pygame.Surface, center: tuple[int, int], radius: int,
+              pure: set[tuple[int, int, int]]) -> int:
+    """Count pixels on a disc's rim that are a blend rather than a pure draw colour.
+
+    An aliased circle paints every rim pixel in exactly one of its colours;
+    an antialiased one leaves a ring of in-between pixels.
+    """
+    count = 0
+    for x in range(center[0] - radius - 2, center[0] + radius + 3):
+        for y in range(center[1] - radius - 2, center[1] + radius + 3):
+            distance = ((x - center[0]) ** 2 + (y - center[1]) ** 2) ** 0.5
+            if abs(distance - radius) <= 1.5 and tuple(surface.get_at((x, y))[:3]) not in pure:
+                count += 1
+    return count
+
+
+class SmoothEdgeTests(ShellTestCase):
+    """Round shapes are drawn antialiased, not with stair-stepped edges."""
+
+    def test_tokens_dice_pips_and_player_discs_have_smooth_edges(self) -> None:
+        """Each disc's rim holds blended pixels -- the sign of antialiasing."""
+        fonts = ui.make_fonts()
+        game = long_name_game()
+        player = game.players[0]
+
+        board = pygame.Surface((880, 880))
+        board.fill(BOARD_FACE)
+        board_render.BoardRenderer(game.board)._draw_tokens(
+            board, game, fonts, pixel_overrides={0: (300, 300), 1: (500, 300), 2: (700, 300)})
+        self.assertGreater(
+            rim_blend(board, (300, 300), board_render.TOKEN_RADIUS,
+                      {BOARD_FACE, INK, WHITE, player.token_color}), 0)
+
+        die = pygame.Surface((60, 60))
+        die.fill(WHITE)
+        ui._draw_pips(die, die.get_rect(), 1)
+        self.assertGreater(rim_blend(die, (30, 30), ui.PIP_RADIUS, {WHITE, INK}), 0)
+
+        card = pygame.Surface((400, 130))
+        card.fill(PANEL_CARD)
+        rect = pygame.Rect(4, 4, 388, 118)
+        ui._draw_player_card(card, fonts, game, player, rect, False)
+        self.assertGreater(
+            rim_blend(card, ui.player_disc_center(rect), ui.PLAYER_DISC_RADIUS,
+                      {PANEL_CARD, INK, player.token_color}), 0)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,8 @@ from settings import (
     PANEL_CARD,
     PANEL_WIDTH,
     PANEL_X,
+    PIP_RADIUS,
+    PLAYER_DISC_RADIUS,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     SOFT,
@@ -228,6 +230,11 @@ def draw_panel(surface, fonts, game, mouse) -> None:
                                                 PANEL_WIDTH + 8, 150))
 
 
+def player_disc_center(rect: pygame.Rect) -> tuple[int, int]:
+    """Centre of the token-colour disc on a player card drawn in `rect`."""
+    return rect.x + 24, rect.y + 26
+
+
 def _draw_player_card(surface, fonts, game, player, rect, is_current) -> None:
     """Draw one player's summary card in the side panel."""
     bg = PANEL_CARD if not is_current else (52, 74, 60)
@@ -235,9 +242,10 @@ def _draw_player_card(surface, fonts, game, player, rect, is_current) -> None:
     border = HIGHLIGHT if is_current else INK
     pygame.draw.rect(surface, border, rect, 3 if is_current else 1, border_radius=8)
 
-    # Token swatch and name.
-    pygame.draw.circle(surface, player.token_color, (rect.x + 24, rect.y + 26), 14)
-    pygame.draw.circle(surface, INK, (rect.x + 24, rect.y + 26), 14, 2)
+    # Token swatch (an antialiased disc with a dark edge) and name.
+    disc = player_disc_center(rect)
+    pygame.draw.aacircle(surface, player.token_color, disc, PLAYER_DISC_RADIUS)
+    pygame.draw.aacircle(surface, INK, disc, PLAYER_DISC_RADIUS, 2)
     name_color = SOFT if player.bankrupt else WHITE
     _text(surface, fonts, "med", player.name, (rect.x + 48, rect.y + 12), name_color)
 
@@ -321,7 +329,7 @@ def _draw_pips(surface, rect, value) -> None:
         6: [(-1, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (1, 1)],
     }.get(value, [])
     for sx, sy in spots:
-        pygame.draw.circle(surface, INK, (cx + sx * ox, cy + sy * oy), 5)
+        pygame.draw.aacircle(surface, INK, (cx + sx * ox, cy + sy * oy), PIP_RADIUS)
 
 
 def draw_center_card(surface, fonts, game) -> None:
