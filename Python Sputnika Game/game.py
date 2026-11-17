@@ -603,7 +603,13 @@ class OrbitalOrchardGame:
 
     def _update_fail_state(self, dt: float) -> None:
         """Track whether the player is approaching game over."""
-        highest_top = min((body.top for body in self.bodies), default=self.world.center.y + self.world.radius)
+        # Only bodies older than the fail-age gate count toward the stress
+        # meter, so a body still falling from the launcher does not make the
+        # meter jump on every drop.
+        highest_top = min(
+            (body.top for body in self.bodies if body.age(self.now) > FAIL_AGE_GATE),
+            default=self.world.center.y + self.world.radius,
+        )
 
         # Only older bodies count toward losing. This prevents a just-launched body
         # from instantly causing game over while it is still entering the field.

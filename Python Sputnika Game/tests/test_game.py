@@ -101,6 +101,33 @@ class PauseClockTests(GameTestCase):
         self.assertAlmostEqual(game.now - before, 0.2, places=6)
 
 
+class StressMeterTests(GameTestCase):
+    """The HUD stress meter reacts to the settled stack, not to fresh launches."""
+
+    def test_drop_into_empty_bubble_does_not_spike_the_meter(self) -> None:
+        """A body still falling from the launcher leaves the meter at zero."""
+
+        game = self.game
+        game.start_round()
+        game.drop_current_body()
+
+        game._update_fail_state(1 / 60)
+
+        self.assertEqual(game.container_stress, 0.0)
+
+    def test_settled_high_body_still_raises_the_meter(self) -> None:
+        """Once a body is older than the age gate, its height counts."""
+
+        game = self.game
+        game.start_round()
+        game.drop_current_body()
+        game.now += FAIL_AGE_GATE + 0.1
+
+        game._update_fail_state(1 / 60)
+
+        self.assertGreater(game.container_stress, 0.5)
+
+
 class SpawnInsideCircleTests(GameTestCase):
     """Launched bodies start inside the same legal circle the solver enforces."""
 
