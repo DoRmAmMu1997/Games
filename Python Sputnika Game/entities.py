@@ -57,7 +57,25 @@ class CelestialBody:
     # it starts at 1.0 and decays to 0.0, growing the body from small to full.
     birth_pop: float = 0.0
 
+    # Size and mass, filled in once by `__post_init__` (see there for why).
+    radius: float = field(init=False, default=0.0)
+    mass: float = field(init=False, default=0.0)
+    inv_mass: float = field(init=False, default=0.0)
+
     def __post_init__(self) -> None:
+        """Fill in cached size/mass values and per-body timers after creation."""
+        # A body's tier never changes (a merge creates a brand-new body), so
+        # its radius and mass are worked out once here instead of being looked
+        # up in TIERS on every one of the solver's many pair checks per frame.
+        #
+        # Beginner note:
+        # - Mass grows with area (radius squared), with a small minimum so the
+        #   tiniest bodies are not pushed around unrealistically hard.
+        # - `inv_mass` (1 / mass) is what the collision maths actually uses.
+        self.radius = TIERS[self.tier].radius
+        self.mass = max(4.0, (self.radius * self.radius) * 0.018)
+        self.inv_mass = 1.0 / self.mass
+
         # Fresh bodies are briefly prevented from merging instantly.
         # Dataclasses call `__post_init__` right after the generated `__init__`.
         if self.merge_locked_until == 0.0:
@@ -71,21 +89,6 @@ class CelestialBody:
     def info(self):
         """Shortcut to the tier data for this body."""
         return TIERS[self.tier]
-
-    @property
-    def radius(self) -> float:
-        """Expose radius directly so the rest of the code reads cleanly."""
-        return self.info.radius
-
-    @property
-    def mass(self) -> float:
-        """Approximate mass from area, with a small minimum for stability."""
-        return max(4.0, (self.radius * self.radius) * 0.018)
-
-    @property
-    def inv_mass(self) -> float:
-        """Inverse mass is used often in collision math, so we precompute it on demand."""
-        return 1.0 / self.mass
 
     @property
     def top(self) -> float:

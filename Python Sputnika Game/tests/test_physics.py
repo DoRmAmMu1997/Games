@@ -22,6 +22,7 @@ import pygame
 
 from entities import CelestialBody
 from physics import PhysicsWorld
+from settings import TIERS
 
 NOW = 100.0
 
@@ -90,6 +91,27 @@ class ContainerTests(unittest.TestCase):
         limit = world.radius - radius - 3.0 + 1e-6
         for point in points:
             self.assertLessEqual((point - world.center).length(), limit)
+
+
+class CachedBodyPropertiesTests(unittest.TestCase):
+    """Radius and mass are stored once per body instead of looked up per pair check."""
+
+    def test_radius_and_mass_are_plain_attributes(self) -> None:
+        """``radius``, ``mass`` and ``inv_mass`` are data, not class-level properties."""
+
+        for name in ("radius", "mass", "inv_mass"):
+            with self.subTest(name=name):
+                self.assertNotIsInstance(getattr(CelestialBody, name, None), property)
+
+    def test_cached_values_match_the_tier_table(self) -> None:
+        """Every tier caches its table radius and the area-based mass."""
+
+        for tier, info in enumerate(TIERS):
+            with self.subTest(tier=tier):
+                body = make_body(1, tier, 0.0, 0.0)
+                self.assertEqual(body.radius, info.radius)
+                self.assertEqual(body.mass, max(4.0, info.radius * info.radius * 0.018))
+                self.assertEqual(body.inv_mass, 1.0 / body.mass)
 
 
 class PairSolverTests(unittest.TestCase):
