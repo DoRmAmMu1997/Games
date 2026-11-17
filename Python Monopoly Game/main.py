@@ -865,10 +865,9 @@ class MonopolyApp:
                       highlight_positions=self._board_highlights())
         ui.draw_panel(self.window, self.fonts, game, mouse)
 
-        board_centre = (20 + (SCREEN_HEIGHT - 40) // 2, 20 + (SCREEN_HEIGHT - 40) // 2)
         ui.draw_center_card(self.window, self.fonts, game)
         if self.dice_show != (0, 0):
-            ui.draw_dice(self.window, self.fonts, self.dice_show, board_centre)
+            ui.draw_dice(self.window, self.fonts, self.dice_show)
         hovered = self._hovered_board_space(mouse)
         if hovered is not None:
             ui.draw_property_detail(self.window, self.fonts, game, hovered)

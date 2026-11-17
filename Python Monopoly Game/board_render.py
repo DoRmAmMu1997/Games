@@ -46,6 +46,15 @@ _LABEL_FONTS = ("tile", "tile_mid", "tile_min")
 _OFFSETS = [round(_EDGE_SPAN * k / 9) for k in range(10)]   # 9 edge tiles
 
 
+# The board's centre pixel: the diagonal MONOPOLY title is centred here.
+BOARD_CENTER = _OX + BOARD_SIZE // 2
+
+
+def inner_rect() -> pygame.Rect:
+    """The empty middle of the board, inside the ring of tiles."""
+    return pygame.Rect(_OX + _C, _OY + _C, BOARD_SIZE - 2 * _C, BOARD_SIZE - 2 * _C)
+
+
 def space_rect(position: int) -> pygame.Rect:
     """Return the screen rectangle of one of the 40 board spaces."""
     if position == 0:

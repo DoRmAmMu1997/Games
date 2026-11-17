@@ -133,6 +133,11 @@ TOKEN_COLORS = [
 ]
 TOKEN_NAMES = ["Red", "Blue", "Green", "Purple"]
 
+# Chance / Community Chest card faces shown in the board's middle. White
+# header and body text reads at better than 4.5:1 on both.
+CHANCE_CARD_COLOR = (70, 96, 150)
+CHEST_CARD_COLOR = (130, 90, 45)
+
 # Building colours.
 HOUSE_COLOR = (60, 170, 90)
 HOTEL_COLOR = (208, 52, 52)

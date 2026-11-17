@@ -11,9 +11,12 @@ from __future__ import annotations
 import pygame
 
 import board_data
+import board_render
 from cards import format_card_text
 from settings import (
     BG,
+    CHANCE_CARD_COLOR,
+    CHEST_CARD_COLOR,
     DANGER,
     GOLD,
     GROUP_COLORS,
@@ -336,13 +339,28 @@ def _draw_log(surface, fonts, game) -> None:
 # --------------------------------------------------------------------------
 # Board-centre widgets: dice and the current card
 # --------------------------------------------------------------------------
-def draw_dice(surface, fonts, dice, center) -> None:
-    """Draw the two dice at `center` with their pip patterns."""
-    size = 52
-    gap = 16
-    total_w = size * 2 + gap
-    x0 = center[0] - total_w // 2
-    y0 = center[1] - size // 2
+# The diagonal MONOPOLY title runs from the board middle's lower-left to
+# its upper-right corner. The drawn card sits in the free upper-left
+# triangle and the dice in the lower-right one, so neither covers it.
+_DIE_SIZE, _DIE_GAP = 52, 16
+_CARD_W = 320
+_CARD_INSET = 16              # card distance from the board middle's corner
+_DICE_OFFSET = (120, 60)      # dice centre, right of and below the board centre
+
+
+def dice_rect() -> pygame.Rect:
+    """Where the two dice are drawn: in the board middle's lower-right triangle."""
+    rect = pygame.Rect(0, 0, _DIE_SIZE * 2 + _DIE_GAP, _DIE_SIZE)
+    rect.center = (board_render.BOARD_CENTER + _DICE_OFFSET[0],
+                   board_render.BOARD_CENTER + _DICE_OFFSET[1])
+    return rect
+
+
+def draw_dice(surface, fonts, dice) -> None:
+    """Draw the two dice with their pip patterns, at `dice_rect()`."""
+    size = _DIE_SIZE
+    gap = _DIE_GAP
+    x0, y0 = dice_rect().topleft
     for d, value in enumerate(dice):
         rect = pygame.Rect(x0 + d * (size + gap), y0, size, size)
         pygame.draw.rect(surface, WHITE, rect, border_radius=10)
@@ -366,22 +384,46 @@ def _draw_pips(surface, rect, value) -> None:
         pygame.draw.aacircle(surface, INK, (cx + sx * ox, cy + sy * oy), PIP_RADIUS)
 
 
+def card_colors(deck: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Return the (face fill, text ink) colours of a Chance or Chest card."""
+    return (CHANCE_CARD_COLOR if deck == "chance" else CHEST_CARD_COLOR), WHITE
+
+
+def center_card_layout(fonts, game) -> dict:
+    """Place the last drawn card in the board middle's upper-left corner.
+
+    The card is as tall as its wrapped text needs: a header, then the body
+    lines a few pixels below it. Returns the panel and header rects, the
+    body lines, and where the body starts and ends.
+    """
+    middle = board_render.inner_rect()
+    deck = game.last_card["deck"]
+    header_font, body_font = fonts["med"], fonts["tiny"]
+    title = "CHANCE" if deck == "chance" else "COMMUNITY CHEST"
+    left, top = middle.x + _CARD_INSET, middle.y + _CARD_INSET
+    header = pygame.Rect((left + 12, top + 8), header_font.size(title))
+    lines = _wrap_lines(body_font, format_card_text(game.last_card, game.board), _CARD_W - 24)
+    pitch = body_font.get_height() + 2
+    body_top = header.bottom + 4
+    body_bottom = body_top + len(lines) * pitch
+    panel = pygame.Rect(left, top, _CARD_W, body_bottom + 10 - top)
+    return {"panel": panel, "header": header, "title": title, "lines": lines,
+            "pitch": pitch, "body_top": body_top, "body_bottom": body_bottom}
+
+
 def draw_center_card(surface, fonts, game) -> None:
     """Draw the most recently drawn Chance / Community Chest card."""
     if game.last_card is None:
         return
-    panel = pygame.Rect(0, 0, 320, 120)
-    panel.center = (220 + 90, 360 + 90)  # roughly the board centre, upper area
-    panel.center = (20 + (SCREEN_HEIGHT - 40) // 2, 20 + (SCREEN_HEIGHT - 40) // 2 - 150)
-    deck = game.last_card["deck"]
-    bg = (70, 96, 150) if deck == "chance" else (150, 110, 60)
-    pygame.draw.rect(surface, bg, panel, border_radius=10)
+    layout = center_card_layout(fonts, game)
+    fill, ink = card_colors(game.last_card["deck"])
+    panel = layout["panel"]
+    pygame.draw.rect(surface, fill, panel, border_radius=10)
     pygame.draw.rect(surface, INK, panel, 2, border_radius=10)
-    title = "CHANCE" if deck == "chance" else "COMMUNITY CHEST"
-    _text(surface, fonts, "small", title, (panel.centerx, panel.y + 16),
-          GOLD, center=True)
-    words = format_card_text(game.last_card, game.board)
-    _blit_wrapped(surface, fonts["tiny"], words, panel.inflate(-24, -44), WHITE)
+    surface.blit(fonts["med"].render(layout["title"], True, ink), layout["header"])
+    for i, line in enumerate(layout["lines"]):
+        surface.blit(fonts["tiny"].render(line, True, ink),
+                     (layout["header"].x, layout["body_top"] + i * layout["pitch"]))
 
 
 def property_detail_lines(game, position: int) -> list[str]:

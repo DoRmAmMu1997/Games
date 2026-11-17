@@ -24,6 +24,7 @@ from test_shell import ShellTestCase, big_incoming_offer, spectator_game
 
 import board_data
 import board_render
+import cards
 import ui
 from game import MonopolyGame
 from main import MonopolyApp
@@ -230,6 +231,57 @@ class TokenSlotTests(unittest.TestCase):
                     for other_x, other_y in centers[index + 1:]:
                         apart = ((x - other_x) ** 2 + (y - other_y) ** 2) ** 0.5
                         self.assertGreaterEqual(apart, 2 * radius + 1)
+
+
+def luminance(color: tuple[int, int, int]) -> float:
+    """WCAG relative luminance of an sRGB colour."""
+    def channel(value: int) -> float:
+        c = value / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (channel(v) for v in color[:3])
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(ink: tuple[int, int, int], fill: tuple[int, int, int]) -> float:
+    """WCAG contrast ratio between two colours (1 to 21)."""
+    light, dark = sorted((luminance(ink), luminance(fill)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+class BoardMiddleTests(ShellTestCase):
+    """The drawn card and the dice keep clear of the diagonal MONOPOLY title."""
+
+    def clearance(self, rect: pygame.Rect) -> float:
+        """Smallest distance from a rect's corners to the title's diagonal centre line."""
+        cx = cy = board_render.BOARD_CENTER
+        return min(abs((x - cx) + (y - cy)) / 2 ** 0.5
+                   for x in (rect.left, rect.right) for y in (rect.top, rect.bottom))
+
+    def test_card_and_dice_clear_the_title_inside_the_board_middle(self) -> None:
+        """With the longest card text, card and dice stay inside the middle, off the title."""
+        fonts = ui.make_fonts()
+        half_title = fonts["title"].get_height() / 2
+        middle = board_render.inner_rect()
+        game = long_name_game()
+        game.last_card = max(cards.CHANCE_CARDS + cards.CHEST_CARDS,
+                             key=lambda card: len(cards.format_card_text(card, game.board)))
+
+        card = ui.center_card_layout(fonts, game)
+        dice = ui.dice_rect()
+
+        for rect in (card["panel"], dice):
+            self.assertTrue(middle.inflate(-8, -8).contains(rect), rect)
+            self.assertGreaterEqual(self.clearance(rect), half_title + 8)
+        self.assertFalse(card["panel"].colliderect(dice))
+        self.assertGreaterEqual(card["body_top"], card["header"].bottom + 2)
+        self.assertLessEqual(card["body_bottom"], card["panel"].bottom - 6)
+
+    def test_card_header_and_text_are_readable_on_both_decks(self) -> None:
+        """Header and body ink reach a 4.5:1 contrast on the Chance and Chest fills."""
+        for deck in ("chance", "chest"):
+            with self.subTest(deck=deck):
+                fill, ink = ui.card_colors(deck)
+                self.assertGreaterEqual(contrast(ink, fill), 4.5)
 
 
 def rim_blend(surface: pygame.Surface, center: tuple[int, int], radius: int,
