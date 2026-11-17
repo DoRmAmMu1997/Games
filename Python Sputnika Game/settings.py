@@ -81,6 +81,14 @@ MOUSE_WHEEL_ANGLE_STEP = 4.0
 MAX_LAUNCH_ANGLE = 60.0
 LAUNCH_SPEED = 520.0
 
+# Launcher overlay drawing.
+# Each preview dot gets a soft glow `PREVIEW_GLOW_EXTRA` pixels wider than the
+# dot itself. Translucent overlays are drawn on small surfaces sized to their
+# contents; `OVERLAY_PADDING` adds a few spare pixels around them so line caps
+# and antialiased edges are never clipped.
+PREVIEW_GLOW_EXTRA = 4
+OVERLAY_PADDING = 4
+
 # Merge rules.
 # `MERGE_ARM_TIME` stops fresh bodies from instantly re-merging the same frame.
 # `POST_MERGE_LOCK` gives newly created merged bodies a short cooldown too.

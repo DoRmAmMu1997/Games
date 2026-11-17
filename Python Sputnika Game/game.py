@@ -50,6 +50,8 @@ from settings import (
     MAX_BODIES,
     MAX_LAUNCH_ANGLE,
     MOUSE_WHEEL_ANGLE_STEP,
+    OVERLAY_PADDING,
+    PREVIEW_GLOW_EXTRA,
     SAVE_DATA_DIR,
     SAVE_DATA_PATH,
     SCREEN_HEIGHT,
@@ -799,30 +801,7 @@ class OrbitalOrchardGame:
             self.current_seed,
         )
         if preview_points:
-            trail = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-            preview_total = max(1, len(preview_points) - 1)
-            for index, point in enumerate(preview_points):
-                # Early points are drawn brighter/larger so the most immediate
-                # section of the path is easiest to understand.
-                progress = index / preview_total
-                dot_center = point + camera
-                dot_radius = max(2, int(8 - progress * 4.5))
-                glow_radius = dot_radius + 4
-                dot_alpha = int(125 - progress * 72)
-                glow_alpha = int(42 - progress * 22)
-                pygame.draw.circle(
-                    trail,
-                    (*beam_color, max(0, glow_alpha)),
-                    (int(dot_center.x), int(dot_center.y)),
-                    glow_radius,
-                )
-                pygame.draw.circle(
-                    trail,
-                    (*beam_color, max(0, dot_alpha)),
-                    (int(dot_center.x), int(dot_center.y)),
-                    dot_radius,
-                )
-            self.canvas.blit(trail, (0, 0))
+            self._draw_preview_trail(preview_points, camera, beam_color)
 
         # A launcher halo helps the origin point read clearly against busy stacks.
         halo = pygame.Surface((88, 88), pygame.SRCALPHA)
@@ -846,12 +825,7 @@ class OrbitalOrchardGame:
         # - a short tail behind the launcher,
         # - a longer forward direction arrow where the launch will go.
         pygame.draw.line(self.canvas, beam_color, back, front, 3)
-        for guide_length, alpha in ((72.0, 95), (118.0, 70), (162.0, 45)):
-            # Draw faded trail segments so the aim line feels more visible and "spacey".
-            ghost = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-            guide_end = start + direction * guide_length
-            pygame.draw.line(ghost, (*beam_color, alpha), start, guide_end, 2)
-            self.canvas.blit(ghost, (0, 0))
+        self._draw_aim_guides(start, direction, beam_color)
 
         # Add a simple arrow head to the end of the launcher guide.
         arrow_left = front - direction * 22.0 + pygame.Vector2(-direction.y, direction.x) * 12.0
@@ -875,6 +849,68 @@ class OrbitalOrchardGame:
             self.now,
             alpha=ready_alpha,
         )
+
+    def _draw_preview_trail(
+        self,
+        preview_points: list[pygame.Vector2],
+        camera: pygame.Vector2,
+        beam_color: tuple[int, int, int],
+    ) -> None:
+        """Draw the dotted trajectory preview as soft, fading dots.
+
+        Beginner note:
+        - The dots are translucent, so they are drawn on their own alpha
+          surface and then blended onto the canvas in one blit.
+        - That surface only needs to cover the dots, not the whole screen.
+          Clearing and blending a full 1024x1280 surface every frame was the
+          most expensive part of the launcher drawing.
+        """
+        preview_total = max(1, len(preview_points) - 1)
+        dots: list[tuple[int, int, int, int, int]] = []
+        for index, point in enumerate(preview_points):
+            # Early points are drawn brighter/larger so the most immediate
+            # section of the path is easiest to understand.
+            progress = index / preview_total
+            dot_center = point + camera
+            dot_radius = max(2, int(8 - progress * 4.5))
+            dot_alpha = int(125 - progress * 72)
+            glow_alpha = int(42 - progress * 22)
+            dots.append((int(dot_center.x), int(dot_center.y), dot_radius, dot_alpha, glow_alpha))
+
+        # Bounding box of every glow circle, padded so antialiasing never clips.
+        reach = max(dot[2] for dot in dots) + PREVIEW_GLOW_EXTRA + OVERLAY_PADDING
+        left = min(dot[0] for dot in dots) - reach
+        top = min(dot[1] for dot in dots) - reach
+        width = max(dot[0] for dot in dots) + reach - left + 1
+        height = max(dot[1] for dot in dots) + reach - top + 1
+        trail = pygame.Surface((width, height), pygame.SRCALPHA)
+        for x, y, dot_radius, dot_alpha, glow_alpha in dots:
+            local = (x - left, y - top)
+            pygame.draw.circle(trail, (*beam_color, max(0, glow_alpha)), local, dot_radius + PREVIEW_GLOW_EXTRA)
+            pygame.draw.circle(trail, (*beam_color, max(0, dot_alpha)), local, dot_radius)
+        self.canvas.blit(trail, (left, top))
+
+    def _draw_aim_guides(
+        self,
+        start: pygame.Vector2,
+        direction: pygame.Vector2,
+        beam_color: tuple[int, int, int],
+    ) -> None:
+        """Draw faded aim-guide segments so the aim line feels brighter and "spacey".
+
+        Each segment gets its own small alpha surface sized to the segment, so
+        the overlapping translucent strokes still build up exactly as before.
+        """
+        for guide_length, alpha in ((72.0, 95), (118.0, 70), (162.0, 45)):
+            guide_end = start + direction * guide_length
+            left = math.floor(min(start.x, guide_end.x)) - OVERLAY_PADDING
+            top = math.floor(min(start.y, guide_end.y)) - OVERLAY_PADDING
+            width = math.ceil(max(start.x, guide_end.x)) + OVERLAY_PADDING - left + 1
+            height = math.ceil(max(start.y, guide_end.y)) + OVERLAY_PADDING - top + 1
+            ghost = pygame.Surface((width, height), pygame.SRCALPHA)
+            offset = pygame.Vector2(left, top)
+            pygame.draw.line(ghost, (*beam_color, alpha), start - offset, guide_end - offset, 2)
+            self.canvas.blit(ghost, (left, top))
 
     def _launch_direction(self) -> pygame.Vector2:
         """Convert the current launcher angle into a unit direction vector."""

@@ -101,6 +101,72 @@ class PauseClockTests(GameTestCase):
         self.assertAlmostEqual(game.now - before, 0.2, places=6)
 
 
+def _reference_trail(canvas: pygame.Surface, points, camera: pygame.Vector2, color) -> None:
+    """Draw the preview dots the original way, on one full-screen overlay."""
+
+    trail = pygame.Surface(canvas.get_size(), pygame.SRCALPHA)
+    total = max(1, len(points) - 1)
+    for index, point in enumerate(points):
+        progress = index / total
+        center = point + camera
+        dot_radius = max(2, int(8 - progress * 4.5))
+        dot_alpha = int(125 - progress * 72)
+        glow_alpha = int(42 - progress * 22)
+        spot = (int(center.x), int(center.y))
+        pygame.draw.circle(trail, (*color, max(0, glow_alpha)), spot, dot_radius + 4)
+        pygame.draw.circle(trail, (*color, max(0, dot_alpha)), spot, dot_radius)
+    canvas.blit(trail, (0, 0))
+
+
+def _reference_guides(canvas: pygame.Surface, start: pygame.Vector2, direction: pygame.Vector2, color) -> None:
+    """Draw the faded aim-guide segments the original way, one full-screen overlay each."""
+
+    for guide_length, alpha in ((72.0, 95), (118.0, 70), (162.0, 45)):
+        ghost = pygame.Surface(canvas.get_size(), pygame.SRCALPHA)
+        pygame.draw.line(ghost, (*color, alpha), start, start + direction * guide_length, 2)
+        canvas.blit(ghost, (0, 0))
+
+
+class SpawnOverlayTests(GameTestCase):
+    """Content-sized overlays must look exactly like the old full-screen ones."""
+
+    def _backdrop(self) -> pygame.Surface:
+        """Return a canvas-sized surface with a busy gradient to blend onto."""
+
+        surface = pygame.Surface(self.game.canvas.get_size()).convert()
+        for y in range(0, surface.get_height(), 8):
+            surface.fill(((y * 3) % 256, (y * 7) % 256, (y * 11) % 256), (0, y, surface.get_width(), 8))
+        return surface
+
+    def test_trail_and_guides_match_full_screen_overlays(self) -> None:
+        """Across many aims, positions, shakes and colours the pixels are identical."""
+
+        game = self.game
+        rng = random.Random(11)
+        backdrop = self._backdrop()
+        for case in range(60):
+            tier = rng.randrange(5)
+            low, high = game.world.allowed_spawn_x(TIERS[tier].radius)
+            spawn = game.world.spawn_point(rng.uniform(low, high), TIERS[tier].radius)
+            angle = rng.uniform(-60.0, 60.0)
+            game.launch_angle = angle
+            direction = game._launch_direction()
+            camera = pygame.Vector2(rng.uniform(-9, 9), rng.uniform(-9, 9))
+            color = rng.choice([(175, 216, 255), (255, 112, 112)])
+            points = game.world.preview_trajectory(spawn, direction * 520.0, TIERS[tier].radius, rng.random())
+            with self.subTest(case=case, tier=tier, angle=round(angle, 1)):
+                expected = backdrop.copy()
+                _reference_trail(expected, points, camera, color)
+                _reference_guides(expected, spawn + camera, direction, color)
+                game.canvas = backdrop.copy()
+                game._draw_preview_trail(points, camera, color)
+                game._draw_aim_guides(spawn + camera, direction, color)
+                self.assertEqual(
+                    pygame.image.tobytes(game.canvas, "RGB"),
+                    pygame.image.tobytes(expected, "RGB"),
+                )
+
+
 class StressMeterTests(GameTestCase):
     """The HUD stress meter reacts to the settled stack, not to fresh launches."""
 
