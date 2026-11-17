@@ -173,6 +173,46 @@ class ActionBarSpacingTests(ShellTestCase):
         self.assertTrue(all(left.size == slots[0].size for left in slots))
 
 
+class GameLogTests(ShellTestCase):
+    """Log lines are fitted to the log card by measurement, not by character count."""
+
+    def test_log_lines_fit_the_card_by_measured_width(self) -> None:
+        """Wide lines are shortened to fit; narrow ones are kept whole, however long."""
+        fonts = ui.make_fonts()
+        game = long_name_game()
+        narrow = "i" * 60                       # many characters, few pixels
+        wide = "W" * 46                         # few characters, many pixels
+        for line in (narrow, wide, "Bartholomew pays $1100 rent to Iris (AI) on Kentucky Avenue."):
+            game._note(line)
+
+        card = ui.log_rect()
+        placed = ui.log_lines(fonts, game)
+
+        texts = [text for text, _pos in placed]
+        self.assertIn(narrow, texts)
+        self.assertNotIn(wide, texts)
+        self.assertTrue(any(text.startswith("WWW") and text.endswith("...") for text in texts))
+        for text, (x, y) in placed:
+            with self.subTest(text=text):
+                width, height = fonts["tiny"].size(text)
+                self.assertGreaterEqual(x, card.left + ui.LOG_MARGIN)
+                self.assertLessEqual(x + width, card.right - ui.LOG_MARGIN)
+                self.assertLessEqual(y + height, card.bottom - 2)
+
+    def test_log_shows_the_newest_lines_last(self) -> None:
+        """The card shows as many of the latest events as fit, newest at the bottom."""
+        fonts = ui.make_fonts()
+        game = long_name_game()
+        for turn in range(30):
+            game._note(f"Event {turn}")
+
+        texts = [text for text, _pos in ui.log_lines(fonts, game)]
+
+        self.assertGreaterEqual(len(texts), 5)
+        self.assertEqual(texts[-1], "Event 29")
+        self.assertEqual(texts, [f"Event {30 - len(texts) + i}" for i in range(len(texts))])
+
+
 def rim_blend(surface: pygame.Surface, center: tuple[int, int], radius: int,
               pure: set[tuple[int, int, int]]) -> int:
     """Count pixels on a disc's rim that are a blend rather than a pure draw colour.

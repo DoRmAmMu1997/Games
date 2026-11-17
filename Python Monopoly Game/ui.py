@@ -215,19 +215,23 @@ def _draw_setup_info_panel(surface, fonts, stats, human_count,
 # --------------------------------------------------------------------------
 # In-game side panel
 # --------------------------------------------------------------------------
+# The side panel stacks four player cards, then the game log, then the
+# prompt strip and action bar, with the same small gap between cards.
+_PLAYER_CARDS_TOP = 10
+_PLAYER_CARD_H = 118
+_PLAYER_CARD_GAP = 6
+
+
 def draw_panel(surface, fonts, game, mouse) -> None:
     """Draw the right-hand information panel: player cards and the event log."""
     panel = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 20, SCREEN_HEIGHT)
     pygame.draw.rect(surface, PANEL_BG, panel)
 
-    card_h = 118
     for i, player in enumerate(game.players):
-        rect = pygame.Rect(PANEL_X + 6, 10 + i * (card_h + 6), PANEL_WIDTH + 8, card_h)
+        rect = pygame.Rect(PANEL_X + 6, _PLAYER_CARDS_TOP + i * (_PLAYER_CARD_H + _PLAYER_CARD_GAP),
+                           PANEL_WIDTH + 8, _PLAYER_CARD_H)
         _draw_player_card(surface, fonts, game, player, rect, i == game.current)
-
-    log_top = 10 + 4 * (card_h + 6) + 8
-    _draw_log(surface, fonts, game, pygame.Rect(PANEL_X + 6, log_top,
-                                                PANEL_WIDTH + 8, 150))
+    _draw_log(surface, fonts, game)
 
 
 def player_disc_center(rect: pygame.Rect) -> tuple[int, int]:
@@ -288,15 +292,45 @@ def _draw_player_card(surface, fonts, game, player, rect, is_current) -> None:
               (rect.right - 116, rect.bottom - 22), GOLD)
 
 
-def _draw_log(surface, fonts, game, rect) -> None:
+# Clear space between the game-log text and each side of its card.
+LOG_MARGIN = 10
+_LOG_FIRST_LINE = 30          # first log line's offset below the card top (under the header)
+_LOG_MIN_PITCH = 17           # pixels from one log line to the next, at least
+
+
+def log_rect() -> pygame.Rect:
+    """The game-log card: from one gap below the player cards to the prompt strip."""
+    top = _PLAYER_CARDS_TOP + 4 * (_PLAYER_CARD_H + _PLAYER_CARD_GAP)
+    bottom = action_bar_layout()["prompt"].top - 2
+    return pygame.Rect(PANEL_X + 6, top, PANEL_WIDTH + 8, bottom - top)
+
+
+def log_lines(fonts: dict, game) -> list[tuple[str, tuple[int, int]]]:
+    """Return the visible log lines with the position each one is drawn at.
+
+    As many of the newest events as fit under the header are shown, newest
+    last. Each line is shortened by MEASURED width so it stays LOG_MARGIN
+    clear of the card's sides -- a fixed character count cuts narrow lines
+    that would fit and lets wide ones run off the card.
+    """
+    rect = log_rect()
+    font = fonts["tiny"]
+    pitch = max(_LOG_MIN_PITCH, font.get_height() + 1)
+    count = max(1, (rect.height - _LOG_FIRST_LINE - 4) // pitch)
+    width = rect.width - 2 * LOG_MARGIN
+    return [(_fit_text(font, line, width),
+             (rect.x + LOG_MARGIN, rect.y + _LOG_FIRST_LINE + i * pitch))
+            for i, line in enumerate(game.log[-count:])]
+
+
+def _draw_log(surface, fonts, game) -> None:
     """Draw the most recent game events."""
+    rect = log_rect()
     pygame.draw.rect(surface, PANEL_CARD, rect, border_radius=8)
     pygame.draw.rect(surface, INK, rect, 1, border_radius=8)
-    _text(surface, fonts, "small", "Game Log", (rect.x + 10, rect.y + 6), GOLD)
-    visible = game.log[-7:]
-    for i, line in enumerate(visible):
-        glyph = fonts["tiny"].render(line[:46], True, SOFT)
-        surface.blit(glyph, (rect.x + 10, rect.y + 30 + i * 17))
+    _text(surface, fonts, "small", "Game Log", (rect.x + LOG_MARGIN, rect.y + 6), GOLD)
+    for text, position in log_lines(fonts, game):
+        surface.blit(fonts["tiny"].render(text, True, SOFT), position)
 
 
 # --------------------------------------------------------------------------
