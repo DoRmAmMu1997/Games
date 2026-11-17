@@ -66,6 +66,11 @@ SOLVER_ITERATIONS = 8
 # correction (1.0) can feel too sharp with a simple solver; slightly under
 # lets stacks settle softly instead of popping apart.
 POSITION_CORRECTION_SOFTNESS = 0.92
+# Extra pixels added to the broad-phase margin (see `_broad_phase_pairs` in
+# physics.py). The margin already covers the largest body and the furthest a
+# body can move in one physics slice; this small slop guards against solver
+# corrections nudging a pair into contact that the grid skipped.
+BROAD_PHASE_SLOP = 4.0
 
 # Player input and launcher tuning.
 # These values shape how aiming feels.
