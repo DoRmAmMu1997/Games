@@ -41,7 +41,11 @@ TILE_SHORT = CORNER_SIZE                                            # tile depth
 # Radii, in pixels, of the round shapes (all drawn antialiased): a player's
 # token on the board, the token-colour disc on a player card, and one pip
 # on a die face.
-TOKEN_RADIUS = 15
+# All four tokens can stand on one tile in a 2x2 grid without overlapping:
+# an edge tile is only about 63 px wide, and two tokens of radius 13 with
+# TOKEN_GAP between them take 54 px, which fits inside its ownership border.
+TOKEN_RADIUS = 13
+TOKEN_GAP = 2
 PLAYER_DISC_RADIUS = 14
 PIP_RADIUS = 5
 

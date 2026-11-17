@@ -25,6 +25,7 @@ from settings import (
     TILE_FACE,
     TILE_LABEL_INSET,
     TOKEN_COLORS,
+    TOKEN_GAP,
     TOKEN_RADIUS,
     UTILITY_COLOR,
     WHITE,
@@ -86,16 +87,15 @@ def _edge_of(position: int) -> str:
 def token_center(position: int, slot: int) -> tuple[int, int]:
     """Return where to draw player token `slot` (0-3) on a space.
 
-    Up to four tokens share a space; they are spread into a small 2x2 grid so
-    they stay individually visible.
+    Up to four tokens share a space. Each has its own place in a 2x2 grid
+    around the tile's centre, one token width plus TOKEN_GAP apart, so
+    tokens on the same tile never overlap -- even on the narrow edge tiles.
     """
     rect = space_rect(position)
     col, row = slot % 2, slot // 2
-    gap_x = rect.width * 0.28
-    gap_y = rect.height * 0.28
-    cx = rect.centerx + (col - 0.5) * gap_x
-    cy = rect.centery + (row - 0.5) * gap_y
-    return int(cx), int(cy)
+    half_step = TOKEN_RADIUS + TOKEN_GAP // 2
+    return (rect.centerx + (2 * col - 1) * half_step,
+            rect.centery + (2 * row - 1) * half_step)
 
 
 class BoardRenderer:

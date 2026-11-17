@@ -213,6 +213,25 @@ class GameLogTests(ShellTestCase):
         self.assertEqual(texts, [f"Event {30 - len(texts) + i}" for i in range(len(texts))])
 
 
+class TokenSlotTests(unittest.TestCase):
+    """Each player's token has its own spot on a tile, clear of the others."""
+
+    def test_tokens_sharing_a_tile_never_overlap(self) -> None:
+        """All four tokens fit on every tile: apart from each other, inside the tile."""
+        radius = board_render.TOKEN_RADIUS
+        for position in range(40):
+            with self.subTest(position=position):
+                tile = board_render.space_rect(position)
+                centers = [board_render.token_center(position, slot) for slot in range(4)]
+                for index, (x, y) in enumerate(centers):
+                    disc = pygame.Rect(x - radius, y - radius, 2 * radius, 2 * radius)
+                    # Inside the tile's own 2 px border, with a pixel to spare.
+                    self.assertTrue(tile.inflate(-6, -6).contains(disc), (tile, disc))
+                    for other_x, other_y in centers[index + 1:]:
+                        apart = ((x - other_x) ** 2 + (y - other_y) ** 2) ** 0.5
+                        self.assertGreaterEqual(apart, 2 * radius + 1)
+
+
 def rim_blend(surface: pygame.Surface, center: tuple[int, int], radius: int,
               pure: set[tuple[int, int, int]]) -> int:
     """Count pixels on a disc's rim that are a blend rather than a pure draw colour.
