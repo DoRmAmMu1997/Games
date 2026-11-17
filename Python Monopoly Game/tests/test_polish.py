@@ -154,6 +154,25 @@ class BoardLabelTests(ShellTestCase):
                 board_render.BoardRenderer(board_data.build_board(theme)).build_base(fonts)
 
 
+class ActionBarSpacingTests(ShellTestCase):
+    """The eight action-bar slots are spaced evenly inside the bar."""
+
+    def test_action_bar_buttons_are_evenly_spaced_inside_the_bar(self) -> None:
+        """Side margins equal the column gap; top and bottom margins equal the row gap."""
+        bar = ui.action_bar_layout()["bar"]
+        slots = [ui.bar_slot_rect(slot) for slot in range(8)]
+
+        across = [slots[0].left - bar.left, slots[1].left - slots[0].right, bar.right - slots[1].right]
+        down = [slots[0].top - bar.top,
+                *(slots[row * 2 + 2].top - slots[row * 2].bottom for row in range(3)),
+                bar.bottom - slots[6].bottom]
+
+        self.assertEqual(len(set(across)), 1, across)
+        self.assertEqual(len(set(down)), 1, down)
+        self.assertGreaterEqual(down[0], 4)
+        self.assertTrue(all(left.size == slots[0].size for left in slots))
+
+
 def rim_blend(surface: pygame.Surface, center: tuple[int, int], radius: int,
               pure: set[tuple[int, int, int]]) -> int:
     """Count pixels on a disc's rim that are a blend rather than a pure draw colour.

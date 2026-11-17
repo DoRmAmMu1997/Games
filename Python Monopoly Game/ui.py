@@ -565,17 +565,21 @@ def _blit_wrapped(surface, font, text, rect, color) -> None:
 # Action-bar button slots: two columns by four rows inside the bottom bar.
 # The prompt text sits in its own strip ABOVE the bar, so the first row of
 # buttons can start at the very top of the bar without ever covering it.
-# The last row ends at 872, inside the bar's bottom edge at 874.
-_BAR_COLS = (892, 1086)
-_BAR_ROWS = (700, 744, 788, 832)
-_BTN_W, _BTN_H = 182, 40
+# Every gap is the same in each direction -- at the sides and between the
+# columns, and above, between and below the rows -- so the slots sit evenly
+# inside the bar. The bar is as wide as the other panel cards and exactly
+# as tall as four rows and their gaps (rows at 700, 744, 788 and 832).
+_BAR_WIDTH = PANEL_WIDTH + 8
+_BAR_GAP_X, _BAR_GAP_Y = 8, 4
+_BTN_W, _BTN_H = (_BAR_WIDTH - 3 * _BAR_GAP_X) // 2, 40
 
 
 def action_bar_layout() -> dict:
     """Return the action bar's prompt strip and button bar rectangles."""
     return {
-        "prompt": pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 214, PANEL_WIDTH + 8, 26),
-        "bar": pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 184, PANEL_WIDTH + 8, 178),
+        "prompt": pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 214, _BAR_WIDTH, 26),
+        "bar": pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 184, _BAR_WIDTH,
+                           4 * _BTN_H + 5 * _BAR_GAP_Y),
     }
 
 
@@ -596,8 +600,15 @@ def prompt_line(fonts: dict, prompt: str) -> tuple[str, pygame.font.Font]:
 
 
 def bar_slot_rect(slot: int) -> pygame.Rect:
-    """Return the rectangle for action-bar button number `slot` (0-7)."""
-    return pygame.Rect(_BAR_COLS[slot % 2], _BAR_ROWS[slot // 2], _BTN_W, _BTN_H)
+    """Return the rectangle for action-bar button number `slot` (0-7).
+
+    Slots run left to right, then top to bottom, each one gap away from
+    its neighbours and from the bar's edges.
+    """
+    bar = action_bar_layout()["bar"]
+    col, row = slot % 2, slot // 2
+    return pygame.Rect(bar.x + _BAR_GAP_X + col * (_BTN_W + _BAR_GAP_X),
+                       bar.y + _BAR_GAP_Y + row * (_BTN_H + _BAR_GAP_Y), _BTN_W, _BTN_H)
 
 
 def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
