@@ -95,12 +95,10 @@ class SoundBank:
             # Convert from a floating-point wave in roughly [-1, 1] to a signed
             # 16-bit integer sample pygame's mixer can store.
             sample = int(max(-1.0, min(1.0, value)) * 32767)
-            if channels == 2:
-                # Stereo would need two samples per moment; we copy the same
-                # value into both left and right channels.
-                samples.extend((sample, sample))
-            else:
-                samples.append(sample)
+            # The mixer expects one sample per channel for every moment
+            # (left + right for stereo, more for surround setups), so the same
+            # value is copied into every channel.
+            samples.extend((sample,) * channels)
         return pygame.mixer.Sound(buffer=samples.tobytes())
 
 
