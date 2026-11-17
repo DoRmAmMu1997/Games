@@ -374,6 +374,35 @@ class TextContrastTests(unittest.TestCase):
                 self.assertEqual(swatch, player.token_color)
 
 
+class SetupScreenTests(ShellTestCase):
+    """The setup screen's left column lines up, and its values fit their steppers."""
+
+    def test_start_and_resume_line_up_with_the_steppers(self) -> None:
+        """Start and Resume span exactly from the left stepper to the right one."""
+        buttons = {b.key: b.rect for b in ui.setup_buttons(has_save=True)}
+        left = buttons["humans_down"].left
+        right = buttons["humans_up"].right
+        for down, up in (("theme_prev", "theme_next"), ("ai_profile_prev", "ai_profile_next")):
+            self.assertEqual((buttons[down].left, buttons[up].right), (left, right))
+        for key in ("start", "resume"):
+            with self.subTest(key=key):
+                self.assertEqual((buttons[key].left, buttons[key].right), (left, right))
+        self.assertGreater(buttons["resume"].top, buttons["start"].bottom)
+
+    def test_every_theme_and_profile_name_fits_between_its_steppers(self) -> None:
+        """The value shown between two stepper buttons never touches them."""
+        fonts = ui.make_fonts()
+        buttons = {b.key: b.rect for b in ui.setup_buttons(has_save=False)}
+        room = buttons["theme_next"].left - buttons["theme_prev"].right - 2 * ui.SETUP_VALUE_MARGIN
+        names = [str(board_data.THEMES[key]["name"]) for key in board_data.THEME_ORDER]
+        names += ["Cautious", "Standard", "Sharp"]
+        for name in names:
+            with self.subTest(name=name):
+                text, font = ui.setup_value_line(fonts, name)
+                self.assertEqual(text, name)
+                self.assertLessEqual(font.size(text)[0], room)
+
+
 def rim_blend(surface: pygame.Surface, center: tuple[int, int], radius: int,
               pure: set[tuple[int, int, int]]) -> int:
     """Count pixels on a disc's rim that are a blend rather than a pure draw colour.

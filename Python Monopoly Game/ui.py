@@ -123,26 +123,44 @@ def _text(surface, fonts, key, text, pos, color=WHITE, center=False):
 # --------------------------------------------------------------------------
 # Setup screen
 # --------------------------------------------------------------------------
+# The setup screen's left column, from its left steppers to its right ones.
+_SETUP_LEFT, _SETUP_RIGHT = 90, 424
+# Clear space between a value (theme or AI name) and the steppers beside it.
+SETUP_VALUE_MARGIN = 8
+
+
 def setup_buttons(has_save: bool) -> list:
     """Build the clickable buttons for the setup screen."""
     buttons = [
-        # The right-hand stepper buttons sit far enough out so even the
-        # widest theme name ("World Landmarks") fits between them.
-        Button((90, 250, 44, 44), "-", "humans_down"),
-        Button((380, 250, 44, 44), "+", "humans_up"),
-        Button((90, 380, 44, 44), "<", "theme_prev"),
-        Button((380, 380, 44, 44), ">", "theme_next"),
-        Button((90, 500, 44, 44), "<", "ai_profile_prev"),
-        Button((380, 500, 44, 44), ">", "ai_profile_next"),
-        Button((90, 590, 320, 56), "Start Game", "start", color=(46, 116, 78)),
+        # The left column runs from the "-"/"<" steppers to the "+"/">"
+        # ones; the values between them are fitted by `setup_value_line`.
+        Button((_SETUP_LEFT, 250, 44, 44), "-", "humans_down"),
+        Button((_SETUP_RIGHT - 44, 250, 44, 44), "+", "humans_up"),
+        Button((_SETUP_LEFT, 380, 44, 44), "<", "theme_prev"),
+        Button((_SETUP_RIGHT - 44, 380, 44, 44), ">", "theme_next"),
+        Button((_SETUP_LEFT, 500, 44, 44), "<", "ai_profile_prev"),
+        Button((_SETUP_RIGHT - 44, 500, 44, 44), ">", "ai_profile_next"),
+        # Start and Resume span the same column, so their edges line up
+        # with the steppers above them.
+        Button((_SETUP_LEFT, 590, _SETUP_RIGHT - _SETUP_LEFT, 56), "Start Game", "start",
+               color=(46, 116, 78)),
         # A way out of the setup screen without closing the window.
         Button((SCREEN_WIDTH - 160, 30, 130, 40), "Quit", "quit",
                color=(120, 60, 60)),
     ]
     if has_save:
-        buttons.append(Button((90, 660, 320, 50), "Resume Saved Game",
-                              "resume", color=(58, 92, 140)))
+        buttons.append(Button((_SETUP_LEFT, 660, _SETUP_RIGHT - _SETUP_LEFT, 50),
+                              "Resume Saved Game", "resume", color=(58, 92, 140)))
     return buttons
+
+
+def setup_value_line(fonts: dict, text: str) -> tuple[str, pygame.font.Font]:
+    """Return a setup value's text and the font that fits it between its steppers.
+
+    The big font is used when it fits by measured width, else the medium one.
+    """
+    room = (_SETUP_RIGHT - 44) - (_SETUP_LEFT + 44) - 2 * SETUP_VALUE_MARGIN
+    return _fit_line(fonts, ("big", "med"), text, room)
 
 
 def setup_name_field_rect(i: int) -> pygame.Rect:
@@ -163,21 +181,27 @@ def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse,
     _text(surface, fonts, "med", "Human players", (90, 215))
     # Centre the digit and theme name between their stepper buttons so they
     # never overlap the arrows, however long the theme name is.
-    _text(surface, fonts, "huge", str(human_count), (257, 272), WHITE, center=True)
+    _text(surface, fonts, "huge", str(human_count), ((_SETUP_LEFT + _SETUP_RIGHT) // 2, 272),
+          WHITE, center=True)
 
     _text(surface, fonts, "med", "Board", (90, 345))
-    theme_name = board_data.THEMES[theme_key]["name"]
-    _text(surface, fonts, "big", theme_name, (257, 402), GOLD, center=True)
+    _draw_setup_value(surface, fonts, str(board_data.THEMES[theme_key]["name"]), 402)
 
     _text(surface, fonts, "med", "AI Difficulty", (90, 465))
-    _text(surface, fonts, "big", ai_profile_key.replace("_", " ").title(),
-          (257, 522), GOLD, center=True)
+    _draw_setup_value(surface, fonts, ai_profile_key.replace("_", " ").title(), 522)
 
     _draw_setup_info_panel(surface, fonts, stats, human_count,
                            name_fields, active_field)
 
     for button in buttons:
         button.draw(surface, fonts, mouse)
+
+
+def _draw_setup_value(surface, fonts, value: str, y: int) -> None:
+    """Draw a stepper's value centred between its two buttons, fitted to fit."""
+    text, font = setup_value_line(fonts, value)
+    glyph = font.render(text, True, GOLD)
+    surface.blit(glyph, glyph.get_rect(center=((_SETUP_LEFT + _SETUP_RIGHT) // 2, y)))
 
 
 def _draw_setup_info_panel(surface, fonts, stats, human_count,
