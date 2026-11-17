@@ -503,6 +503,40 @@ def asset_layout(game, player) -> dict:
     }
 
 
+def assets_header_plan(fonts: dict, game, player) -> list:
+    """Stack the asset manager's title, instruction and list heading."""
+    panel = asset_layout(game, player)["panel"]
+    title = _stack(fonts, [("big", "ASSET MANAGER", GOLD)], panel.centerx, panel.y + 14,
+                   panel.width - 260, center=True)
+    return [*title, *_stack(fonts, [("small", f"{player.name}: select a title to manage.", WHITE),
+                                    ("small", "Owned titles", SUCCESS)],
+                            panel.x + 28, title[0][3].bottom + 6, 440)]
+
+
+def asset_detail_plan(fonts: dict, game, player, position: int) -> list:
+    """Stack the selected title's deed lines, then its action status lines.
+
+    Every line is wrapped to the detail box, and lines that would run past
+    the box's bottom are left out rather than drawn over its border.
+    """
+    detail = asset_layout(game, player)["detail"]
+    width = detail.width - 36
+    lines = property_detail_lines(game, position)
+    items: list = [("med", lines[0], GOLD)]
+    items += [("tiny", part, WHITE, 6 if i == 0 and j == 0 else 0)
+              for i, line in enumerate(lines[1:])
+              for j, part in enumerate(_wrap_lines(fonts["tiny"], line, width))]
+    items.append(("small", "Action status", SUCCESS, 10))
+    names = {"build": "Build", "sell": "Sell", "mortgage": "Mortgage", "unmortgage": "Lift"}
+    for key, status in game.asset_actions_for(player, position).items():
+        text = f"{names[key]}: ready" if status["allowed"] else f"{names[key]}: {status['reason']}"
+        color = SUCCESS if status["allowed"] else SOFT
+        items += [("tiny", part, color, 4 if j == 0 else 0)
+                  for j, part in enumerate(_wrap_lines(fonts["tiny"], text, width))]
+    plan = _stack(fonts, items, detail.x + 18, detail.y + 14, width)
+    return [item for item in plan if item[3].bottom <= detail.bottom - 6]
+
+
 def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None:
     """Draw the owned-title manager and engine-authored action reasons.
 
@@ -516,13 +550,7 @@ def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None
     detail = layout["detail"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
-    _text(surface, fonts, "big", "ASSET MANAGER",
-          (panel.centerx, panel.y + 30), GOLD, center=True)
-    _text(surface, fonts, "small",
-          f"{player.name}: select a title to manage.",
-          (panel.x + 28, panel.y + 70), WHITE)
-    _text(surface, fonts, "small", "Owned titles",
-          (panel.x + 28, panel.y + 88), SUCCESS)
+    _blit_plan(surface, fonts, assets_header_plan(fonts, game, player))
 
     for row, position in layout["title_rows"]:
         if selected_position == position:
@@ -535,37 +563,7 @@ def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None
         _text(surface, fonts, "small", "No title selected.",
               (detail.x + 18, detail.y + 18), SOFT)
     else:
-        lines = property_detail_lines(game, selected_position)
-        _blit_wrapped(surface, fonts["med"], lines[0],
-                      pygame.Rect(detail.x + 18, detail.y + 16,
-                                  detail.width - 36, 30), GOLD)
-        y = detail.y + 58
-        for line in lines[1:]:
-            _blit_wrapped(surface, fonts["tiny"], line,
-                          pygame.Rect(detail.x + 18, y, detail.width - 36, 18),
-                          WHITE)
-            y += 20
-            if y > detail.y + 178:
-                break
-
-        _text(surface, fonts, "small", "Action status",
-              (detail.x + 18, detail.y + 202), SUCCESS)
-        action_names = {
-            "build": "Build",
-            "sell": "Sell",
-            "mortgage": "Mortgage",
-            "unmortgage": "Lift",
-        }
-        actions = game.asset_actions_for(player, selected_position)
-        y = detail.y + 230
-        for key in ("build", "sell", "mortgage", "unmortgage"):
-            status = actions[key]
-            line = (f"{action_names[key]}: ready" if status["allowed"]
-                    else f"{action_names[key]}: {status['reason']}")
-            _blit_wrapped(surface, fonts["tiny"], line,
-                          pygame.Rect(detail.x + 18, y, detail.width - 36, 34),
-                          SUCCESS if status["allowed"] else SOFT)
-            y += 28
+        _blit_plan(surface, fonts, asset_detail_plan(fonts, game, player, selected_position))
 
     _text(surface, fonts, "tiny",
           "M = mortgaged. Street markers show building level; H means hotel.",
@@ -579,6 +577,46 @@ def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None
             level = game.houses[position]
             marker = "H" if level == 5 else str(level)
             _text(surface, fonts, "tiny", marker, (row.right - 16, row.y + 5), GOLD)
+
+
+# Pixels of clear space between two stacked lines of dialog text.
+DIALOG_LINE_GAP = 4
+
+
+def _stack(fonts: dict, items: list, x: int, top: int, width: int,
+           center: bool = False, gap: int = DIALOG_LINE_GAP) -> list:
+    """Lay text out top to bottom with measured gaps; return the placed lines.
+
+    `items` are (font key, text, colour) or (font key, text, colour, extra
+    gap above). Each text is shortened to `width` if needed and placed
+    `gap` pixels below the previous line's real height, left-aligned at `x`
+    or centred on it. Returns (font key, text, colour, rect) items.
+
+    Beginner note:
+    - Stacking by each font's MEASURED height is what keeps lines from
+      touching: a fixed y per line breaks as soon as a platform's font is
+      a few pixels taller.
+    """
+    placed = []
+    y = top
+    for item in items:
+        key, text, color = item[:3]
+        y += item[3] if len(item) > 3 else 0
+        text = _fit_text(fonts[key], text, width)
+        rect = pygame.Rect((0, y), fonts[key].size(text))
+        if center:
+            rect.centerx = x
+        else:
+            rect.x = x
+        placed.append((key, text, color, rect))
+        y = rect.bottom + gap
+    return placed
+
+
+def _blit_plan(surface, fonts: dict, plan: list) -> None:
+    """Draw (font key, text, colour, rect) items from a layout plan."""
+    for key, text, color, rect in plan:
+        surface.blit(fonts[key].render(text, True, color), rect)
 
 
 def _wrap_lines(font, text: str, width: int) -> list[str]:
@@ -732,33 +770,31 @@ def auction_layout() -> dict:
     }
 
 
+def auction_plan(fonts: dict, game) -> list:
+    """Stack the auction dialog's lines, centred, from the title down."""
+    panel = auction_layout()["panel"]
+    auction = game.auction
+    space = game.board[auction["position"]]
+    bank = auction.get("context") == "bankruptcy"
+    bidder = auction["high_bidder"]
+    items: list = [("big", "BANK AUCTION" if bank else "AUCTION", GOLD),
+             ("med", space.name, WHITE),
+             ("small", f"List price ${space.price}", SOFT)]
+    if bank:
+        items.append(("tiny", game.auction_context_message(), SOFT))
+    items += [("med", f"High bid ${auction['high_bid']} by {game.players[bidder].name}"
+               if bidder is not None else "No bids yet", SUCCESS, 6),
+              ("small", f"{game.players[auction['current']].name} to bid", WHITE)]
+    return _stack(fonts, items, panel.centerx, panel.y + 14, panel.width - 40, center=True)
+
+
 def draw_auction(surface, fonts, game, buttons, mouse) -> None:
     """Draw the auction dialog over the board."""
     _dim(surface)
     panel = auction_layout()["panel"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
-    auction = game.auction
-    space = game.board[auction["position"]]
-    title = ("BANK AUCTION" if auction.get("context") == "bankruptcy" else "AUCTION")
-    _text(surface, fonts, "big", title, (panel.centerx, panel.y + 30),
-          GOLD, center=True)
-    _text(surface, fonts, "med", space.name, (panel.centerx, panel.y + 72),
-          WHITE, center=True)
-    _text(surface, fonts, "small", f"List price ${space.price}",
-          (panel.centerx, panel.y + 102), SOFT, center=True)
-    if auction.get("context") == "bankruptcy":
-        _text(surface, fonts, "tiny", game.auction_context_message(),
-              (panel.centerx, panel.y + 122), SOFT, center=True)
-    high = auction["high_bid"]
-    bidder = auction["high_bidder"]
-    bid_text = (f"High bid ${high} by {game.players[bidder].name}"
-                if bidder is not None else "No bids yet")
-    _text(surface, fonts, "med", bid_text, (panel.centerx, panel.y + 138),
-          SUCCESS, center=True)
-    _text(surface, fonts, "small",
-          f"{game.players[auction['current']].name} to bid",
-          (panel.centerx, panel.y + 170), WHITE, center=True)
+    _blit_plan(surface, fonts, auction_plan(fonts, game))
     for button in buttons:
         button.draw(surface, fonts, mouse)
 
@@ -828,6 +864,24 @@ def trade_layout(game, trade) -> dict:
     return layout
 
 
+def trade_header_plan(fonts: dict, game, trade) -> list:
+    """Stack the trade dialog's title, partner and cash lines, then the column heads."""
+    panel = trade_layout(game, trade)["panel"]
+    partner = game.players[trade["to"]]
+    # The centred lines leave room for the < > partner arrows either side.
+    centred = _stack(fonts, [("big", "PROPOSE A TRADE", GOLD),
+                             ("med", f"With:  {partner.name}", WHITE, 2),
+                             # The partner's cash helps size up a fair offer.
+                             ("small", f"They hold ${partner.cash}", SOFT)],
+                     panel.centerx, panel.y + 10, 330, center=True)
+    heads_top = centred[-1][3].bottom + 8
+    return [
+        *centred,
+        *_stack(fonts, [("small", "You give", SUCCESS)], panel.x + 30, heads_top, _TRADE_HALF_W),
+        *_stack(fonts, [("small", "You receive", SUCCESS)], panel.x + 420, heads_top, _TRADE_HALF_W),
+    ]
+
+
 def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     """Draw the trade-building dialog."""
     _dim(surface)
@@ -836,16 +890,7 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
     partner = game.players[trade["to"]]
-
-    _text(surface, fonts, "big", "PROPOSE A TRADE",
-          (panel.centerx, panel.y + 26), GOLD, center=True)
-    _text(surface, fonts, "med", f"With:  {partner.name}",
-          (panel.centerx, panel.y + 67), WHITE, center=True)
-    # Showing the partner's cash helps the human size up a fair counter-offer.
-    _text(surface, fonts, "small", f"They hold ${partner.cash}",
-          (panel.centerx, panel.y + 92), SOFT, center=True)
-    _text(surface, fonts, "small", "You give", (panel.x + 30, panel.y + 120), SUCCESS)
-    _text(surface, fonts, "small", "You receive", (panel.x + 420, panel.y + 120), SUCCESS)
+    _blit_plan(surface, fonts, trade_header_plan(fonts, game, trade))
 
     # Each row is a checkbox + property name. Unselected rows draw NO fill so
     # they sit invisibly on the panel background -- that, plus an empty box,

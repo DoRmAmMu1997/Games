@@ -7,6 +7,7 @@ passes whatever typeface "arial" resolves to on the machine running it.
 
 from __future__ import annotations
 
+import itertools
 import os
 import sys
 import unittest
@@ -282,6 +283,64 @@ class BoardMiddleTests(ShellTestCase):
             with self.subTest(deck=deck):
                 fill, ink = ui.card_colors(deck)
                 self.assertGreaterEqual(contrast(ink, fill), 4.5)
+
+
+class DialogSpacingTests(ShellTestCase):
+    """Dialog text is stacked with measured gaps and stays clear of controls."""
+
+    def assert_stacked(self, plan: list, inside: pygame.Rect, limit: int) -> None:
+        """Each line sits below the previous with a gap, inside `inside`, above `limit`."""
+        rects = [rect for _key, _text, _color, rect in plan]
+        self.assertTrue(rects)
+        for upper, lower in itertools.pairwise(rects):
+            self.assertGreaterEqual(lower.top, upper.bottom + ui.DIALOG_LINE_GAP, (upper, lower))
+        for rect in rects:
+            self.assertTrue(inside.contains(rect), (inside, rect))
+            self.assertLessEqual(rect.bottom, limit)
+
+    def test_auction_dialog_text_is_spaced_above_the_buttons(self) -> None:
+        """A bank auction's title, deed, context and bid lines never touch."""
+        fonts = ui.make_fonts()
+        game = long_name_game()
+        game._start_auction(5, context="bankruptcy")
+        assert game.auction is not None
+        game.auction.update(high_bid=260, high_bidder=1)
+        layout = ui.auction_layout()
+
+        plan = ui.auction_plan(fonts, game)
+
+        self.assert_stacked(plan, layout["panel"].inflate(-20, -12), layout["bid"].top - 6)
+
+    def test_asset_manager_text_is_spaced_in_header_and_detail(self) -> None:
+        """Header lines clear the title rows; deed and status lines stay in the detail box."""
+        fonts = ui.make_fonts()
+        game = rent_debt()                     # raising funds: long blocker reasons
+        player = game.players[0]
+        layout = ui.asset_layout(game, player)
+        first_row = min(row.top for row, _pos in layout["title_rows"])
+
+        header = ui.assets_header_plan(fonts, game, player)
+        self.assert_stacked(header, layout["panel"], first_row - 4)
+        detail = ui.asset_detail_plan(fonts, game, player, 1)
+        self.assert_stacked(detail, layout["detail"].inflate(-16, -8), layout["detail"].bottom - 6)
+
+    def test_trade_dialog_header_is_spaced_above_the_lists(self) -> None:
+        """Title, partner, cash and column headers all sit above the first title row."""
+        fonts = ui.make_fonts()
+        game = long_name_game(awaiting="post_roll")
+        game.owners[1] = 0
+        app = MonopolyApp(persist=False)
+        app.start_game(game)
+        app._on_button("trade")
+        layout = ui.trade_layout(game, app.trade)
+        first_row = min(row.top for row, _pos in layout["give_rows"])
+
+        plan = ui.trade_header_plan(fonts, game, app.trade)
+
+        centred = [item for item in plan if item[3].centerx == layout["panel"].centerx]
+        self.assert_stacked(centred, layout["panel"], first_row - 4)
+        for _key, _text, _color, rect in plan:
+            self.assertLessEqual(rect.bottom, first_row - 4)
 
 
 def rim_blend(surface: pygame.Surface, center: tuple[int, int], radius: int,
