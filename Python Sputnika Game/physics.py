@@ -159,6 +159,24 @@ class PhysicsWorld:
             normal = offset.normalize() if distance > EPSILON else pygame.Vector2(0.0, -1.0)
             body.position = self.center + normal * limit
 
+    def spawn_point(self, x: float, radius: float) -> pygame.Vector2:
+        """Return the launch point for a body of `radius` aimed from column `x`.
+
+        The launcher sits on the fixed `SPAWN_Y` line, but near the top of a
+        circular bubble that line can poke outside the legal circle for larger
+        bodies. The point is therefore pulled back inside `R - r - 3`, the same
+        legal circle that `keep_inside`, the wall solver, and the trajectory
+        preview all use, so a fresh body never "snaps" on its first frame.
+        """
+        point = pygame.Vector2(x, SPAWN_Y)
+        offset = point - self.center
+        distance = offset.length()
+        limit = self.radius - radius - 3.0
+        if distance > limit:
+            normal = offset.normalize() if distance > EPSILON else pygame.Vector2(0.0, -1.0)
+            point = self.center + normal * limit
+        return point
+
     def allowed_spawn_x(self, radius: float) -> tuple[float, float]:
         """Return the left/right spawn limits for a body at the spawn height.
 

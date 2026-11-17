@@ -115,7 +115,8 @@ class OrbitalOrchardGame:
         self.now = 0.0
 
         # Launcher state.
-        # `spawn_x` is horizontal position only; vertical spawn height is fixed by `SPAWN_Y`.
+        # `spawn_x` is horizontal position only; vertical spawn height is fixed by `SPAWN_Y`
+        # (large bodies are nudged inward from it by `PhysicsWorld.spawn_point`).
         self.spawn_x = self.world.center.x
         self.launch_angle = 0.0
         self.angle_dragging = False
@@ -424,7 +425,7 @@ class OrbitalOrchardGame:
         body = CelestialBody(
             body_id=self._next_body_id,
             tier=self.current_tier,
-            position=pygame.Vector2(self.spawn_x, SPAWN_Y),
+            position=self.world.spawn_point(self.spawn_x, TIERS[self.current_tier].radius),
             velocity=self._launch_velocity(),
             created_at=self.now,
             seed=self.current_seed,
@@ -772,7 +773,10 @@ class OrbitalOrchardGame:
 
         # The launcher line points in the same direction as the initial launch velocity.
         direction = self._launch_direction()
-        start = pygame.Vector2(self.spawn_x, SPAWN_Y) + camera
+        # The launcher orb, aim line, and preview all start from the same legal
+        # spawn point the real body will use (see `PhysicsWorld.spawn_point`).
+        spawn = self.world.spawn_point(self.spawn_x, TIERS[self.current_tier].radius)
+        start = spawn + camera
         back = start - direction * 64.0
         front = start + direction * 166.0
         beam_color = WARNING if self.warning_active else (175, 216, 255)
@@ -780,7 +784,7 @@ class OrbitalOrchardGame:
         # Draw a dotted path preview so the player can read the angled launch
         # more easily than from a single straight line alone.
         preview_points = self.world.preview_trajectory(
-            pygame.Vector2(self.spawn_x, SPAWN_Y),
+            spawn,
             self._launch_velocity(),
             TIERS[self.current_tier].radius,
             self.current_seed,
@@ -880,7 +884,7 @@ class OrbitalOrchardGame:
 
     def _set_launch_angle_from_point(self, point: tuple[int, int]) -> None:
         """Aim the launcher toward a point in internal canvas coordinates."""
-        origin = pygame.Vector2(self.spawn_x, SPAWN_Y)
+        origin = self.world.spawn_point(self.spawn_x, TIERS[self.current_tier].radius)
         target = pygame.Vector2(point)
         delta = target - origin
         if delta.length_squared() < 1.0:
