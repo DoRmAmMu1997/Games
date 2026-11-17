@@ -167,6 +167,41 @@ class SpawnOverlayTests(GameTestCase):
                 )
 
 
+class CorruptSaveTests(GameTestCase):
+    """A damaged save file loads as fresh progress instead of crashing startup."""
+
+    DEFAULTS = {"high_score": 0, "games_played": 0, "best_tier": 0}
+
+    def _load_text(self, text: str) -> dict:
+        """Write ``text`` as the save file and return what the game loads from it."""
+
+        self.save_path.parent.mkdir(parents=True, exist_ok=True)
+        self.save_path.write_text(text, encoding="utf-8")
+        return self.game._load_progress()
+
+    def test_huge_number_loads_as_defaults(self) -> None:
+        """``1e999`` parses as infinity, which cannot become an int."""
+
+        self.assertEqual(self._load_text('{"high_score": 1e999}'), self.DEFAULTS)
+
+    def test_infinity_literal_loads_as_defaults(self) -> None:
+        """Python's JSON reader accepts ``Infinity``; it must not crash either."""
+
+        self.assertEqual(self._load_text('{"games_played": Infinity}'), self.DEFAULTS)
+
+    def test_deeply_nested_save_loads_as_defaults(self) -> None:
+        """A save nested 100000 levels deep exhausts recursion; it must not crash."""
+
+        self.assertEqual(self._load_text("[" * 100000 + "]" * 100000), self.DEFAULTS)
+
+    def test_a_game_starts_with_a_corrupt_save(self) -> None:
+        """Building the whole game on top of a corrupt save still works."""
+
+        self.save_path.parent.mkdir(parents=True, exist_ok=True)
+        self.save_path.write_text('{"high_score": 1e999}', encoding="utf-8")
+        self.assertEqual(self.make_game().high_score, 0)
+
+
 class StressMeterTests(GameTestCase):
     """The HUD stress meter reacts to the settled stack, not to fresh launches."""
 

@@ -678,8 +678,12 @@ class OrbitalOrchardGame:
         try:
             data = json.loads(SAVE_DATA_PATH.read_text(encoding="utf-8")) if SAVE_DATA_PATH.exists() else {}
             return sanitize_progress(data)
-        except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError, AttributeError, OverflowError, RecursionError):
             # A missing or corrupt file simply means "no progress saved yet".
+            # `OverflowError` covers numbers like 1e999 or `Infinity`, which
+            # cannot become an int; `RecursionError` covers absurdly deep
+            # nesting that exhausts the JSON reader. (`json.JSONDecodeError`
+            # is a kind of `ValueError`, so it is already covered.)
             return {"high_score": 0, "games_played": 0, "best_tier": 0}
 
     def _refresh_high_score(self) -> None:
