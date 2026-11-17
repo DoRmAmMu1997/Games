@@ -29,12 +29,19 @@ from effects import EffectsManager
 from entities import CelestialBody
 from merge_logic import find_merge_events
 from physics import PhysicsWorld
+from rules import (
+    advance_fail_timer,
+    combo_points,
+    fail_ratio,
+    next_combo_count,
+    sanitize_progress,
+    stress_level,
+    warning_beep_interval,
+)
 from settings import (
     ANGLE_AIM_SPEED,
-    COMBO_WINDOW,
     DROP_COOLDOWN,
     FAIL_AGE_GATE,
-    FAIL_DECAY,
     FAIL_GRACE,
     FAIL_LINE_Y,
     FPS,
@@ -49,9 +56,6 @@ from settings import (
     SCREEN_WIDTH,
     SPAWN_WEIGHTS,
     SPAWN_Y,
-    STRESS_PREVIEW_RANGE,
-    STRESS_PREVIEW_SHARE,
-    STRESS_TIMER_SHARE,
     TIERS,
     WARNING,
     WINDOW_TITLE,
@@ -554,15 +558,10 @@ class OrbitalOrchardGame:
             self._next_body_id += 1
 
             # Combo scoring: merges chained within `COMBO_WINDOW` seconds of the
-            # previous merge build an escalating multiplier. A multi-merge frame
-            # shares one timestamp, so cascades naturally chain together.
-            if self.now - self._last_merge_time <= COMBO_WINDOW:
-                self._combo_count += 1
-            else:
-                self._combo_count = 1
+            # previous merge build an escalating multiplier (see rules.py).
+            self._combo_count = next_combo_count(self._combo_count, self._last_merge_time, self.now)
             self._last_merge_time = self.now
-            combo_multiplier = min(3.0, 1.0 + 0.5 * (self._combo_count - 1))
-            gained = round(event.score_gain * combo_multiplier)
+            gained = combo_points(event.score_gain, self._combo_count)
 
             # Reward the player and fire appropriate celebratory effects.
             self.score += gained
@@ -602,42 +601,29 @@ class OrbitalOrchardGame:
         """Track whether the player is approaching game over."""
         highest_top = min((body.top for body in self.bodies), default=self.world.center.y + self.world.radius)
 
-        # Live stress rises as the tallest point in the stack approaches the fail line.
-        # This gives the HUD a continuous response instead of only reacting after
-        # the player is already in immediate danger.
-        preview_ratio = clamp(
-            (FAIL_LINE_Y + STRESS_PREVIEW_RANGE - highest_top) / STRESS_PREVIEW_RANGE,
-            0.0,
-            1.0,
-        )
-
         # Only older bodies count toward losing. This prevents a just-launched body
         # from instantly causing game over while it is still entering the field.
         warning = any(body.top < FAIL_LINE_Y and body.age(self.now) > FAIL_AGE_GATE for body in self.bodies)
         self.warning_active = warning
+        # The fail timer fills while danger is active and drains when the
+        # player recovers (the exact rates live in rules.py).
+        self.fail_timer = advance_fail_timer(self.fail_timer, dt, warning)
         if warning:
-            # Fill the fail timer while danger is active.
-            self.fail_timer = min(FAIL_GRACE, self.fail_timer + dt)
-
             # Play an escalating warning beep: the closer to game over, the
             # faster the tone repeats, so danger is felt as well as seen.
             if self.now >= self._next_warning_beep:
-                ratio = self.fail_timer / FAIL_GRACE if FAIL_GRACE > 0.0 else 0.0
+                ratio = fail_ratio(self.fail_timer)
                 self.assets.sounds.play("warning", 0.28 + ratio * 0.3)
-                self._next_warning_beep = self.now + max(0.2, 0.66 - ratio * 0.46)
+                self._next_warning_beep = self.now + warning_beep_interval(ratio)
         else:
-            # If the player recovers, the fail timer drains back down.
-            self.fail_timer = max(0.0, self.fail_timer - dt * FAIL_DECAY)
             # Reset the beep timer so the next danger spell starts fresh.
             self._next_warning_beep = 0.0
 
-        # Split the stress bar into two phases: live stack height fills the
-        # preview share, then the true fail countdown fills the timer share
-        # once the line is crossed (shares are defined in settings.py).
-        timer_ratio = self.fail_timer / FAIL_GRACE if FAIL_GRACE > 0.0 else 0.0
-        preview_stress = preview_ratio * STRESS_PREVIEW_SHARE
-        danger_stress = STRESS_PREVIEW_SHARE + timer_ratio * STRESS_TIMER_SHARE if warning else 0.0
-        self.container_stress = max(preview_stress, danger_stress)
+        # Live stress rises as the tallest point in the stack approaches the
+        # fail line, then the fail countdown fills the rest of the meter once
+        # the line is crossed. This gives the HUD a continuous response instead
+        # of only reacting after the player is already in immediate danger.
+        self.container_stress = stress_level(highest_top, self.fail_timer, warning)
         if self.fail_timer >= FAIL_GRACE:
             self._trigger_game_over()
 
@@ -679,11 +665,7 @@ class OrbitalOrchardGame:
         """Read the saved high score and lifetime stats, falling back safely."""
         try:
             data = json.loads(SAVE_DATA_PATH.read_text(encoding="utf-8")) if SAVE_DATA_PATH.exists() else {}
-            return {
-                "high_score": max(0, int(data.get("high_score", 0))),
-                "games_played": max(0, int(data.get("games_played", 0))),
-                "best_tier": max(0, min(len(TIERS) - 1, int(data.get("best_tier", 0)))),
-            }
+            return sanitize_progress(data)
         except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
             # A missing or corrupt file simply means "no progress saved yet".
             return {"high_score": 0, "games_played": 0, "best_tier": 0}

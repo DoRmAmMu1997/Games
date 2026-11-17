@@ -94,8 +94,13 @@ MERGE_CONTACT_SLOP = 4.0
 MERGE_VELOCITY_DAMP = 0.42
 
 # Combo scoring: merges that happen within this many seconds of the previous
-# merge build an escalating score multiplier (see `_apply_merges` in game.py).
+# merge build an escalating score multiplier (see `combo_multiplier` in rules.py).
 COMBO_WINDOW = 1.1
+# Each extra link in a combo chain adds this much to the 1.0x base multiplier,
+# so a 2-chain pays 1.5x and a 3-chain pays 2.0x.
+COMBO_STEP = 0.5
+# Long chains stop growing here so a lucky cascade cannot dwarf honest play.
+COMBO_MAX_MULTIPLIER = 3.0
 
 # Loss-condition tuning.
 # The player does not lose the instant something crosses the danger line.
@@ -116,6 +121,15 @@ STRESS_PREVIEW_RANGE = 280.0
 # crossed, the countdown timer drives the remaining share.
 STRESS_PREVIEW_SHARE = 0.78
 STRESS_TIMER_SHARE = 0.22
+
+# The danger beep repeats faster as the fail timer fills, so danger is heard
+# as well as seen. A fresh danger spell waits `WARNING_BEEP_MAX_INTERVAL`
+# seconds between beeps; each unit of fail ratio shortens that gap by
+# `WARNING_BEEP_INTERVAL_SPAN`, but never below `WARNING_BEEP_MIN_INTERVAL`
+# (a faster beep would blur into one continuous tone).
+WARNING_BEEP_MAX_INTERVAL = 0.66
+WARNING_BEEP_INTERVAL_SPAN = 0.46
+WARNING_BEEP_MIN_INTERVAL = 0.2
 
 # Miscellaneous gameplay limits.
 # `IMPACT_EVENT_SPEED` controls how hard a collision must be before it creates
