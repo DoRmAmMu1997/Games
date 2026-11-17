@@ -10,6 +10,12 @@ from board import BoardLayout
 from models import Move, MoveResult, PlayerState
 from settings import TOKENS_PER_PLAYER, seat_colors
 
+# Saves without this field were written before the classic 51-cell lap, when a
+# token also walked the cell just behind its start (so every home-lane and
+# finish step was one higher). Version 2 is the 51-cell lap; ``from_dict``
+# shifts version-1 steps down and refuses versions it does not know.
+LAP_VERSION = 2
+
 
 @dataclass(frozen=True)
 class LudoRules:
@@ -189,11 +195,14 @@ class LudoGame:
 
         The method validates the move against the current legal-move list
         before mutating anything. That keeps tests and UI clicks honest: they
-        must pass a move the engine itself already approved.
+        must pass a move the engine itself already approved, for the die that
+        was actually rolled this turn.
         """
 
         if self.phase == "game_over":
             raise ValueError("game is already over")
+        if self.awaiting != "choose_move" or move.die != self.last_roll:
+            raise ValueError("move does not match the die rolled this turn")
         if move.player_index != self.current:
             raise ValueError("move does not belong to the current player")
         legal = self.legal_moves(move.die, move.player_index)
@@ -253,7 +262,9 @@ class LudoGame:
         """Handle a roll with no legal moves."""
 
         self._note(f"{self.current_player.name} rolled {die} and has no legal move.")
-        if die == 6 and self.consecutive_sixes < 3:
+        if die == 6:
+            # A 6 always earns another roll, exactly as in apply_move; the
+            # three-sixes penalty (when enabled) is enforced earlier in record_roll.
             self.awaiting = "pre_roll"
         else:
             self.consecutive_sixes = 0
@@ -286,6 +297,7 @@ class LudoGame:
         """Serialize the current game to plain JSON-compatible data."""
 
         return {
+            "lap_version": LAP_VERSION,
             "rules": asdict(self.rules),
             "players": [player.to_dict() for player in self.players],
             "current": self.current,
@@ -304,21 +316,61 @@ class LudoGame:
 
     @classmethod
     def from_dict(cls, data: dict) -> LudoGame:
-        """Rebuild a game from save-file data."""
+        """Rebuild a game from save-file data.
 
+        Saves written before the classic 51-cell lap (``lap_version`` 1, or no
+        key at all) counted one extra shared cell, the corner just behind each
+        token's start. Loading one moves every step at or beyond the new lap
+        length down by one:
+
+        - Tokens in the home column or at home keep their cell and their
+          distance (old lane step 52 is new lane step 51, the same cell).
+        - A token on the old corner steps back one cell to its column
+          entrance and keeps its distance to home.
+        - Tokens on the shared track keep their cell and end up one cell
+          closer to home, because the lap is one cell shorter.
+
+        Raises ``ValueError`` for a ``lap_version`` this code does not know,
+        and for damaged data that would crash or wedge a resumed game: a top
+        level that is not a JSON object, an out-of-range current player, a
+        turn state that cannot be resumed, a missing die roll, or token
+        counts and steps outside the board.
+        """
+
+        if not isinstance(data, dict):
+            raise ValueError("Save data must be a JSON object.")
+        lap_version = int(data.get("lap_version", 1))
+        if lap_version not in (1, LAP_VERSION):
+            raise ValueError(f"Unsupported Ludo lap version: {lap_version}")
         rules = LudoRules(**data["rules"])
         players = [PlayerState.from_dict(item) for item in data["players"]]
         game = cls(players, rules, seed=data.get("seed"), ai_profile=data.get("ai_profile", "tactical"))
+        if lap_version == 1:
+            lap_length = game.layout.lap_length
+            for player in game.players:
+                for token in player.tokens:
+                    if token.steps >= lap_length:
+                        token.steps -= 1
         game.current = int(data.get("current", 0))
         game.phase = str(data.get("phase", "playing"))
         game.awaiting = str(data.get("awaiting", "pre_roll"))
-        game.last_roll = data.get("last_roll")
+        game.last_roll = None if data.get("last_roll") is None else int(data["last_roll"])
         game.consecutive_sixes = int(data.get("consecutive_sixes", 0))
         game.turns_taken = int(data.get("turns_taken", 0))
         game.total_rolls = int(data.get("total_rolls", 0))
         game.winner = data.get("winner")
         game.ranking = [int(item) for item in data.get("ranking", [])]
         game.event_log = [str(item) for item in data.get("event_log", [])] or ["Game resumed."]
+        if not 0 <= game.current < len(game.players):
+            raise ValueError("Saved current player is out of range.")
+        if game.phase != "playing" or game.awaiting not in ("pre_roll", "choose_move"):
+            raise ValueError("Saved turn state cannot be resumed.")
+        if game.awaiting == "choose_move" and not (game.last_roll is not None and 1 <= game.last_roll <= 6):
+            raise ValueError("Saved die roll is invalid.")
+        for player in game.players:
+            if len(player.tokens) != TOKENS_PER_PLAYER or any(
+                    not -1 <= token.steps <= game.layout.finish_steps for token in player.tokens):
+                raise ValueError("Saved token data is invalid.")
         game._mark_finished_tokens()
         return game
 
@@ -336,14 +388,18 @@ class LudoGame:
         return captured
 
     def _blocked_by_blockade(self, player_index: int, from_steps: int, to_steps: int) -> bool:
-        """Return True if optional blockade rules stop this path."""
+        """Return True if optional blockade rules stop this path.
 
-        if not self.rules.blockades or from_steps < 0:
+        A yard entry (``from_steps`` -1 to 0) checks just the start square,
+        so an opponent pair sitting there keeps the yard shut.
+        """
+
+        if not self.rules.blockades:
             return False
         blocked_indices = self._opponent_blockades(player_index)
         if not blocked_indices:
             return False
-        for step in range(from_steps + 1, min(to_steps, self.layout.track_length - 1) + 1):
+        for step in range(from_steps + 1, min(to_steps, self.layout.lap_length - 1) + 1):
             if self.layout.track_index(player_index, step) in blocked_indices:
                 return True
         return False

@@ -1,17 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 # PyInstaller reads this file to build a single windowed executable. The app
-# window draws most art procedurally, while the bundled Windows executable uses
-# `ludo_icon.ico` for its file/taskbar icon.
+# draws its art procedurally. `ludo_icon.png` (the 256px image from inside the
+# .ico) is bundled as the window icon, and `ludo_icon.ico` gives the .exe its
+# file/taskbar icon.
 
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    # No runtime data: the window icon is drawn procedurally, and the .ico
-    # below is consumed by PyInstaller itself for the .exe file icon.
-    datas=[],
+    # The window icon PNG is read at runtime through main._resource_path; the
+    # .ico below is consumed by PyInstaller itself for the .exe file icon.
+    datas=[('ludo_icon.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

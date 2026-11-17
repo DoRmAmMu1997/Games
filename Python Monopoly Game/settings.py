@@ -38,6 +38,22 @@ CORNER_SIZE = BOARD_SIZE * 0.16
 TILE_LONG = (BOARD_SIZE - CORNER_SIZE * 2) / (SPACES_PER_SIDE - 2)   # tile length
 TILE_SHORT = CORNER_SIZE                                            # tile depth
 
+# Radii, in pixels, of the round shapes (all drawn antialiased): a player's
+# token on the board, the token-colour disc on a player card, and one pip
+# on a die face.
+# All four tokens can stand on one tile in a 2x2 grid without overlapping:
+# an edge tile is only about 63 px wide, and two tokens of radius 13 with
+# TOKEN_GAP between them take 54 px, which fits inside its ownership border.
+TOKEN_RADIUS = 13
+TOKEN_GAP = 2
+PLAYER_DISC_RADIUS = 14
+PIP_RADIUS = 5
+
+# A tile's name and price keep this many pixels clear of every tile edge:
+# the 4 px ownership border drawn inside an owned tile, plus 2 px so the
+# text never touches that border.
+TILE_LABEL_INSET = 6
+
 
 # --------------------------------------------------------------------------
 # Core Monopoly rules numbers (changing these changes the game balance)
@@ -63,6 +79,12 @@ GO_TO_JAIL_POSITION = 30
 # AI timing (difficulty/profile tuning lives in ai.py)
 # --------------------------------------------------------------------------
 AI_TURN_DELAY_MS = 750        # pause between AI actions so a human can watch
+
+# After a player rejects an AI's offer for a title, that AI waits this many
+# turns before asking the same player for the same title again. Without it
+# the AI re-sends the identical offer every turn; 16 turns is about four
+# laps of a 4-player table, long enough for cash and boards to change.
+TRADE_RETRY_COOLDOWN_TURNS = 16
 
 # Tokens hop space-by-space around the board after a dice roll. This is the
 # travel speed in pixels per second; teleports (jail, some cards) slide
@@ -111,13 +133,24 @@ TOKEN_COLORS = [
 ]
 TOKEN_NAMES = ["Red", "Blue", "Green", "Purple"]
 
+# Chance / Community Chest card faces shown in the board's middle. White
+# header and body text reads at better than 4.5:1 on both.
+CHANCE_CARD_COLOR = (70, 96, 150)
+CHEST_CARD_COLOR = (130, 90, 45)
+
 # Building colours.
 HOUSE_COLOR = (60, 170, 90)
 HOTEL_COLOR = (208, 52, 52)
 
 # Highlights.
 HIGHLIGHT = (240, 206, 110)         # selected / actionable
-DANGER = (224, 84, 84)
+DANGER = (224, 84, 84)             # warning fills and strokes
+# Warning TEXT is a lighter coral of the same red: it reaches 4.5:1 contrast
+# on every dark surface it is drawn on (DANGER itself only manages 2.5:1 on
+# the current player's card).
+DANGER_TEXT = (255, 182, 170)
+PANEL_CARD_CURRENT = (52, 74, 60)   # the current player's card in the side panel
+BUTTON_FILL = (54, 86, 72)          # an ordinary button
 SUCCESS = (120, 210, 140)
 
 

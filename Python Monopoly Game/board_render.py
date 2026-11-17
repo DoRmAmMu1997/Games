@@ -23,7 +23,10 @@ from settings import (
     RAIL_COLOR,
     TAX_COLOR,
     TILE_FACE,
+    TILE_LABEL_INSET,
     TOKEN_COLORS,
+    TOKEN_GAP,
+    TOKEN_RADIUS,
     UTILITY_COLOR,
     WHITE,
 )
@@ -36,7 +39,20 @@ _RIGHT = _OX + BOARD_SIZE
 _BOTTOM = _OY + BOARD_SIZE
 _BAND = 26                                  # colour-band thickness in pixels
 _EDGE_SPAN = BOARD_SIZE - 2 * _C
+_LABEL_BAND_GAP = 2                         # pixels between the band and the label
+# Label fonts, largest first. A name whose words do not fit at one size
+# drops to the next; only at the smallest is a word broken with a hyphen.
+_LABEL_FONTS = ("tile", "tile_mid", "tile_min")
 _OFFSETS = [round(_EDGE_SPAN * k / 9) for k in range(10)]   # 9 edge tiles
+
+
+# The board's centre pixel: the diagonal MONOPOLY title is centred here.
+BOARD_CENTER = _OX + BOARD_SIZE // 2
+
+
+def inner_rect() -> pygame.Rect:
+    """The empty middle of the board, inside the ring of tiles."""
+    return pygame.Rect(_OX + _C, _OY + _C, BOARD_SIZE - 2 * _C, BOARD_SIZE - 2 * _C)
 
 
 def space_rect(position: int) -> pygame.Rect:
@@ -80,16 +96,15 @@ def _edge_of(position: int) -> str:
 def token_center(position: int, slot: int) -> tuple[int, int]:
     """Return where to draw player token `slot` (0-3) on a space.
 
-    Up to four tokens share a space; they are spread into a small 2x2 grid so
-    they stay individually visible.
+    Up to four tokens share a space. Each has its own place in a 2x2 grid
+    around the tile's centre, one token width plus TOKEN_GAP apart, so
+    tokens on the same tile never overlap -- even on the narrow edge tiles.
     """
     rect = space_rect(position)
     col, row = slot % 2, slot // 2
-    gap_x = rect.width * 0.28
-    gap_y = rect.height * 0.28
-    cx = rect.centerx + (col - 0.5) * gap_x
-    cy = rect.centery + (row - 0.5) * gap_y
-    return int(cx), int(cy)
+    half_step = TOKEN_RADIUS + TOKEN_GAP // 2
+    return (rect.centerx + (2 * col - 1) * half_step,
+            rect.centery + (2 * row - 1) * half_step)
 
 
 class BoardRenderer:
@@ -140,10 +155,7 @@ class BoardRenderer:
             self._draw_band(surface, rect, edge, TAX_COLOR)
 
         # The space label (and price), rotated to suit the board side.
-        lines = _wrap(space.name, 11)
-        if space.is_ownable:
-            lines.append(f"${space.price}")
-        self._draw_label(surface, rect, edge, lines, fonts)
+        self._draw_label(surface, rect, edge, space, fonts)
 
     def _draw_band(self, surface, rect, edge, color) -> None:
         """Draw the coloured strip along a tile's inner edge."""
@@ -158,27 +170,33 @@ class BoardRenderer:
         pygame.draw.rect(surface, color, band)
         pygame.draw.rect(surface, INK, band, 1)
 
-    def _draw_label(self, surface, rect, edge, lines, fonts) -> None:
-        """Draw a tile's text, rotated so it reads correctly for its side."""
-        font = fonts["tile"]
-        text = pygame.Surface((rect.width if edge in ("bottom", "top") else rect.height,
-                               64), pygame.SRCALPHA)
+    def _draw_label(self, surface, rect, edge, space, fonts) -> None:
+        """Draw a tile's text, rotated so it reads correctly for its side.
+
+        The lines come from `tile_label`, already fitted to the tile, and
+        are drawn into a block exactly as big as the text needs.
+        """
+        font, lines = tile_label(fonts, space)
+        width, _depth = label_room(space.position)
+        pitch = label_pitch(font)
+        text = pygame.Surface((width, len(lines) * pitch), pygame.SRCALPHA)
         for i, line in enumerate(lines):
             glyph = font.render(line, True, INK)
-            text.blit(glyph, glyph.get_rect(center=(text.get_width() // 2, 12 + i * 16)))
+            text.blit(glyph, glyph.get_rect(midtop=(width // 2, i * pitch)))
         if edge == "left":
             text = pygame.transform.rotate(text, -90)
         elif edge == "right":
             text = pygame.transform.rotate(text, 90)
-        # Place the text away from the coloured band.
+        # Place the text beside the coloured band (or the edge, on a corner).
+        gap = _label_offset(space.position)
         if edge == "bottom":
-            surface.blit(text, text.get_rect(midtop=(rect.centerx, rect.y + _BAND + 2)))
+            surface.blit(text, text.get_rect(midtop=(rect.centerx, rect.y + gap)))
         elif edge == "top":
-            surface.blit(text, text.get_rect(midbottom=(rect.centerx, rect.bottom - _BAND - 2)))
+            surface.blit(text, text.get_rect(midbottom=(rect.centerx, rect.bottom - gap)))
         elif edge == "left":
-            surface.blit(text, text.get_rect(midright=(rect.right - _BAND - 2, rect.centery)))
+            surface.blit(text, text.get_rect(midright=(rect.right - gap, rect.centery)))
         else:
-            surface.blit(text, text.get_rect(midleft=(rect.x + _BAND + 2, rect.centery)))
+            surface.blit(text, text.get_rect(midleft=(rect.x + gap, rect.centery)))
 
     # ------------------------------------------------------------------
     # Dynamic layer -- drawn fresh every frame
@@ -268,25 +286,103 @@ class BoardRenderer:
                 cx, cy = int(cx), int(cy)
             else:
                 cx, cy = token_center(player.position, player.index)
-            pygame.draw.circle(target, WHITE, (cx, cy), 15)
-            pygame.draw.circle(target, player.token_color, (cx, cy), 13)
-            pygame.draw.circle(target, INK, (cx, cy), 15, 2)
+            # Antialiased discs: a white rim, the player's colour, a dark edge.
+            pygame.draw.aacircle(target, WHITE, (cx, cy), TOKEN_RADIUS)
+            pygame.draw.aacircle(target, player.token_color, (cx, cy), TOKEN_RADIUS - 2)
+            pygame.draw.aacircle(target, INK, (cx, cy), TOKEN_RADIUS, 2)
             label = fonts["tile"].render(str(player.index + 1), True, WHITE)
             target.blit(label, label.get_rect(center=(cx, cy)))
 
 
-def _wrap(text: str, width: int) -> list:
-    """Greedily wrap `text` into lines no longer than `width` characters."""
-    words = text.split()
-    lines, current = [], ""
-    for word in words:
-        trial = f"{current} {word}".strip()
-        if len(trial) <= width:
-            current = trial
-        else:
-            if current:
+def label_room(position: int) -> tuple[int, int]:
+    """Return the (width, depth) in pixels that a tile's label may occupy.
+
+    Width runs along the tile's short side; depth runs from the colour band
+    toward the board's outer edge. Both stop TILE_LABEL_INSET short of the
+    tile's edges, so the label stays clear of the ownership border.
+    """
+    rect = space_rect(position)
+    width = min(rect.size) - 2 * TILE_LABEL_INSET
+    depth = max(rect.size) - _label_offset(position) - TILE_LABEL_INSET
+    return width, depth
+
+
+def _label_offset(position: int) -> int:
+    """Pixels from a tile's inner edge to where its label starts.
+
+    Edge tiles start just past their colour band. The four corner squares
+    have no band, so their label hugs the edge -- which also keeps it clear
+    of the tokens standing in the middle of the square.
+    """
+    return TILE_LABEL_INSET if position % 10 == 0 else _BAND + _LABEL_BAND_GAP
+
+
+def label_pitch(font: pygame.font.Font) -> int:
+    """Pixels from one label line to the next: the font's height plus 2 px of air."""
+    return font.get_height() + 2
+
+
+def _split_word(font: pygame.font.Font, word: str, width: int) -> list[str]:
+    """Break a word wider than `width` into hyphenated pieces that each fit.
+
+    Each piece takes as many letters as fit with its hyphen, but leaves at
+    least three for the next line where it can ("Mediter-", "ranean" rather
+    than "Mediterrane-", "an").
+    """
+    pieces = []
+    while font.size(word)[0] > width and len(word) > 1:
+        cut = len(word) - 1
+        while cut > 1 and font.size(word[:cut] + "-")[0] > width:
+            cut -= 1
+        cut = max(1, min(cut, len(word) - 3))
+        pieces.append(word[:cut] + "-")
+        word = word[cut:]
+    pieces.append(word)
+    return pieces
+
+
+def _wrap_label(font: pygame.font.Font, text: str, width: int) -> tuple[list[str], bool]:
+    """Wrap `text` into lines no wider than `width` pixels, by measurement.
+
+    Returns the lines and whether any word had to be hyphenated to fit.
+    """
+    lines: list[str] = []
+    current = ""
+    hyphenated = False
+    for word in text.split():
+        pieces = _split_word(font, word, width)
+        hyphenated = hyphenated or len(pieces) > 1
+        for piece in pieces:
+            trial = f"{current} {piece}".strip()
+            # A line ending in a hyphen is a broken word: nothing may follow it.
+            if current and (current.endswith("-") or font.size(trial)[0] > width):
                 lines.append(current)
-            current = word
+                current = piece
+            else:
+                current = trial
     if current:
         lines.append(current)
-    return lines[:3]
+    return lines, hyphenated
+
+
+def tile_label(fonts: dict, space) -> tuple[pygame.font.Font, list[str]]:
+    """Choose the font and the wrapped lines for one tile's name and price.
+
+    The largest label font that needs no hyphenation and fits the tile's
+    depth wins. A name with a word too wide even for the smallest font is
+    hyphenated in that font, the way a printed board breaks "Mediter-ranean".
+
+    Beginner note:
+    - Wrapping measures real pixel widths. Counting characters cannot work:
+      "Illinois" and "Wwwwwwww" are both eight letters but very different
+      widths, and the typeface itself differs between platforms.
+    """
+    width, depth = label_room(space.position)
+    price = [f"${space.price}"] if space.is_ownable else []
+    for key in _LABEL_FONTS:
+        font = fonts[key]
+        lines, hyphenated = _wrap_label(font, space.name, width)
+        lines += price
+        if not hyphenated and len(lines) * label_pitch(font) <= depth:
+            break
+    return font, lines

@@ -11,7 +11,7 @@ if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
 import ui
-from game import MonopolyGame
+from game import MonopolyGame, TradeOffer
 
 
 def make_game() -> MonopolyGame:
@@ -43,7 +43,7 @@ class ReadabilityHelperTests(unittest.TestCase):
         game.owners[1] = 0
         game.owners[3] = 0
         game.houses[1] = 1
-        offer = {
+        offer: TradeOffer = {
             "from": 0,
             "to": 1,
             "give": {"props": [3], "cash": 0, "jail": 0},

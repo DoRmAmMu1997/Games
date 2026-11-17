@@ -29,12 +29,19 @@ from effects import EffectsManager
 from entities import CelestialBody
 from merge_logic import find_merge_events
 from physics import PhysicsWorld
+from rules import (
+    advance_fail_timer,
+    combo_points,
+    fail_ratio,
+    next_combo_count,
+    sanitize_progress,
+    stress_level,
+    warning_beep_interval,
+)
 from settings import (
     ANGLE_AIM_SPEED,
-    COMBO_WINDOW,
     DROP_COOLDOWN,
     FAIL_AGE_GATE,
-    FAIL_DECAY,
     FAIL_GRACE,
     FAIL_LINE_Y,
     FPS,
@@ -43,15 +50,14 @@ from settings import (
     MAX_BODIES,
     MAX_LAUNCH_ANGLE,
     MOUSE_WHEEL_ANGLE_STEP,
+    OVERLAY_PADDING,
+    PREVIEW_GLOW_EXTRA,
     SAVE_DATA_DIR,
     SAVE_DATA_PATH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     SPAWN_WEIGHTS,
     SPAWN_Y,
-    STRESS_PREVIEW_RANGE,
-    STRESS_PREVIEW_SHARE,
-    STRESS_TIMER_SHARE,
     TIERS,
     WARNING,
     WINDOW_TITLE,
@@ -111,7 +117,8 @@ class OrbitalOrchardGame:
         self.now = 0.0
 
         # Launcher state.
-        # `spawn_x` is horizontal position only; vertical spawn height is fixed by `SPAWN_Y`.
+        # `spawn_x` is horizontal position only; vertical spawn height is fixed by `SPAWN_Y`
+        # (large bodies are nudged inward from it by `PhysicsWorld.spawn_point`).
         self.spawn_x = self.world.center.x
         self.launch_angle = 0.0
         self.angle_dragging = False
@@ -194,7 +201,10 @@ class OrbitalOrchardGame:
             # `dt` means "delta time": how many seconds passed since the previous frame.
             # Multiplying movement by `dt` keeps motion consistent across frame rates.
             dt = min(0.025, self.clock.tick(FPS) / 1000.0)
-            self.now += dt
+            # Game time stands still behind the pause menu, so bodies do not
+            # "age" past the fail-line grace gate while the player is away.
+            if self.scene != "paused":
+                self.now += dt
 
             # Every frame follows the same high-level order:
             # 1. read player/system input,
@@ -420,7 +430,7 @@ class OrbitalOrchardGame:
         body = CelestialBody(
             body_id=self._next_body_id,
             tier=self.current_tier,
-            position=pygame.Vector2(self.spawn_x, SPAWN_Y),
+            position=self.world.spawn_point(self.spawn_x, TIERS[self.current_tier].radius),
             velocity=self._launch_velocity(),
             created_at=self.now,
             seed=self.current_seed,
@@ -554,15 +564,10 @@ class OrbitalOrchardGame:
             self._next_body_id += 1
 
             # Combo scoring: merges chained within `COMBO_WINDOW` seconds of the
-            # previous merge build an escalating multiplier. A multi-merge frame
-            # shares one timestamp, so cascades naturally chain together.
-            if self.now - self._last_merge_time <= COMBO_WINDOW:
-                self._combo_count += 1
-            else:
-                self._combo_count = 1
+            # previous merge build an escalating multiplier (see rules.py).
+            self._combo_count = next_combo_count(self._combo_count, self._last_merge_time, self.now)
             self._last_merge_time = self.now
-            combo_multiplier = min(3.0, 1.0 + 0.5 * (self._combo_count - 1))
-            gained = round(event.score_gain * combo_multiplier)
+            gained = combo_points(event.score_gain, self._combo_count)
 
             # Reward the player and fire appropriate celebratory effects.
             self.score += gained
@@ -600,44 +605,37 @@ class OrbitalOrchardGame:
 
     def _update_fail_state(self, dt: float) -> None:
         """Track whether the player is approaching game over."""
-        highest_top = min((body.top for body in self.bodies), default=self.world.center.y + self.world.radius)
-
-        # Live stress rises as the tallest point in the stack approaches the fail line.
-        # This gives the HUD a continuous response instead of only reacting after
-        # the player is already in immediate danger.
-        preview_ratio = clamp(
-            (FAIL_LINE_Y + STRESS_PREVIEW_RANGE - highest_top) / STRESS_PREVIEW_RANGE,
-            0.0,
-            1.0,
+        # Only bodies older than the fail-age gate count toward the stress
+        # meter, so a body still falling from the launcher does not make the
+        # meter jump on every drop.
+        highest_top = min(
+            (body.top for body in self.bodies if body.age(self.now) > FAIL_AGE_GATE),
+            default=self.world.center.y + self.world.radius,
         )
 
         # Only older bodies count toward losing. This prevents a just-launched body
         # from instantly causing game over while it is still entering the field.
         warning = any(body.top < FAIL_LINE_Y and body.age(self.now) > FAIL_AGE_GATE for body in self.bodies)
         self.warning_active = warning
+        # The fail timer fills while danger is active and drains when the
+        # player recovers (the exact rates live in rules.py).
+        self.fail_timer = advance_fail_timer(self.fail_timer, dt, warning)
         if warning:
-            # Fill the fail timer while danger is active.
-            self.fail_timer = min(FAIL_GRACE, self.fail_timer + dt)
-
             # Play an escalating warning beep: the closer to game over, the
             # faster the tone repeats, so danger is felt as well as seen.
             if self.now >= self._next_warning_beep:
-                ratio = self.fail_timer / FAIL_GRACE if FAIL_GRACE > 0.0 else 0.0
+                ratio = fail_ratio(self.fail_timer)
                 self.assets.sounds.play("warning", 0.28 + ratio * 0.3)
-                self._next_warning_beep = self.now + max(0.2, 0.66 - ratio * 0.46)
+                self._next_warning_beep = self.now + warning_beep_interval(ratio)
         else:
-            # If the player recovers, the fail timer drains back down.
-            self.fail_timer = max(0.0, self.fail_timer - dt * FAIL_DECAY)
             # Reset the beep timer so the next danger spell starts fresh.
             self._next_warning_beep = 0.0
 
-        # Split the stress bar into two phases: live stack height fills the
-        # preview share, then the true fail countdown fills the timer share
-        # once the line is crossed (shares are defined in settings.py).
-        timer_ratio = self.fail_timer / FAIL_GRACE if FAIL_GRACE > 0.0 else 0.0
-        preview_stress = preview_ratio * STRESS_PREVIEW_SHARE
-        danger_stress = STRESS_PREVIEW_SHARE + timer_ratio * STRESS_TIMER_SHARE if warning else 0.0
-        self.container_stress = max(preview_stress, danger_stress)
+        # Live stress rises as the tallest point in the stack approaches the
+        # fail line, then the fail countdown fills the rest of the meter once
+        # the line is crossed. This gives the HUD a continuous response instead
+        # of only reacting after the player is already in immediate danger.
+        self.container_stress = stress_level(highest_top, self.fail_timer, warning)
         if self.fail_timer >= FAIL_GRACE:
             self._trigger_game_over()
 
@@ -679,13 +677,13 @@ class OrbitalOrchardGame:
         """Read the saved high score and lifetime stats, falling back safely."""
         try:
             data = json.loads(SAVE_DATA_PATH.read_text(encoding="utf-8")) if SAVE_DATA_PATH.exists() else {}
-            return {
-                "high_score": max(0, int(data.get("high_score", 0))),
-                "games_played": max(0, int(data.get("games_played", 0))),
-                "best_tier": max(0, min(len(TIERS) - 1, int(data.get("best_tier", 0)))),
-            }
-        except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+            return sanitize_progress(data)
+        except (OSError, ValueError, TypeError, AttributeError, OverflowError, RecursionError):
             # A missing or corrupt file simply means "no progress saved yet".
+            # `OverflowError` covers numbers like 1e999 or `Infinity`, which
+            # cannot become an int; `RecursionError` covers absurdly deep
+            # nesting that exhausts the JSON reader. (`json.JSONDecodeError`
+            # is a kind of `ValueError`, so it is already covered.)
             return {"high_score": 0, "games_played": 0, "best_tier": 0}
 
     def _refresh_high_score(self) -> None:
@@ -790,7 +788,10 @@ class OrbitalOrchardGame:
 
         # The launcher line points in the same direction as the initial launch velocity.
         direction = self._launch_direction()
-        start = pygame.Vector2(self.spawn_x, SPAWN_Y) + camera
+        # The launcher orb, aim line, and preview all start from the same legal
+        # spawn point the real body will use (see `PhysicsWorld.spawn_point`).
+        spawn = self.world.spawn_point(self.spawn_x, TIERS[self.current_tier].radius)
+        start = spawn + camera
         back = start - direction * 64.0
         front = start + direction * 166.0
         beam_color = WARNING if self.warning_active else (175, 216, 255)
@@ -798,36 +799,13 @@ class OrbitalOrchardGame:
         # Draw a dotted path preview so the player can read the angled launch
         # more easily than from a single straight line alone.
         preview_points = self.world.preview_trajectory(
-            pygame.Vector2(self.spawn_x, SPAWN_Y),
+            spawn,
             self._launch_velocity(),
             TIERS[self.current_tier].radius,
             self.current_seed,
         )
         if preview_points:
-            trail = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-            preview_total = max(1, len(preview_points) - 1)
-            for index, point in enumerate(preview_points):
-                # Early points are drawn brighter/larger so the most immediate
-                # section of the path is easiest to understand.
-                progress = index / preview_total
-                dot_center = point + camera
-                dot_radius = max(2, int(8 - progress * 4.5))
-                glow_radius = dot_radius + 4
-                dot_alpha = int(125 - progress * 72)
-                glow_alpha = int(42 - progress * 22)
-                pygame.draw.circle(
-                    trail,
-                    (*beam_color, max(0, glow_alpha)),
-                    (int(dot_center.x), int(dot_center.y)),
-                    glow_radius,
-                )
-                pygame.draw.circle(
-                    trail,
-                    (*beam_color, max(0, dot_alpha)),
-                    (int(dot_center.x), int(dot_center.y)),
-                    dot_radius,
-                )
-            self.canvas.blit(trail, (0, 0))
+            self._draw_preview_trail(preview_points, camera, beam_color)
 
         # A launcher halo helps the origin point read clearly against busy stacks.
         halo = pygame.Surface((88, 88), pygame.SRCALPHA)
@@ -851,12 +829,7 @@ class OrbitalOrchardGame:
         # - a short tail behind the launcher,
         # - a longer forward direction arrow where the launch will go.
         pygame.draw.line(self.canvas, beam_color, back, front, 3)
-        for guide_length, alpha in ((72.0, 95), (118.0, 70), (162.0, 45)):
-            # Draw faded trail segments so the aim line feels more visible and "spacey".
-            ghost = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-            guide_end = start + direction * guide_length
-            pygame.draw.line(ghost, (*beam_color, alpha), start, guide_end, 2)
-            self.canvas.blit(ghost, (0, 0))
+        self._draw_aim_guides(start, direction, beam_color)
 
         # Add a simple arrow head to the end of the launcher guide.
         arrow_left = front - direction * 22.0 + pygame.Vector2(-direction.y, direction.x) * 12.0
@@ -881,6 +854,68 @@ class OrbitalOrchardGame:
             alpha=ready_alpha,
         )
 
+    def _draw_preview_trail(
+        self,
+        preview_points: list[pygame.Vector2],
+        camera: pygame.Vector2,
+        beam_color: tuple[int, int, int],
+    ) -> None:
+        """Draw the dotted trajectory preview as soft, fading dots.
+
+        Beginner note:
+        - The dots are translucent, so they are drawn on their own alpha
+          surface and then blended onto the canvas in one blit.
+        - That surface only needs to cover the dots, not the whole screen.
+          Clearing and blending a full 1024x1280 surface every frame was the
+          most expensive part of the launcher drawing.
+        """
+        preview_total = max(1, len(preview_points) - 1)
+        dots: list[tuple[int, int, int, int, int]] = []
+        for index, point in enumerate(preview_points):
+            # Early points are drawn brighter/larger so the most immediate
+            # section of the path is easiest to understand.
+            progress = index / preview_total
+            dot_center = point + camera
+            dot_radius = max(2, int(8 - progress * 4.5))
+            dot_alpha = int(125 - progress * 72)
+            glow_alpha = int(42 - progress * 22)
+            dots.append((int(dot_center.x), int(dot_center.y), dot_radius, dot_alpha, glow_alpha))
+
+        # Bounding box of every glow circle, padded so antialiasing never clips.
+        reach = max(dot[2] for dot in dots) + PREVIEW_GLOW_EXTRA + OVERLAY_PADDING
+        left = min(dot[0] for dot in dots) - reach
+        top = min(dot[1] for dot in dots) - reach
+        width = max(dot[0] for dot in dots) + reach - left + 1
+        height = max(dot[1] for dot in dots) + reach - top + 1
+        trail = pygame.Surface((width, height), pygame.SRCALPHA)
+        for x, y, dot_radius, dot_alpha, glow_alpha in dots:
+            local = (x - left, y - top)
+            pygame.draw.circle(trail, (*beam_color, max(0, glow_alpha)), local, dot_radius + PREVIEW_GLOW_EXTRA)
+            pygame.draw.circle(trail, (*beam_color, max(0, dot_alpha)), local, dot_radius)
+        self.canvas.blit(trail, (left, top))
+
+    def _draw_aim_guides(
+        self,
+        start: pygame.Vector2,
+        direction: pygame.Vector2,
+        beam_color: tuple[int, int, int],
+    ) -> None:
+        """Draw faded aim-guide segments so the aim line feels brighter and "spacey".
+
+        Each segment gets its own small alpha surface sized to the segment, so
+        the overlapping translucent strokes still build up exactly as before.
+        """
+        for guide_length, alpha in ((72.0, 95), (118.0, 70), (162.0, 45)):
+            guide_end = start + direction * guide_length
+            left = math.floor(min(start.x, guide_end.x)) - OVERLAY_PADDING
+            top = math.floor(min(start.y, guide_end.y)) - OVERLAY_PADDING
+            width = math.ceil(max(start.x, guide_end.x)) + OVERLAY_PADDING - left + 1
+            height = math.ceil(max(start.y, guide_end.y)) + OVERLAY_PADDING - top + 1
+            ghost = pygame.Surface((width, height), pygame.SRCALPHA)
+            offset = pygame.Vector2(left, top)
+            pygame.draw.line(ghost, (*beam_color, alpha), start - offset, guide_end - offset, 2)
+            self.canvas.blit(ghost, (left, top))
+
     def _launch_direction(self) -> pygame.Vector2:
         """Convert the current launcher angle into a unit direction vector."""
         radians = math.radians(self.launch_angle)
@@ -898,7 +933,7 @@ class OrbitalOrchardGame:
 
     def _set_launch_angle_from_point(self, point: tuple[int, int]) -> None:
         """Aim the launcher toward a point in internal canvas coordinates."""
-        origin = pygame.Vector2(self.spawn_x, SPAWN_Y)
+        origin = self.world.spawn_point(self.spawn_x, TIERS[self.current_tier].radius)
         target = pygame.Vector2(point)
         delta = target - origin
         if delta.length_squared() < 1.0:

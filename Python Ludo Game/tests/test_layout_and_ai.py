@@ -13,6 +13,7 @@ if str(GAME_DIR) not in sys.path:
 from ai import choose_move
 from board import BoardLayout
 from game import LudoGame, LudoRules
+from settings import SCREEN_HEIGHT, SCREEN_WIDTH
 
 
 def make_game(total_players: int = 4) -> LudoGame:
@@ -43,6 +44,30 @@ class LayoutTests(unittest.TestCase):
             self.assertTrue(all(len(lane) == 6 for lane in layout.home_lanes))
             self.assertEqual(layout.start_indices, tuple(i * 13 for i in range(count)))
             self.assertEqual(layout.safe_indices, tuple((i * 13 + 8) % (count * 13) for i in range(count)))
+
+    def test_board_layout_pixels_are_the_headless_fallback(self) -> None:
+        """BoardLayout's own pixel fields place every token inside the window.
+
+        The renderer's DisplayLayout owns the real on-screen coordinates, but
+        BoardLayout keeps a plain polygon as the headless fallback for code
+        that runs before (or without) a renderer. That fallback must still map
+        each kind of step onto its own field and onto the canvas.
+        """
+
+        for count in (4, 5, 6):
+            with self.subTest(total_players=count):
+                layout = BoardLayout.for_player_count(count)
+                self.assertEqual(layout.position_for(1, -1, 2), layout.yard_positions[1][2])
+                track_index = layout.track_index(1, 5)
+                assert track_index is not None
+                self.assertEqual(layout.position_for(1, 5), layout.track_positions[track_index])
+                self.assertEqual(layout.position_for(1, layout.lap_length + 2), layout.home_lanes[1][2])
+                self.assertEqual(layout.position_for(1, layout.finish_steps), layout.home_lanes[1][-1])
+                points = [point for lane in layout.home_lanes for point in lane]
+                points += list(layout.track_positions)
+                points += [point for yard in layout.yard_positions for point in yard]
+                for x, y in points:
+                    self.assertTrue(0 <= x <= SCREEN_WIDTH and 0 <= y <= SCREEN_HEIGHT, (x, y))
 
 
 class AiChoiceTests(unittest.TestCase):

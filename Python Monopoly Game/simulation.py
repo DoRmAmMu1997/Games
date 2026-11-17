@@ -21,11 +21,14 @@ def run_ai_game(seed: int, max_actions: int = 20000,
     actions = 0
 
     while game.phase == "playing" and actions < max_actions:
-        had_auction = game.auction is not None
+        # Count auctions by identity: one action can close an auction and
+        # open the next (back-to-back bankruptcy auctions), and a plain
+        # "was there an auction before?" check would miss the second.
+        prev_auction = game.auction
         had_trade = game.pending_trade is not None
         ai.take_action(game)
         actions += 1
-        if not had_auction and game.auction is not None:
+        if game.auction is not None and game.auction is not prev_auction:
             auction_count += 1
         if not had_trade and game.pending_trade is not None:
             trade_count += 1

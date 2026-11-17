@@ -7,11 +7,11 @@ How other code drives it
 ------------------------
 The engine is a turn-based state machine. `game.awaiting` says what input is
 needed next ("pre_roll", "buy_or_auction", "auction", "post_roll",
-"trade_response" or "game_over"), and `game.actor()` says which player must
-provide it. The UI calls action methods when a human clicks; the AI calls the
-exact same action methods. Because nothing here touches the screen, a whole
-4-player AI game can be played in a loop with no window -- which is how the
-engine is tested.
+"trade_response", "raise_funds" or "game_over"), and `game.actor()` says which
+player must provide it. The UI calls action methods when a human clicks; the
+AI calls the exact same action methods. Because nothing here touches the
+screen, a whole 4-player AI game can be played in a loop with no window --
+which is how the engine is tested.
 
 Beginner note:
 - "the bank" is not a player. It has unlimited cash; it just hands out or
@@ -21,6 +21,7 @@ Beginner note:
 from __future__ import annotations
 
 import random
+from typing import TypedDict
 
 import board_data
 import cards as cards_module
@@ -34,6 +35,7 @@ from settings import (
     JAIL_POSITION,
     LUXURY_TAX,
     MAX_JAIL_TURNS,
+    TOKEN_COLORS,
 )
 
 # Rent a railroad charges for 1/2/3/4 railroads owned by the same player.
@@ -44,6 +46,28 @@ TURN_SAFETY_CAP = 3000
 # Saves without this field came from the initial game release. Version 2 adds
 # named AI profiles and guards future loaders from guessing at unknown payloads.
 SAVE_VERSION = 2
+
+
+class TradeSide(TypedDict):
+    """One side of a trade offer: the titles, cash and jail cards handed over."""
+
+    props: list[int]
+    cash: int
+    jail: int
+
+
+class Debt(TypedDict):
+    """One unpaid debt a human is raising funds for: who owes whom, how much."""
+
+    payer: int
+    payee: int | None     # None means the Bank
+    amount: int
+
+
+# A trade offer: `from` proposes it to `to`. `give` is what `from` hands over
+# and `get` is what `from` receives. "from" is a Python keyword, so this
+# TypedDict has to use the functional syntax.
+TradeOffer = TypedDict("TradeOffer", {"from": int, "to": int, "give": TradeSide, "get": TradeSide})
 
 
 class MonopolyGame:
@@ -97,9 +121,19 @@ class MonopolyGame:
         self.pending_purchase: int | None = None
         self.auction: dict | None = None
         self.bankruptcy_auction_queue: list[int] = []
-        self.pending_trade: dict | None = None
+        self.pending_trade: TradeOffer | None = None
         self._awaiting_before_trade = "pre_roll"
         self._trades_proposed = 0       # trade offers made this turn (AI cap)
+        # (from, to, wanted title) -> turn_count when that offer was rejected.
+        # The AI reads it to wait before asking again; it is transient and
+        # never saved.
+        self._rejected_offers: dict[tuple[int, int, int], int] = {}
+
+        # Debts a short human is raising funds for (paid first-in, first-out)
+        # and the dice total a player freed by a jail-fine debt still has to
+        # move once it is paid. Both are transient and never saved.
+        self.debts: list[Debt] = []
+        self._pending_jail_move: int | None = None
 
         # Internal flags used while resolving a single roll.
         self._normal_double = False     # may the current player roll again?
@@ -126,10 +160,13 @@ class MonopolyGame:
         """Return the index of the player who must act for the current state.
 
         For most states that is the current player; during an auction it is
-        whoever's bid it is; during a trade response it is the trade's target.
+        whoever's bid it is; during a trade response it is the trade's target;
+        while raising funds it is the payer of the oldest unpaid debt.
         """
         if self.awaiting == "auction" and self.auction is not None:
             return self.auction["current"]
+        if self.awaiting == "raise_funds" and self.debts:
+            return self.debts[0]["payer"]
         if self.awaiting == "trade_response" and self.pending_trade is not None:
             return self.pending_trade["to"]
         return self.current
@@ -221,8 +258,29 @@ class MonopolyGame:
         """Pay a debt; if `payer` cannot, raise funds, then maybe go bankrupt.
 
         `payee` is the player who is owed the money, or None for the bank.
+        A bankrupt player has nothing left and owes nothing more, so any
+        later debt aimed at them is ignored -- and nobody owes anything to a
+        player who has already gone bankrupt.
+
+        A HUMAN who is short but could cover the debt by selling buildings
+        and mortgaging titles (or who is already raising funds for an
+        earlier debt) is not stripped automatically: the debt is queued and
+        the game waits in "raise_funds" for them to pay or concede. A
+        running auction finishes first, then play resumes into raise_funds.
+        Every AI payer, and a hopeless human, is settled automatically.
         """
-        if amount <= 0:
+        if amount <= 0 or payer.bankrupt or (payee is not None and payee.bankrupt):
+            return
+        if payer.is_human and (
+                any(debt["payer"] == payer.index for debt in self.debts)
+                or payer.cash < amount <= self._liquidation_value(payer)):
+            self.debts.append({"payer": payer.index,
+                               "payee": None if payee is None else payee.index,
+                               "amount": amount})
+            self._note(f"{payer.name} must raise ${amount} to pay "
+                       f"{'the Bank' if payee is None else payee.name}.")
+            if self.awaiting != "auction":
+                self.awaiting = "raise_funds"
             return
         if payer.cash < amount:
             # Try to cover the shortfall by selling houses and mortgaging.
@@ -239,14 +297,46 @@ class MonopolyGame:
                 payee.cash += paid
             self._bankrupt(payer, payee)
 
+    def _group_developed(self, position: int) -> bool:
+        """True if `position` is a street whose colour group has any building."""
+        space = self.board[position]
+        return space.kind == "street" and any(
+            self.houses.get(pos, 0) > 0 for pos in board_data.COLOR_GROUPS[space.group])
+
+    def _liquidation_value(self, player: Player) -> int:
+        """Cash `player` could hold after selling up: what a debt is measured against.
+
+        That is their cash, plus every building sold back at half price,
+        plus the mortgage value of every title not yet mortgaged.
+        """
+        value = player.cash
+        for pos in self.properties_of(player):
+            space = self.board[pos]
+            value += self.houses.get(pos, 0) * (space.house_cost // 2)
+            if pos not in self.mortgaged:
+                value += space.mortgage
+        return value
+
     def _raise_funds(self, player: Player, target: int) -> None:
         """Auto-sell houses and mortgage land until `player` has `target` cash.
 
-        Used as a fallback for any player who owes more than they hold. The
-        human UI lets a person do this by hand first; this guarantees the rules
-        still resolve if they cannot or do not.
+        Used for every AI payer and for a human who could not cover the debt
+        even by selling everything; other humans raise funds by hand. The
+        order keeps rent-earning assets longest: first mortgage idle land
+        (undeveloped titles outside any held monopoly, lowest mortgage value
+        first), then sell buildings, then mortgage whatever land is left.
         """
-        # Sell houses first -- a property must be house-free before mortgaging.
+        idle = sorted((pos for pos in self.properties_of(player)
+                       if pos not in self.mortgaged and not self._group_developed(pos)
+                       and not (self.board[pos].kind == "street"
+                                and self.has_monopoly(player, self.board[pos].group))),
+                      key=lambda pos: self.board[pos].mortgage)
+        for pos in idle:
+            if player.cash >= target:
+                break
+            self.mortgage(pos, forced=True)
+
+        # Then sell houses -- a property must be house-free before mortgaging.
         # Always sell from the most-built property to respect even-selling.
         while player.cash < target:
             best = None
@@ -273,9 +363,13 @@ class MonopolyGame:
         player.bankrupt = True
         self._note(f"{player.name} has gone bankrupt!")
 
-        # Buildings always go back to the bank's supply.
+        # Buildings always go back to the bank's supply; a player creditor is
+        # paid their half-price value. (On the automatic path every building
+        # has already been sold, so that value is zero there.)
+        building_value = 0
         for pos in self.properties_of(player):
             level = self.houses.get(pos, 0)
+            building_value += level * (self.board[pos].house_cost // 2)
             if level == 5:
                 self.bank_hotels += 1
             else:
@@ -284,11 +378,16 @@ class MonopolyGame:
 
         owned = self.properties_of(player)
         if creditor is not None and not creditor.bankrupt:
-            # Estate (cash already moved) and land pass to the creditor.
-            creditor.cash += player.cash
+            # The estate -- remaining cash, building value and land -- passes
+            # to the creditor. Titles keep their mortgage state.
+            creditor.cash += player.cash + building_value
             for pos in owned:
                 self.owners[pos] = creditor.index
-            self._charge_mortgage_transfer_interest(creditor, owned)
+            # If that was the last opponent, the creditor has already won;
+            # transfer interest is only owed while the game goes on.
+            self._check_for_winner()
+            if self.phase == "playing":
+                self._charge_mortgage_transfer_interest(creditor, owned)
         else:
             # Bankrupt to the bank: the Bank clears mortgages, then offers
             # every released property through the same public auction flow.
@@ -299,9 +398,14 @@ class MonopolyGame:
             self._start_next_bankruptcy_auction()
         player.cash = 0
 
-        # Any held jail cards go back to their decks.
-        for deck_name in player.jail_card_decks:
-            self._deck(deck_name).return_jail_card()
+        # Held jail cards pass to a creditor who is still solvent after the
+        # transfer interest; otherwise they go back to their decks.
+        if creditor is not None and not creditor.bankrupt:
+            creditor.jail_cards += player.jail_cards
+            creditor.jail_card_decks.extend(player.jail_card_decks)
+        else:
+            for deck_name in player.jail_card_decks:
+                self._deck(deck_name).return_jail_card()
         player.jail_cards = 0
         player.jail_card_decks = []
 
@@ -318,9 +422,26 @@ class MonopolyGame:
                 self._note(f"{self.players[self.winner].name} wins the game!")
 
     def mortgage_transfer_interest(self, positions: list[int]) -> int:
-        """Return interest due now if `positions` transfer while mortgaged."""
+        """Return interest due now if `positions` transfer while mortgaged.
+
+        This 10% is rounded DOWN (a $75 mortgage owes $7): it is a one-off
+        charge that the new owner pays on top of later lifting the mortgage
+        at the full `unmortgage_cost`, so the smaller figure is the kinder
+        reading of the rule.
+        """
         return sum(self.board[pos].mortgage // 10
                    for pos in positions if pos in self.mortgaged)
+
+    def unmortgage_cost(self, position: int) -> int:
+        """Return the cash needed to lift the mortgage on `position`.
+
+        That is the mortgage value plus 10% interest, rounded UP to whole
+        dollars with integer maths ($75 -> $83, $175 -> $193). Every caller
+        -- the blocker, the action and the AI -- uses this one helper, so
+        they can never disagree by a dollar the way float rounding did.
+        """
+        mortgage = self.board[position].mortgage
+        return mortgage + (mortgage + 9) // 10
 
     def _charge_mortgage_transfer_interest(self, recipient: Player,
                                            positions: list[int]) -> None:
@@ -426,9 +547,19 @@ class MonopolyGame:
             self.charge(player, JAIL_FINE)
             player.in_jail = False
             player.jail_turns = 0
-            if self.phase == "playing":
-                self._step_forward(player, total)
-                self._resolve_landing(player)
+            if player.bankrupt:
+                # The fine bankrupted them: only a solvent player steps
+                # forward and resolves the landing.
+                self._continue_after_landing()
+                return
+            if self.debts:
+                # A human is raising funds for the fine: they move the rolled
+                # amount once it is paid (see _continue_after_landing).
+                self._pending_jail_move = total
+                self._continue_after_landing()
+                return
+            self._step_forward(player, total)
+            self._resolve_landing(player)
             if self.awaiting != "buy_or_auction":
                 self._continue_after_landing()
         else:
@@ -436,15 +567,19 @@ class MonopolyGame:
             self.awaiting = "post_roll"
 
     def pay_jail_fine(self) -> None:
-        """Current player pays the fine to get out of jail before rolling."""
+        """Current player pays the fine to get out of jail before rolling.
+
+        Paying early is optional, so it is refused (like `buy_property`)
+        unless the fine is covered by the cash in hand -- it can never
+        bankrupt anyone.
+        """
         player = self.current_player
-        if self.awaiting != "pre_roll" or not player.in_jail:
+        if self.awaiting != "pre_roll" or not player.in_jail or player.cash < JAIL_FINE:
             return
         self.charge(player, JAIL_FINE)
-        if self.phase == "playing":
-            player.in_jail = False
-            player.jail_turns = 0
-            self._note(f"{player.name} pays the ${JAIL_FINE} fine and is free.")
+        player.in_jail = False
+        player.jail_turns = 0
+        self._note(f"{player.name} pays the ${JAIL_FINE} fine and is free.")
 
     def use_jail_card(self) -> None:
         """Current player spends a Get Out of Jail Free card before rolling."""
@@ -461,13 +596,27 @@ class MonopolyGame:
     def _continue_after_landing(self) -> None:
         """Decide what happens after a landing fully resolves.
 
-        If the landing opened a buy-or-auction decision, the turn pauses there.
+        This is the single resume point after anything that can interrupt a
+        turn (a landing, an auction, a paid or conceded debt). While unpaid
+        debts remain the game waits in raise_funds. Once they clear, a player
+        freed by a jail-fine debt steps forward and resolves that landing.
         Otherwise the player either rolls again (a normal double) or moves on
         to the post-roll phase where they may build/trade and end the turn.
         """
         if self.phase == "game_over":
             return
         if self.awaiting == "auction" and self.auction is not None:
+            return
+        self._drop_void_debts()
+        if self.debts:
+            self.awaiting = "raise_funds"
+            return
+        steps, self._pending_jail_move = self._pending_jail_move, None
+        if steps is not None and not self.current_player.bankrupt:
+            self._step_forward(self.current_player, steps)
+            self._resolve_landing(self.current_player)
+            if self.awaiting != "buy_or_auction":
+                self._continue_after_landing()
             return
         if self.current_player.bankrupt:
             # A player who bankrupted on this landing cannot keep their turn.
@@ -477,6 +626,62 @@ class MonopolyGame:
             self.awaiting = "pre_roll"      # roll again
         else:
             self.awaiting = "post_roll"
+
+    # ----------------------------------------------------------------------
+    # Raising funds: a short human pays or concedes their queued debts
+    # ----------------------------------------------------------------------
+    def _drop_void_debts(self) -> None:
+        """Forget debts owed by, or to, a player who has gone bankrupt."""
+        self.debts = [debt for debt in self.debts
+                      if not self.players[debt["payer"]].bankrupt
+                      and (debt["payee"] is None or not self.players[debt["payee"]].bankrupt)]
+
+    def pay_debts(self) -> bool:
+        """Pay queued debts, oldest first, while each payer's cash covers theirs.
+
+        Payment stops at the first debt its payer cannot yet cover. Because
+        debts are paid in order across payers, an earlier payment can fund a
+        creditor's own (interest) debt within the same call. Returns True
+        once every debt is paid, and then resumes the turn.
+        """
+        if self.awaiting != "raise_funds":
+            return not self.debts
+        self._drop_void_debts()
+        while self.debts:
+            debt = self.debts[0]
+            payer = self.players[debt["payer"]]
+            if payer.cash < debt["amount"]:
+                break
+            payer.cash -= debt["amount"]
+            payee = None if debt["payee"] is None else self.players[debt["payee"]]
+            if payee is not None:
+                payee.cash += debt["amount"]
+            self.debts.pop(0)
+            self._note(f"{payer.name} pays ${debt['amount']} to "
+                       f"{'the Bank' if payee is None else payee.name}.")
+            self._drop_void_debts()
+        if self.debts:
+            return False
+        self._continue_after_landing()
+        return True
+
+    def declare_bankruptcy(self) -> None:
+        """The debtor concedes: bankrupt to the payee of their oldest debt.
+
+        Always allowed while raising funds. The debtor's cash and the
+        half-price value of their buildings go to that payee with their
+        titles (unmortgaged titles stay unmortgaged; the creditor owes
+        interest only on mortgaged ones). Owed to the Bank, the titles go
+        to auction instead. The debtor's other queued debts are dropped.
+        """
+        if self.awaiting != "raise_funds" or not self.debts:
+            return
+        head = self.debts[0]
+        payer = self.players[head["payer"]]
+        payee = None if head["payee"] is None else self.players[head["payee"]]
+        self.debts = [debt for debt in self.debts if debt["payer"] != payer.index]
+        self._bankrupt(payer, payee)
+        self._continue_after_landing()
 
     # ----------------------------------------------------------------------
     # Movement and landing
@@ -638,8 +843,14 @@ class MonopolyGame:
             self._note(f"{self.board[position].name} goes up for auction.")
 
     def _start_next_bankruptcy_auction(self) -> bool:
-        """Start the next Bank auction caused by bankruptcy, if one remains."""
+        """Start the next Bank auction caused by bankruptcy, if one remains.
+
+        With no solvent player left to bid, the queued titles are dropped.
+        """
         if not self.bankruptcy_auction_queue:
+            return False
+        if not self.active_players():
+            self.bankruptcy_auction_queue.clear()
             return False
         self._start_auction(self.bankruptcy_auction_queue.pop(0), context="bankruptcy")
         return True
@@ -667,7 +878,12 @@ class MonopolyGame:
         if self.awaiting != "auction" or self.auction is None:
             return
         auction = self.auction
-        auction["active"].remove(auction["current"])
+        seat = auction["active"].index(auction["current"])
+        auction["active"].pop(seat)
+        if auction["active"]:
+            # Give the turn to the bidder seated just before the passer, so
+            # _advance_auction resumes at the passer's clockwise successor.
+            auction["current"] = auction["active"][(seat - 1) % len(auction["active"])]
         self._advance_auction()
 
     def _advance_auction(self) -> None:
@@ -680,12 +896,11 @@ class MonopolyGame:
         if not contenders:
             self._finish_auction()
             return
-        # Advance clockwise from the bidder who just acted. If that bidder
-        # just passed, they have been removed from `active`/`order`, so
-        # `index(...)` would fail -- the `start = -1` fallback then makes the
-        # next iteration land on `order[0]`, the first remaining bidder.
+        # Advance clockwise from the bidder who just acted. A passer has
+        # already handed `current` to the bidder seated just before them,
+        # so `current` is always still in `order` here.
         order = auction["active"]
-        start = order.index(auction["current"]) if auction["current"] in order else -1
+        start = order.index(auction["current"])
         for offset in range(1, len(order) + 1):
             candidate = order[(start + offset) % len(order)]
             if candidate != high_bidder:
@@ -741,10 +956,22 @@ class MonopolyGame:
         """Build the tiny action status payload consumed by UI code."""
         return {"allowed": allowed, "reason": "" if allowed else blocker or "Unavailable."}
 
-    def _managed_asset_blocker(self, player: Player, position: int) -> str | None:
-        """Reject title management outside a current player's action window."""
+    def _managed_asset_blocker(self, player: Player, position: int,
+                               raising_funds: bool = False) -> str | None:
+        """Reject title management outside a player's action window.
+
+        That window is the current player's pre_roll/post_roll. Selling and
+        mortgaging (`raising_funds=True`) are also open to the debtor while
+        they raise funds; building and lifting mortgages are not.
+        """
         if self.owners.get(position) != player.index:
             return "That title is not owned by this player."
+        if self.awaiting == "raise_funds":
+            if player.index != self.actor():
+                return "Wait while another player raises funds."
+            if raising_funds:
+                return None
+            return "Settle the debt before building or lifting mortgages."
         if player is not self.current_player or self.awaiting not in ("pre_roll", "post_roll"):
             return "Manage assets during that player's normal turn."
         return None
@@ -776,7 +1003,7 @@ class MonopolyGame:
         return None
 
     def _sell_blocker(self, player: Player, position: int) -> str | None:
-        blocker = self._managed_asset_blocker(player, position)
+        blocker = self._managed_asset_blocker(player, position, raising_funds=True)
         if blocker:
             return blocker
         space = self.board[position]
@@ -789,7 +1016,9 @@ class MonopolyGame:
                         for pos in board_data.COLOR_GROUPS[space.group]]
         if level != max(group_levels):
             return "Sell evenly from the most developed street."
-        if level == 5 and self.bank_houses < 4:
+        if level == 5 and self.bank_houses < 4 and self.awaiting != "raise_funds":
+            # A debtor raising funds may still break it: sell_house then
+            # sells the houses the Bank cannot take back.
             return "The Bank needs four houses to break this hotel."
         return None
 
@@ -798,7 +1027,7 @@ class MonopolyGame:
         return self._mortgage_blocker(player, position) is None
 
     def _mortgage_blocker(self, player: Player, position: int) -> str | None:
-        blocker = self._managed_asset_blocker(player, position)
+        blocker = self._managed_asset_blocker(player, position, raising_funds=True)
         if blocker:
             return blocker
         if position in self.mortgaged:
@@ -822,7 +1051,7 @@ class MonopolyGame:
             return blocker
         if position not in self.mortgaged:
             return "This title is not mortgaged."
-        cost = round(self.board[position].mortgage * 1.1)
+        cost = self.unmortgage_cost(position)
         if player.cash < cost:
             return f"Need ${cost} to lift this mortgage."
         return None
@@ -855,8 +1084,15 @@ class MonopolyGame:
         return self._sell_blocker(player, position) is None
 
     def sell_house(self, position: int, forced: bool = False) -> bool:
-        """Sell one house/hotel back to the bank for half its build cost."""
-        player = self.current_player if not forced else self.owner_of(position)
+        """Sell one building back to the bank for half its build cost.
+
+        Selling a house drops the street one level. Selling a hotel trades
+        it back for four houses from the Bank; in a forced sale during a
+        house shortage the street keeps only the houses the Bank can supply
+        and every building beyond that is sold too, so the Bank's house
+        supply can never go negative.
+        """
+        player = self.players[self.actor()] if not forced else self.owner_of(position)
         if player is None or self.owners.get(position) != player.index:
             return False
         level = self.houses.get(position, 0)
@@ -866,19 +1102,27 @@ class MonopolyGame:
             return False
         space = self.board[position]
         if level == 5:
-            # Selling a hotel needs four houses available from the bank.
+            # Breaking a hotel needs four houses from the Bank. In a forced
+            # sale during a shortage, take only the houses the Bank has; the
+            # rest are sold.
+            new_level = min(4, self.bank_houses)
             self.bank_hotels += 1
-            self.bank_houses -= 4
+            self.bank_houses -= new_level
         else:
+            new_level = level - 1
             self.bank_houses += 1
-        self.houses[position] = level - 1
-        player.cash += space.house_cost // 2
+        self.houses[position] = new_level
+        player.cash += (level - new_level) * (space.house_cost // 2)
         self._note(f"{player.name} sells a building on {space.name}.")
         return True
 
     def mortgage(self, position: int, forced: bool = False) -> bool:
-        """Mortgage a property: raise its mortgage value, collect no rent on it."""
-        player = self.current_player if not forced else self.owner_of(position)
+        """Mortgage a property: raise its mortgage value, collect no rent on it.
+
+        A normal mortgage acts for `actor()` (the current player, or a debtor
+        raising funds); a forced one acts for the title's owner.
+        """
+        player = self.players[self.actor()] if not forced else self.owner_of(position)
         if player is None or self.owners.get(position) != player.index:
             return False
         if not forced and not self.can_mortgage(player, position):
@@ -896,7 +1140,7 @@ class MonopolyGame:
         player = self.current_player
         if not self.can_unmortgage(player, position):
             return False
-        cost = round(self.board[position].mortgage * 1.1)
+        cost = self.unmortgage_cost(position)
         if player.cash < cost:
             return False
         player.cash -= cost
@@ -907,7 +1151,7 @@ class MonopolyGame:
     # ----------------------------------------------------------------------
     # Trading
     # ----------------------------------------------------------------------
-    def trade_consequence_lines(self, offer: dict) -> list[str]:
+    def trade_consequence_lines(self, offer: TradeOffer) -> list[str]:
         """Summarise immediate mortgage costs before a trade is accepted."""
         try:
             incoming = (
@@ -924,7 +1168,7 @@ class MonopolyGame:
                     f"{recipient.name} owes ${interest} mortgage transfer interest.")
         return lines
 
-    def trade_error(self, offer: dict) -> str | None:
+    def trade_error(self, offer: TradeOffer) -> str | None:
         """Return a readable reason an offer is illegal, or None if legal."""
         try:
             giver = self.players[offer["from"]]
@@ -947,17 +1191,24 @@ class MonopolyGame:
                 if group and any(self.houses.get(p, 0) > 0
                                  for p in board_data.COLOR_GROUPS[group]):
                     return "Sell buildings in that color group before trading it."
+        # Each receiver pays 10% interest at once on mortgaged titles, so the
+        # cash they hold after the swap must cover it.
+        for owner, given, received in ((giver, offer["give"], offer["get"]),
+                                       (taker, offer["get"], offer["give"])):
+            interest = self.mortgage_transfer_interest(received["props"])
+            if owner.cash - given["cash"] + received["cash"] < interest:
+                return f"{owner.name} needs ${interest} cash for mortgage transfer interest."
         return None
 
-    def trade_is_legal(self, offer: dict) -> bool:
+    def trade_is_legal(self, offer: TradeOffer) -> bool:
         """Check a trade offer is valid before it is proposed or accepted.
 
-        An `offer` is a dict with `from`, `to`, and the two sides' `props`
-        (lists of positions), `cash` and `jail` (jail-card counts).
+        An `offer` is a `TradeOffer`: `from`, `to`, and the two sides'
+        `props` (lists of positions), `cash` and `jail` (jail-card counts).
         """
         return self.trade_error(offer) is None
 
-    def propose_trade(self, offer: dict) -> bool:
+    def propose_trade(self, offer: TradeOffer) -> bool:
         """The current player offers a trade; the target must then respond."""
         if self.awaiting not in ("pre_roll", "post_roll"):
             return False
@@ -981,10 +1232,12 @@ class MonopolyGame:
             self._note(f"{self.players[offer['to']].name} accepts the trade.")
         else:
             self._note(f"{self.players[offer['to']].name} rejects the trade.")
+            for wanted in offer["get"]["props"]:
+                self._rejected_offers[(offer["from"], offer["to"], wanted)] = self.turn_count
         self.pending_trade = None
         self.awaiting = self._awaiting_before_trade
 
-    def _execute_trade(self, offer: dict) -> None:
+    def _execute_trade(self, offer: TradeOffer) -> None:
         """Swap the cash, properties and jail cards described by an offer."""
         giver = self.players[offer["from"]]
         taker = self.players[offer["to"]]
@@ -1017,8 +1270,10 @@ class MonopolyGame:
     def to_dict(self) -> dict:
         """Snapshot the whole game as plain data for saving to JSON.
 
-        Saving is only offered between turns (pre_roll / post_roll), so no
-        half-finished auction or trade ever needs to be stored.
+        Saving is only offered in pre_roll / post_roll, so no half-finished
+        auction or trade ever needs to be stored (any other state is
+        normalised to pre_roll). Those states can fall mid-turn, between
+        two doubles, so `doubles_count` is kept for the three-doubles rule.
         """
         return {
             "save_version": SAVE_VERSION,
@@ -1035,11 +1290,23 @@ class MonopolyGame:
             "current": self.current,
             "awaiting": self.awaiting if self.awaiting in ("pre_roll", "post_roll") else "pre_roll",
             "turn_count": self.turn_count,
+            "doubles_count": self.doubles_count,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> MonopolyGame:
-        """Rebuild a game from a `to_dict()` snapshot (used to resume a game)."""
+        """Rebuild a game from a `to_dict()` snapshot (used to resume a game).
+
+        Stored numbers are coerced to int, then the payload is validated: a
+        save whose seats, turn state, titles, buildings or decks could not be
+        resumed raises ValueError, which the loader treats as a bad save.
+
+        Beginner note:
+        - Legitimate saves must still load: a bankrupt current player, titles
+          pointing at a bankrupt seat, zero building entries, a deck missing
+          the jail card a player holds, and first-release saves without the
+          newer fields are all states a real game can be saved in.
+        """
         save_version = int(data.get("save_version", 1))
         if save_version not in (1, SAVE_VERSION):
             raise ValueError(f"Unsupported Monopoly save version: {save_version}")
@@ -1047,18 +1314,33 @@ class MonopolyGame:
         game = cls(specs, theme=data.get("theme", "classic"),
                    ai_profile=data.get("ai_profile", "standard"))
         game.players = [Player.from_dict(p) for p in data["players"]]
-        game.owners = {int(k): v for k, v in data["owners"].items()}
+        game.owners = {int(k): int(v) for k, v in data["owners"].items()}
         game.houses = {int(k): v for k, v in data["houses"].items()}
         game.mortgaged = set(data["mortgaged"])
-        game.bank_houses = data["bank_houses"]
-        game.bank_hotels = data["bank_hotels"]
+        game.bank_houses = int(data["bank_houses"])
+        game.bank_hotels = int(data["bank_hotels"])
         game.chance = cards_module.Deck("chance", cards_module.CHANCE_CARDS,
                                         order=data["chance"])
         game.chest = cards_module.Deck("chest", cards_module.CHEST_CARDS,
                                        order=data["chest"])
-        game.current = data["current"]
+        game.current = int(data["current"])
         game.awaiting = data["awaiting"]
-        game.turn_count = data["turn_count"]
+        game.turn_count = int(data["turn_count"])
+        game.doubles_count = int(data.get("doubles_count", 0))
         game.phase = "playing"
+
+        seats = len(game.players)
+        if not 2 <= seats <= len(TOKEN_COLORS) or any(p.index != seat for seat, p in enumerate(game.players)):
+            raise ValueError("Saved players are inconsistent.")
+        if not 0 <= game.current < seats or game.awaiting not in ("pre_roll", "post_roll"):
+            raise ValueError("Saved turn state cannot be resumed.")
+        if any(not 0 <= pos < len(game.board) or game.board[pos].kind not in ("street", "railroad", "utility")
+               or not 0 <= owner < seats for pos, owner in game.owners.items()):
+            raise ValueError("Saved title ownership is invalid.")
+        if any(not 0 <= level <= 5 for level in game.houses.values()):
+            raise ValueError("Saved building level is invalid.")
+        for deck in (game.chance, game.chest):
+            if not deck.order or any(not 0 <= i < len(deck.master) for i in deck.order):
+                raise ValueError("Saved card deck is invalid.")
         game._note("Resumed a saved game.")
         return game

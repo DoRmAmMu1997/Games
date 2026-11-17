@@ -11,18 +11,26 @@ from __future__ import annotations
 import pygame
 
 import board_data
+import board_render
 from cards import format_card_text
 from settings import (
     BG,
+    BUTTON_FILL,
+    CHANCE_CARD_COLOR,
+    CHEST_CARD_COLOR,
     DANGER,
+    DANGER_TEXT,
     GOLD,
     GROUP_COLORS,
     HIGHLIGHT,
     INK,
     PANEL_BG,
     PANEL_CARD,
+    PANEL_CARD_CURRENT,
     PANEL_WIDTH,
     PANEL_X,
+    PIP_RADIUS,
+    PLAYER_DISC_RADIUS,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     SOFT,
@@ -38,6 +46,9 @@ def make_fonts() -> dict:
     """Create every font the game uses (called once, after pygame.init)."""
     return {
         "tile": pygame.font.SysFont("arial", 12),
+        # Smaller steps for board labels whose words do not fit at 12 px.
+        "tile_mid": pygame.font.SysFont("arial", 11),
+        "tile_min": pygame.font.SysFont("arial", 10),
         "tiny": pygame.font.SysFont("arial", 14),
         "small": pygame.font.SysFont("arial", 17),
         "med": pygame.font.SysFont("arial", 21, bold=True),
@@ -45,6 +56,10 @@ def make_fonts() -> dict:
         "huge": pygame.font.SysFont("arial", 52, bold=True),
         "title": pygame.font.SysFont("arial", 60, bold=True),
     }
+
+
+# Clear space kept between a button's label and each side border, in pixels.
+BUTTON_LABEL_MARGIN = 8
 
 
 class Button:
@@ -62,7 +77,7 @@ class Button:
         self.label = label
         self.key = key            # e.g. "roll", "buy", "end_turn"
         self.enabled = enabled
-        self.color = color or (54, 86, 72)
+        self.color = color or BUTTON_FILL
 
     def draw(self, surface: pygame.Surface, fonts: dict, mouse: tuple[int, int]) -> None:
         """Draw the button, brightening it slightly while hovered."""
@@ -73,8 +88,24 @@ class Button:
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
         pygame.draw.rect(surface, INK, self.rect, 2, border_radius=8)
         ink = WHITE if self.enabled else SOFT
-        glyph = fonts["small"].render(self.label, True, ink)
+        text, font = self.fitted_label(fonts)
+        glyph = font.render(text, True, ink)
         surface.blit(glyph, glyph.get_rect(center=self.rect.center))
+
+    def fitted_label(self, fonts: dict) -> tuple[str, pygame.font.Font]:
+        """Return the label text and the font it is drawn in.
+
+        The label keeps BUTTON_LABEL_MARGIN clear on both sides by measured
+        width: the normal button font if it fits, else the smaller one, and
+        as a last resort a shortened label.
+
+        Beginner note:
+        - Never assume a label's width. "arial" is a different typeface on
+          each platform (some are 15% wider), so text that fits on one
+          machine can cross the button border on another.
+        """
+        return _fit_line(fonts, ("small", "tiny"), self.label,
+                         self.rect.width - 2 * BUTTON_LABEL_MARGIN)
 
     def hit(self, pos: tuple[int, int]) -> bool:
         """True if `pos` is inside an enabled button."""
@@ -92,26 +123,44 @@ def _text(surface, fonts, key, text, pos, color=WHITE, center=False):
 # --------------------------------------------------------------------------
 # Setup screen
 # --------------------------------------------------------------------------
+# The setup screen's left column, from its left steppers to its right ones.
+_SETUP_LEFT, _SETUP_RIGHT = 90, 424
+# Clear space between a value (theme or AI name) and the steppers beside it.
+SETUP_VALUE_MARGIN = 8
+
+
 def setup_buttons(has_save: bool) -> list:
     """Build the clickable buttons for the setup screen."""
     buttons = [
-        # The right-hand stepper buttons sit far enough out so even the
-        # widest theme name ("World Landmarks") fits between them.
-        Button((90, 250, 44, 44), "-", "humans_down"),
-        Button((380, 250, 44, 44), "+", "humans_up"),
-        Button((90, 380, 44, 44), "<", "theme_prev"),
-        Button((380, 380, 44, 44), ">", "theme_next"),
-        Button((90, 500, 44, 44), "<", "ai_profile_prev"),
-        Button((380, 500, 44, 44), ">", "ai_profile_next"),
-        Button((90, 590, 320, 56), "Start Game", "start", color=(46, 116, 78)),
+        # The left column runs from the "-"/"<" steppers to the "+"/">"
+        # ones; the values between them are fitted by `setup_value_line`.
+        Button((_SETUP_LEFT, 250, 44, 44), "-", "humans_down"),
+        Button((_SETUP_RIGHT - 44, 250, 44, 44), "+", "humans_up"),
+        Button((_SETUP_LEFT, 380, 44, 44), "<", "theme_prev"),
+        Button((_SETUP_RIGHT - 44, 380, 44, 44), ">", "theme_next"),
+        Button((_SETUP_LEFT, 500, 44, 44), "<", "ai_profile_prev"),
+        Button((_SETUP_RIGHT - 44, 500, 44, 44), ">", "ai_profile_next"),
+        # Start and Resume span the same column, so their edges line up
+        # with the steppers above them.
+        Button((_SETUP_LEFT, 590, _SETUP_RIGHT - _SETUP_LEFT, 56), "Start Game", "start",
+               color=(46, 116, 78)),
         # A way out of the setup screen without closing the window.
         Button((SCREEN_WIDTH - 160, 30, 130, 40), "Quit", "quit",
                color=(120, 60, 60)),
     ]
     if has_save:
-        buttons.append(Button((90, 660, 320, 50), "Resume Saved Game",
-                              "resume", color=(58, 92, 140)))
+        buttons.append(Button((_SETUP_LEFT, 660, _SETUP_RIGHT - _SETUP_LEFT, 50),
+                              "Resume Saved Game", "resume", color=(58, 92, 140)))
     return buttons
+
+
+def setup_value_line(fonts: dict, text: str) -> tuple[str, pygame.font.Font]:
+    """Return a setup value's text and the font that fits it between its steppers.
+
+    The big font is used when it fits by measured width, else the medium one.
+    """
+    room = (_SETUP_RIGHT - 44) - (_SETUP_LEFT + 44) - 2 * SETUP_VALUE_MARGIN
+    return _fit_line(fonts, ("big", "med"), text, room)
 
 
 def setup_name_field_rect(i: int) -> pygame.Rect:
@@ -132,21 +181,27 @@ def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse,
     _text(surface, fonts, "med", "Human players", (90, 215))
     # Centre the digit and theme name between their stepper buttons so they
     # never overlap the arrows, however long the theme name is.
-    _text(surface, fonts, "huge", str(human_count), (257, 272), WHITE, center=True)
+    _text(surface, fonts, "huge", str(human_count), ((_SETUP_LEFT + _SETUP_RIGHT) // 2, 272),
+          WHITE, center=True)
 
     _text(surface, fonts, "med", "Board", (90, 345))
-    theme_name = board_data.THEMES[theme_key]["name"]
-    _text(surface, fonts, "big", theme_name, (257, 402), GOLD, center=True)
+    _draw_setup_value(surface, fonts, str(board_data.THEMES[theme_key]["name"]), 402)
 
     _text(surface, fonts, "med", "AI Difficulty", (90, 465))
-    _text(surface, fonts, "big", ai_profile_key.replace("_", " ").title(),
-          (257, 522), GOLD, center=True)
+    _draw_setup_value(surface, fonts, ai_profile_key.replace("_", " ").title(), 522)
 
     _draw_setup_info_panel(surface, fonts, stats, human_count,
                            name_fields, active_field)
 
     for button in buttons:
         button.draw(surface, fonts, mouse)
+
+
+def _draw_setup_value(surface, fonts, value: str, y: int) -> None:
+    """Draw a stepper's value centred between its two buttons, fitted to fit."""
+    text, font = setup_value_line(fonts, value)
+    glyph = font.render(text, True, GOLD)
+    surface.blit(glyph, glyph.get_rect(center=((_SETUP_LEFT + _SETUP_RIGHT) // 2, y)))
 
 
 def _draw_setup_info_panel(surface, fonts, stats, human_count,
@@ -190,43 +245,53 @@ def _draw_setup_info_panel(surface, fonts, stats, human_count,
 # --------------------------------------------------------------------------
 # In-game side panel
 # --------------------------------------------------------------------------
+# The side panel stacks four player cards, then the game log, then the
+# prompt strip and action bar, with the same small gap between cards.
+_PLAYER_CARDS_TOP = 10
+_PLAYER_CARD_H = 118
+_PLAYER_CARD_GAP = 6
+
+
 def draw_panel(surface, fonts, game, mouse) -> None:
     """Draw the right-hand information panel: player cards and the event log."""
     panel = pygame.Rect(PANEL_X, 0, PANEL_WIDTH + 20, SCREEN_HEIGHT)
     pygame.draw.rect(surface, PANEL_BG, panel)
 
-    card_h = 118
     for i, player in enumerate(game.players):
-        rect = pygame.Rect(PANEL_X + 6, 10 + i * (card_h + 6), PANEL_WIDTH + 8, card_h)
+        rect = pygame.Rect(PANEL_X + 6, _PLAYER_CARDS_TOP + i * (_PLAYER_CARD_H + _PLAYER_CARD_GAP),
+                           PANEL_WIDTH + 8, _PLAYER_CARD_H)
         _draw_player_card(surface, fonts, game, player, rect, i == game.current)
+    _draw_log(surface, fonts, game)
 
-    log_top = 10 + 4 * (card_h + 6) + 8
-    _draw_log(surface, fonts, game, pygame.Rect(PANEL_X + 6, log_top,
-                                                PANEL_WIDTH + 8, 150))
+
+def player_disc_center(rect: pygame.Rect) -> tuple[int, int]:
+    """Centre of the token-colour disc on a player card drawn in `rect`."""
+    return rect.x + 24, rect.y + 26
 
 
 def _draw_player_card(surface, fonts, game, player, rect, is_current) -> None:
     """Draw one player's summary card in the side panel."""
-    bg = PANEL_CARD if not is_current else (52, 74, 60)
+    bg = PANEL_CARD if not is_current else PANEL_CARD_CURRENT
     pygame.draw.rect(surface, bg, rect, border_radius=8)
     border = HIGHLIGHT if is_current else INK
     pygame.draw.rect(surface, border, rect, 3 if is_current else 1, border_radius=8)
 
-    # Token swatch and name.
-    pygame.draw.circle(surface, player.token_color, (rect.x + 24, rect.y + 26), 14)
-    pygame.draw.circle(surface, INK, (rect.x + 24, rect.y + 26), 14, 2)
+    # Token swatch (an antialiased disc with a dark edge) and name.
+    disc = player_disc_center(rect)
+    pygame.draw.aacircle(surface, player.token_color, disc, PLAYER_DISC_RADIUS)
+    pygame.draw.aacircle(surface, INK, disc, PLAYER_DISC_RADIUS, 2)
     name_color = SOFT if player.bankrupt else WHITE
     _text(surface, fonts, "med", player.name, (rect.x + 48, rect.y + 12), name_color)
 
     if player.bankrupt:
-        _text(surface, fonts, "small", "BANKRUPT", (rect.x + 48, rect.y + 40), DANGER)
+        _text(surface, fonts, "small", "BANKRUPT", (rect.x + 48, rect.y + 40), DANGER_TEXT)
         return
 
     _text(surface, fonts, "med", f"${player.cash}", (rect.x + 48, rect.y + 38), SUCCESS)
     tag = "AI" if not player.is_human else "You"
     _text(surface, fonts, "tiny", tag, (rect.right - 44, rect.y + 14), SOFT)
     if player.in_jail:
-        _text(surface, fonts, "tiny", "IN JAIL", (rect.right - 70, rect.y + 36), DANGER)
+        _text(surface, fonts, "tiny", "IN JAIL", (rect.right - 70, rect.y + 36), DANGER_TEXT)
 
     # A row of small swatches, one per property, grouped by colour.
     owned = sorted(game.properties_of(player))
@@ -257,27 +322,72 @@ def _draw_player_card(surface, fonts, game, player, rect, is_current) -> None:
               (rect.right - 116, rect.bottom - 22), GOLD)
 
 
-def _draw_log(surface, fonts, game, rect) -> None:
+# Clear space between the game-log text and each side of its card.
+LOG_MARGIN = 10
+_LOG_FIRST_LINE = 30          # first log line's offset below the card top (under the header)
+_LOG_MIN_PITCH = 17           # pixels from one log line to the next, at least
+
+
+def log_rect() -> pygame.Rect:
+    """The game-log card: from one gap below the player cards to the prompt strip."""
+    top = _PLAYER_CARDS_TOP + 4 * (_PLAYER_CARD_H + _PLAYER_CARD_GAP)
+    bottom = action_bar_layout()["prompt"].top - 2
+    return pygame.Rect(PANEL_X + 6, top, PANEL_WIDTH + 8, bottom - top)
+
+
+def log_lines(fonts: dict, game) -> list[tuple[str, tuple[int, int]]]:
+    """Return the visible log lines with the position each one is drawn at.
+
+    As many of the newest events as fit under the header are shown, newest
+    last. Each line is shortened by MEASURED width so it stays LOG_MARGIN
+    clear of the card's sides -- a fixed character count cuts narrow lines
+    that would fit and lets wide ones run off the card.
+    """
+    rect = log_rect()
+    font = fonts["tiny"]
+    pitch = max(_LOG_MIN_PITCH, font.get_height() + 1)
+    count = max(1, (rect.height - _LOG_FIRST_LINE - 4) // pitch)
+    width = rect.width - 2 * LOG_MARGIN
+    return [(_fit_text(font, line, width),
+             (rect.x + LOG_MARGIN, rect.y + _LOG_FIRST_LINE + i * pitch))
+            for i, line in enumerate(game.log[-count:])]
+
+
+def _draw_log(surface, fonts, game) -> None:
     """Draw the most recent game events."""
+    rect = log_rect()
     pygame.draw.rect(surface, PANEL_CARD, rect, border_radius=8)
     pygame.draw.rect(surface, INK, rect, 1, border_radius=8)
-    _text(surface, fonts, "small", "Game Log", (rect.x + 10, rect.y + 6), GOLD)
-    visible = game.log[-7:]
-    for i, line in enumerate(visible):
-        glyph = fonts["tiny"].render(line[:46], True, SOFT)
-        surface.blit(glyph, (rect.x + 10, rect.y + 30 + i * 17))
+    _text(surface, fonts, "small", "Game Log", (rect.x + LOG_MARGIN, rect.y + 6), GOLD)
+    for text, position in log_lines(fonts, game):
+        surface.blit(fonts["tiny"].render(text, True, SOFT), position)
 
 
 # --------------------------------------------------------------------------
 # Board-centre widgets: dice and the current card
 # --------------------------------------------------------------------------
-def draw_dice(surface, fonts, dice, center) -> None:
-    """Draw the two dice at `center` with their pip patterns."""
-    size = 52
-    gap = 16
-    total_w = size * 2 + gap
-    x0 = center[0] - total_w // 2
-    y0 = center[1] - size // 2
+# The diagonal MONOPOLY title runs from the board middle's lower-left to
+# its upper-right corner. The drawn card sits in the free upper-left
+# triangle and the dice in the lower-right one, so neither covers it.
+_DIE_SIZE, _DIE_GAP = 52, 16
+_CARD_W = 320
+_CARD_INSET = 16              # card distance from the board middle's corner
+_DICE_OFFSET = (120, 60)      # dice centre, right of and below the board centre
+
+
+def dice_rect() -> pygame.Rect:
+    """Where the two dice are drawn: in the board middle's lower-right triangle."""
+    rect = pygame.Rect(0, 0, _DIE_SIZE * 2 + _DIE_GAP, _DIE_SIZE)
+    rect.center = (board_render.BOARD_CENTER + _DICE_OFFSET[0],
+                   board_render.BOARD_CENTER + _DICE_OFFSET[1])
+    return rect
+
+
+def draw_dice(surface, fonts, dice) -> None:
+    """Draw the two dice with their pip patterns, at `dice_rect()`."""
+    size = _DIE_SIZE
+    gap = _DIE_GAP
+    x0, y0 = dice_rect().topleft
     for d, value in enumerate(dice):
         rect = pygame.Rect(x0 + d * (size + gap), y0, size, size)
         pygame.draw.rect(surface, WHITE, rect, border_radius=10)
@@ -298,25 +408,49 @@ def _draw_pips(surface, rect, value) -> None:
         6: [(-1, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (1, 1)],
     }.get(value, [])
     for sx, sy in spots:
-        pygame.draw.circle(surface, INK, (cx + sx * ox, cy + sy * oy), 5)
+        pygame.draw.aacircle(surface, INK, (cx + sx * ox, cy + sy * oy), PIP_RADIUS)
+
+
+def card_colors(deck: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Return the (face fill, text ink) colours of a Chance or Chest card."""
+    return (CHANCE_CARD_COLOR if deck == "chance" else CHEST_CARD_COLOR), WHITE
+
+
+def center_card_layout(fonts, game) -> dict:
+    """Place the last drawn card in the board middle's upper-left corner.
+
+    The card is as tall as its wrapped text needs: a header, then the body
+    lines a few pixels below it. Returns the panel and header rects, the
+    body lines, and where the body starts and ends.
+    """
+    middle = board_render.inner_rect()
+    deck = game.last_card["deck"]
+    header_font, body_font = fonts["med"], fonts["tiny"]
+    title = "CHANCE" if deck == "chance" else "COMMUNITY CHEST"
+    left, top = middle.x + _CARD_INSET, middle.y + _CARD_INSET
+    header = pygame.Rect((left + 12, top + 8), header_font.size(title))
+    lines = _wrap_lines(body_font, format_card_text(game.last_card, game.board), _CARD_W - 24)
+    pitch = body_font.get_height() + 2
+    body_top = header.bottom + 4
+    body_bottom = body_top + len(lines) * pitch
+    panel = pygame.Rect(left, top, _CARD_W, body_bottom + 10 - top)
+    return {"panel": panel, "header": header, "title": title, "lines": lines,
+            "pitch": pitch, "body_top": body_top, "body_bottom": body_bottom}
 
 
 def draw_center_card(surface, fonts, game) -> None:
     """Draw the most recently drawn Chance / Community Chest card."""
     if game.last_card is None:
         return
-    panel = pygame.Rect(0, 0, 320, 120)
-    panel.center = (220 + 90, 360 + 90)  # roughly the board centre, upper area
-    panel.center = (20 + (SCREEN_HEIGHT - 40) // 2, 20 + (SCREEN_HEIGHT - 40) // 2 - 150)
-    deck = game.last_card["deck"]
-    bg = (70, 96, 150) if deck == "chance" else (150, 110, 60)
-    pygame.draw.rect(surface, bg, panel, border_radius=10)
+    layout = center_card_layout(fonts, game)
+    fill, ink = card_colors(game.last_card["deck"])
+    panel = layout["panel"]
+    pygame.draw.rect(surface, fill, panel, border_radius=10)
     pygame.draw.rect(surface, INK, panel, 2, border_radius=10)
-    title = "CHANCE" if deck == "chance" else "COMMUNITY CHEST"
-    _text(surface, fonts, "small", title, (panel.centerx, panel.y + 16),
-          GOLD, center=True)
-    words = format_card_text(game.last_card, game.board)
-    _blit_wrapped(surface, fonts["tiny"], words, panel.inflate(-24, -44), WHITE)
+    surface.blit(fonts["med"].render(layout["title"], True, ink), layout["header"])
+    for i, line in enumerate(layout["lines"]):
+        surface.blit(fonts["tiny"].render(line, True, ink),
+                     (layout["header"].x, layout["body_top"] + i * layout["pitch"]))
 
 
 def property_detail_lines(game, position: int) -> list[str]:
@@ -396,22 +530,54 @@ def asset_layout(game, player) -> dict:
     }
 
 
+def assets_header_plan(fonts: dict, game, player) -> list:
+    """Stack the asset manager's title, instruction and list heading."""
+    panel = asset_layout(game, player)["panel"]
+    title = _stack(fonts, [("big", "ASSET MANAGER", GOLD)], panel.centerx, panel.y + 14,
+                   panel.width - 260, center=True)
+    return [*title, *_stack(fonts, [("small", f"{player.name}: select a title to manage.", WHITE),
+                                    ("small", "Owned titles", SUCCESS)],
+                            panel.x + 28, title[0][3].bottom + 6, 440)]
+
+
+def asset_detail_plan(fonts: dict, game, player, position: int) -> list:
+    """Stack the selected title's deed lines, then its action status lines.
+
+    Every line is wrapped to the detail box, and lines that would run past
+    the box's bottom are left out rather than drawn over its border.
+    """
+    detail = asset_layout(game, player)["detail"]
+    width = detail.width - 36
+    lines = property_detail_lines(game, position)
+    items: list = [("med", lines[0], GOLD)]
+    items += [("tiny", part, WHITE, 6 if i == 0 and j == 0 else 0)
+              for i, line in enumerate(lines[1:])
+              for j, part in enumerate(_wrap_lines(fonts["tiny"], line, width))]
+    items.append(("small", "Action status", SUCCESS, 10))
+    names = {"build": "Build", "sell": "Sell", "mortgage": "Mortgage", "unmortgage": "Lift"}
+    for key, status in game.asset_actions_for(player, position).items():
+        text = f"{names[key]}: ready" if status["allowed"] else f"{names[key]}: {status['reason']}"
+        color = SUCCESS if status["allowed"] else SOFT
+        items += [("tiny", part, color, 4 if j == 0 else 0)
+                  for j, part in enumerate(_wrap_lines(fonts["tiny"], text, width))]
+    plan = _stack(fonts, items, detail.x + 18, detail.y + 14, width)
+    return [item for item in plan if item[3].bottom <= detail.bottom - 6]
+
+
 def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None:
-    """Draw the owned-title manager and engine-authored action reasons."""
+    """Draw the owned-title manager and engine-authored action reasons.
+
+    It manages the acting player's titles: the current player, or a debtor
+    raising funds who may not be the current player.
+    """
     _dim(surface)
-    player = game.current_player
+    player = game.players[game.actor()]
     layout = asset_layout(game, player)
     panel = layout["panel"]
     detail = layout["detail"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
-    _text(surface, fonts, "big", "ASSET MANAGER",
-          (panel.centerx, panel.y + 30), GOLD, center=True)
-    _text(surface, fonts, "small",
-          f"{player.name}: select a title to manage.",
-          (panel.x + 28, panel.y + 70), WHITE)
-    _text(surface, fonts, "small", "Owned titles",
-          (panel.x + 28, panel.y + 88), SUCCESS)
+    _blit_plan(surface, fonts, assets_header_plan(fonts, game, player))
 
     for row, position in layout["title_rows"]:
         if selected_position == position:
@@ -424,37 +590,7 @@ def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None
         _text(surface, fonts, "small", "No title selected.",
               (detail.x + 18, detail.y + 18), SOFT)
     else:
-        lines = property_detail_lines(game, selected_position)
-        _blit_wrapped(surface, fonts["med"], lines[0],
-                      pygame.Rect(detail.x + 18, detail.y + 16,
-                                  detail.width - 36, 30), GOLD)
-        y = detail.y + 58
-        for line in lines[1:]:
-            _blit_wrapped(surface, fonts["tiny"], line,
-                          pygame.Rect(detail.x + 18, y, detail.width - 36, 18),
-                          WHITE)
-            y += 20
-            if y > detail.y + 178:
-                break
-
-        _text(surface, fonts, "small", "Action status",
-              (detail.x + 18, detail.y + 202), SUCCESS)
-        action_names = {
-            "build": "Build",
-            "sell": "Sell",
-            "mortgage": "Mortgage",
-            "unmortgage": "Lift",
-        }
-        actions = game.asset_actions_for(player, selected_position)
-        y = detail.y + 230
-        for key in ("build", "sell", "mortgage", "unmortgage"):
-            status = actions[key]
-            line = (f"{action_names[key]}: ready" if status["allowed"]
-                    else f"{action_names[key]}: {status['reason']}")
-            _blit_wrapped(surface, fonts["tiny"], line,
-                          pygame.Rect(detail.x + 18, y, detail.width - 36, 34),
-                          SUCCESS if status["allowed"] else SOFT)
-            y += 28
+        _blit_plan(surface, fonts, asset_detail_plan(fonts, game, player, selected_position))
 
     _text(surface, fonts, "tiny",
           "M = mortgaged. Street markers show building level; H means hotel.",
@@ -463,26 +599,102 @@ def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None
         button.draw(surface, fonts, mouse)
     for row, position in layout["title_rows"]:
         if position in game.mortgaged:
-            _text(surface, fonts, "tiny", "M", (row.right - 16, row.y + 5), DANGER)
+            _text(surface, fonts, "tiny", "M", (row.right - 16, row.y + 5), DANGER_TEXT)
         elif game.houses.get(position, 0):
             level = game.houses[position]
             marker = "H" if level == 5 else str(level)
             _text(surface, fonts, "tiny", marker, (row.right - 16, row.y + 5), GOLD)
 
 
-def _blit_wrapped(surface, font, text, rect, color) -> None:
-    """Word-wrap `text` inside `rect` and draw it."""
-    words = text.split()
+# Pixels of clear space between two stacked lines of dialog text.
+DIALOG_LINE_GAP = 4
+
+
+def _stack(fonts: dict, items: list, x: int, top: int, width: int,
+           center: bool = False, gap: int = DIALOG_LINE_GAP) -> list:
+    """Lay text out top to bottom with measured gaps; return the placed lines.
+
+    `items` are (font key, text, colour) or (font key, text, colour, extra
+    gap above). Each text is shortened to `width` if needed and placed
+    `gap` pixels below the previous line's real height, left-aligned at `x`
+    or centred on it. Returns (font key, text, colour, rect) items.
+
+    Beginner note:
+    - Stacking by each font's MEASURED height is what keeps lines from
+      touching: a fixed y per line breaks as soon as a platform's font is
+      a few pixels taller.
+    """
+    placed = []
+    y = top
+    for item in items:
+        key, text, color = item[:3]
+        y += item[3] if len(item) > 3 else 0
+        text = _fit_text(fonts[key], text, width)
+        rect = pygame.Rect((0, y), fonts[key].size(text))
+        if center:
+            rect.centerx = x
+        else:
+            rect.x = x
+        placed.append((key, text, color, rect))
+        y = rect.bottom + gap
+    return placed
+
+
+def _blit_plan(surface, fonts: dict, plan: list) -> None:
+    """Draw (font key, text, colour, rect) items from a layout plan."""
+    for key, text, color, rect in plan:
+        surface.blit(fonts[key].render(text, True, color), rect)
+
+
+def _wrap_lines(font, text: str, width: int) -> list[str]:
+    """Greedily word-wrap `text` into lines no wider than `width` pixels."""
     lines, current = [], ""
-    for word in words:
+    for word in text.split():
         trial = f"{current} {word}".strip()
-        if font.size(trial)[0] <= rect.width:
+        if font.size(trial)[0] <= width:
             current = trial
         else:
-            lines.append(current)
+            if current:
+                lines.append(current)
             current = word
     if current:
         lines.append(current)
+    return lines
+
+
+def _fit_line(fonts: dict, keys: tuple[str, ...], text: str, width: int,
+              height: int | None = None) -> tuple[str, pygame.font.Font]:
+    """Pick the first font in `keys` in which `text` fits; return (text, font).
+
+    `keys` lists font names from largest to smallest. A font fits when the
+    measured text is no wider than `width` (and the font no taller than
+    `height`, if given). If none fits, the text is shortened with "..." in
+    the last, smallest font.
+
+    Beginner note:
+    - Sizes are MEASURED with the fonts actually loaded, never guessed from
+      character counts: "arial" is a different typeface on every platform.
+    """
+    for key in keys:
+        font = fonts[key]
+        if font.size(text)[0] <= width and (height is None or font.get_height() <= height):
+            return text, font
+    font = fonts[keys[-1]]
+    return _fit_text(font, text, width), font
+
+
+def _fit_text(font, text: str, width: int) -> str:
+    """Return `text`, shortened with "..." if needed to fit `width` pixels."""
+    if font.size(text)[0] <= width:
+        return text
+    while text and font.size(text + "...")[0] > width:
+        text = text[:-1]
+    return text.rstrip() + "..."
+
+
+def _blit_wrapped(surface, font, text, rect, color) -> None:
+    """Word-wrap `text` inside `rect` and draw it."""
+    lines = _wrap_lines(font, text, rect.width)
     for i, line in enumerate(lines):
         glyph = font.render(line, True, color)
         surface.blit(glyph, (rect.x, rect.y + i * 18))
@@ -491,6 +703,55 @@ def _blit_wrapped(surface, font, text, rect, color) -> None:
 # --------------------------------------------------------------------------
 # Action bar
 # --------------------------------------------------------------------------
+# Action-bar button slots: two columns by four rows inside the bottom bar.
+# The prompt text sits in its own strip ABOVE the bar, so the first row of
+# buttons can start at the very top of the bar without ever covering it.
+# Every gap is the same in each direction -- at the sides and between the
+# columns, and above, between and below the rows -- so the slots sit evenly
+# inside the bar. The bar is as wide as the other panel cards and exactly
+# as tall as four rows and their gaps (rows at 700, 744, 788 and 832).
+_BAR_WIDTH = PANEL_WIDTH + 8
+_BAR_GAP_X, _BAR_GAP_Y = 8, 4
+_BTN_W, _BTN_H = (_BAR_WIDTH - 3 * _BAR_GAP_X) // 2, 40
+
+
+def action_bar_layout() -> dict:
+    """Return the action bar's prompt strip and button bar rectangles."""
+    return {
+        "prompt": pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 214, _BAR_WIDTH, 26),
+        "bar": pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 184, _BAR_WIDTH,
+                           4 * _BTN_H + 5 * _BAR_GAP_Y),
+    }
+
+
+# Clear space kept between the prompt text and each end of its strip.
+PROMPT_MARGIN = 12
+
+
+def prompt_line(fonts: dict, prompt: str) -> tuple[str, pygame.font.Font]:
+    """Return the prompt text and font drawn in the prompt strip.
+
+    The prompt is always ONE line inside the strip: the largest of three
+    fonts that fits by measured width (and leaves 2 px above and below),
+    or a shortened text in the smallest if even that is too wide.
+    """
+    strip = action_bar_layout()["prompt"]
+    return _fit_line(fonts, ("small", "tiny", "tile"), prompt,
+                     strip.width - 2 * PROMPT_MARGIN, strip.height - 4)
+
+
+def bar_slot_rect(slot: int) -> pygame.Rect:
+    """Return the rectangle for action-bar button number `slot` (0-7).
+
+    Slots run left to right, then top to bottom, each one gap away from
+    its neighbours and from the bar's edges.
+    """
+    bar = action_bar_layout()["bar"]
+    col, row = slot % 2, slot // 2
+    return pygame.Rect(bar.x + _BAR_GAP_X + col * (_BTN_W + _BAR_GAP_X),
+                       bar.y + _BAR_GAP_Y + row * (_BTN_H + _BAR_GAP_Y), _BTN_W, _BTN_H)
+
+
 def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
     """Draw the bottom action bar: a prompt strip and the button bar.
 
@@ -501,17 +762,17 @@ def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
     "Save & Quit" -- stays inside the visible 880-pixel window even on
     displays that show slightly less than the full screen.
     """
-    # Slim prompt strip, just above the bar. One line of text fits; longer
-    # prompts get truncated rather than wrapped under a button.
-    prompt_strip = pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 214,
-                               PANEL_WIDTH + 8, 26)
+    # Slim prompt strip, just above the bar: one line, fitted by measured
+    # width (see prompt_line) and centred vertically in the strip.
+    layout = action_bar_layout()
+    prompt_strip = layout["prompt"]
     pygame.draw.rect(surface, PANEL_CARD, prompt_strip, border_radius=8)
     pygame.draw.rect(surface, INK, prompt_strip, 1, border_radius=8)
-    _blit_wrapped(surface, fonts["small"], prompt,
-                  pygame.Rect(prompt_strip.x + 12, prompt_strip.y + 4,
-                              prompt_strip.width - 24, 20), WHITE)
+    text, font = prompt_line(fonts, prompt)
+    glyph = font.render(text, True, WHITE)
+    surface.blit(glyph, glyph.get_rect(midleft=(prompt_strip.x + PROMPT_MARGIN, prompt_strip.centery)))
 
-    bar = pygame.Rect(PANEL_X + 6, SCREEN_HEIGHT - 184, PANEL_WIDTH + 8, 178)
+    bar = layout["bar"]
     pygame.draw.rect(surface, PANEL_CARD, bar, border_radius=8)
     pygame.draw.rect(surface, INK, bar, 1, border_radius=8)
     for button in buttons:
@@ -521,34 +782,46 @@ def draw_action_bar(surface, fonts, buttons, prompt, mouse) -> None:
 # --------------------------------------------------------------------------
 # Auction overlay
 # --------------------------------------------------------------------------
+def auction_layout() -> dict:
+    """Compute the auction dialog's panel and its Bid / Pass button rects.
+
+    Both the drawing code and main.py's button builder use this, so the
+    drawn dialog and the clickable buttons always agree.
+    """
+    panel = pygame.Rect(0, 0, 460, 280)
+    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    return {
+        "panel": panel,
+        "bid": pygame.Rect(panel.centerx - 200, panel.bottom - 52, 190, 40),
+        "pass": pygame.Rect(panel.centerx + 10, panel.bottom - 52, 190, 40),
+    }
+
+
+def auction_plan(fonts: dict, game) -> list:
+    """Stack the auction dialog's lines, centred, from the title down."""
+    panel = auction_layout()["panel"]
+    auction = game.auction
+    space = game.board[auction["position"]]
+    bank = auction.get("context") == "bankruptcy"
+    bidder = auction["high_bidder"]
+    items: list = [("big", "BANK AUCTION" if bank else "AUCTION", GOLD),
+             ("med", space.name, WHITE),
+             ("small", f"List price ${space.price}", SOFT)]
+    if bank:
+        items.append(("tiny", game.auction_context_message(), SOFT))
+    items += [("med", f"High bid ${auction['high_bid']} by {game.players[bidder].name}"
+               if bidder is not None else "No bids yet", SUCCESS, 6),
+              ("small", f"{game.players[auction['current']].name} to bid", WHITE)]
+    return _stack(fonts, items, panel.centerx, panel.y + 14, panel.width - 40, center=True)
+
+
 def draw_auction(surface, fonts, game, buttons, mouse) -> None:
     """Draw the auction dialog over the board."""
     _dim(surface)
-    panel = pygame.Rect(0, 0, 460, 280)
-    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    panel = auction_layout()["panel"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
-    auction = game.auction
-    space = game.board[auction["position"]]
-    title = ("BANK AUCTION" if auction.get("context") == "bankruptcy" else "AUCTION")
-    _text(surface, fonts, "big", title, (panel.centerx, panel.y + 30),
-          GOLD, center=True)
-    _text(surface, fonts, "med", space.name, (panel.centerx, panel.y + 72),
-          WHITE, center=True)
-    _text(surface, fonts, "small", f"List price ${space.price}",
-          (panel.centerx, panel.y + 102), SOFT, center=True)
-    if auction.get("context") == "bankruptcy":
-        _text(surface, fonts, "tiny", game.auction_context_message(),
-              (panel.centerx, panel.y + 122), SOFT, center=True)
-    high = auction["high_bid"]
-    bidder = auction["high_bidder"]
-    bid_text = (f"High bid ${high} by {game.players[bidder].name}"
-                if bidder is not None else "No bids yet")
-    _text(surface, fonts, "med", bid_text, (panel.centerx, panel.y + 138),
-          SUCCESS, center=True)
-    _text(surface, fonts, "small",
-          f"{game.players[auction['current']].name} to bid",
-          (panel.centerx, panel.y + 170), WHITE, center=True)
+    _blit_plan(surface, fonts, auction_plan(fonts, game))
     for button in buttons:
         button.draw(surface, fonts, mouse)
 
@@ -557,9 +830,11 @@ def draw_auction(surface, fonts, game, buttons, mouse) -> None:
 # Trade overlay
 # --------------------------------------------------------------------------
 #: How many property rows are visible per side at once before the user has
-#: to scroll. The gap below row 14 leaves space for consequence text before
-#: the cash labels and cash steppers.
-TRADE_VISIBLE_ROWS = 14
+#: to scroll. Below the last row sit the consequence notes, then one stepper
+#: row for cash and one for Get Out of Jail Free cards, then Propose/Cancel.
+TRADE_VISIBLE_ROWS = 12
+_TRADE_HALF_W = 340           # width of each side's column in the trade dialog
+_TRADE_STEPPER_W = 64         # width of one -/+ stepper button
 
 
 def trade_layout(game, trade) -> dict:
@@ -570,11 +845,17 @@ def trade_layout(game, trade) -> dict:
     the layout. The two side lists honour the per-side scroll offsets
     (`give_scroll` / `get_scroll`) so the rendered rows match the clickable
     rows even when the player owns more properties than fit on screen.
+
+    Each side also gets two stepper rows -- cash, then Get Out of Jail Free
+    cards -- as `steppers` (button key -> rect) with a `labels` position
+    beside each, and `notes` is the box for consequence and error text.
     """
     panel = pygame.Rect(0, 0, 800, 700)
     panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
     human = game.players[trade["from"]]
     partner = game.players[trade["to"]]
+    cash_y, jail_y = panel.bottom - 136, panel.bottom - 100
+    notes_top = panel.y + 150 + TRADE_VISIBLE_ROWS * 26 + 20
     layout: dict = {
         "panel": panel,
         "give_rows": [],
@@ -583,9 +864,18 @@ def trade_layout(game, trade) -> dict:
         "give_more_below": False,
         "get_more_above": False,
         "get_more_below": False,
+        "steppers": {},
+        "labels": {},
+        "notes": pygame.Rect(panel.x + 30, notes_top, panel.width - 60, cash_y - 8 - notes_top),
     }
     for side, key, owner, x in (("give", "give_rows", human, panel.x + 30),
                                 ("get", "get_rows", partner, panel.x + 420)):
+        for what, y in (("cash", cash_y), ("jail", jail_y)):
+            up_x = x + _TRADE_HALF_W - _TRADE_STEPPER_W
+            layout["steppers"][f"{side}_{what}_down"] = pygame.Rect(
+                up_x - _TRADE_STEPPER_W - 8, y, _TRADE_STEPPER_W, 30)
+            layout["steppers"][f"{side}_{what}_up"] = pygame.Rect(up_x, y, _TRADE_STEPPER_W, 30)
+            layout["labels"][f"{side}_{what}"] = (x, y + 5)
         props = sorted(game.properties_of(owner))
         # Clamp the stored scroll: properties might have shrunk since the
         # last scroll (e.g. a partner cycle), and an out-of-bounds offset
@@ -596,9 +886,27 @@ def trade_layout(game, trade) -> dict:
         layout[f"{side}_more_below"] = scroll + TRADE_VISIBLE_ROWS < len(props)
         visible_props = props[scroll : scroll + TRADE_VISIBLE_ROWS]
         for i, pos in enumerate(visible_props):
-            row = pygame.Rect(x, panel.y + 150 + i * 26, 340, 24)
+            row = pygame.Rect(x, panel.y + 150 + i * 26, _TRADE_HALF_W, 24)
             layout[key].append((row, pos))
     return layout
+
+
+def trade_header_plan(fonts: dict, game, trade) -> list:
+    """Stack the trade dialog's title, partner and cash lines, then the column heads."""
+    panel = trade_layout(game, trade)["panel"]
+    partner = game.players[trade["to"]]
+    # The centred lines leave room for the < > partner arrows either side.
+    centred = _stack(fonts, [("big", "PROPOSE A TRADE", GOLD),
+                             ("med", f"With:  {partner.name}", WHITE, 2),
+                             # The partner's cash helps size up a fair offer.
+                             ("small", f"They hold ${partner.cash}", SOFT)],
+                     panel.centerx, panel.y + 10, 330, center=True)
+    heads_top = centred[-1][3].bottom + 8
+    return [
+        *centred,
+        *_stack(fonts, [("small", "You give", SUCCESS)], panel.x + 30, heads_top, _TRADE_HALF_W),
+        *_stack(fonts, [("small", "You receive", SUCCESS)], panel.x + 420, heads_top, _TRADE_HALF_W),
+    ]
 
 
 def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
@@ -609,16 +917,7 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
     partner = game.players[trade["to"]]
-
-    _text(surface, fonts, "big", "PROPOSE A TRADE",
-          (panel.centerx, panel.y + 26), GOLD, center=True)
-    _text(surface, fonts, "med", f"With:  {partner.name}",
-          (panel.centerx, panel.y + 67), WHITE, center=True)
-    # Showing the partner's cash helps the human size up a fair counter-offer.
-    _text(surface, fonts, "small", f"They hold ${partner.cash}",
-          (panel.centerx, panel.y + 92), SOFT, center=True)
-    _text(surface, fonts, "small", "You give", (panel.x + 30, panel.y + 120), SUCCESS)
-    _text(surface, fonts, "small", "You receive", (panel.x + 420, panel.y + 120), SUCCESS)
+    _blit_plan(surface, fonts, trade_header_plan(fonts, game, trade))
 
     # Each row is a checkbox + property name. Unselected rows draw NO fill so
     # they sit invisibly on the panel background -- that, plus an empty box,
@@ -646,21 +945,25 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
     _draw_trade_scroll_glyphs(surface, layout, "give", panel.x + 30 + 170)
     _draw_trade_scroll_glyphs(surface, layout, "get", panel.x + 420 + 170)
 
-    _text(surface, fonts, "small",
-          f"Cash you give: ${trade['give']['cash']}",
-          (panel.x + 30, panel.bottom - 132), WHITE)
-    _text(surface, fonts, "small",
-          f"Cash you receive: ${trade['get']['cash']}",
-          (panel.x + 420, panel.bottom - 132), WHITE)
-    consequence_y = panel.bottom - 174
-    for line in game.trade_consequence_lines(trade):
-        _text(surface, fonts, "tiny", line, (panel.x + 30, consequence_y), GOLD)
-        consequence_y += 18
+    # One label beside each stepper pair: the cash, then the Get Out of Jail
+    # Free cards, that side puts in (and how many cards that player holds).
+    for side, holder in (("give", game.players[trade["from"]]), ("get", partner)):
+        _text(surface, fonts, "small", f"Cash: ${trade[side]['cash']}",
+              layout["labels"][f"{side}_cash"], WHITE)
+        _text(surface, fonts, "small",
+              f"Jail cards: {trade[side]['jail']} of {holder.jail_cards}",
+              layout["labels"][f"{side}_jail"], WHITE if holder.jail_cards else SOFT)
+
+    # Consequence notes (gold), then why the offer is illegal (red), kept
+    # inside the notes box between the lists and the steppers.
+    notes = layout["notes"]
+    lines = [(line, GOLD) for note in game.trade_consequence_lines(trade)
+             for line in _wrap_lines(fonts["tiny"], note, notes.width)]
     error = game.trade_error(trade)
     if error:
-        _blit_wrapped(surface, fonts["tiny"], error,
-                      pygame.Rect(panel.x + 30, consequence_y, panel.width - 60, 34),
-                      DANGER)
+        lines += [(line, DANGER_TEXT) for line in _wrap_lines(fonts["tiny"], error, notes.width)]
+    for i, (line, color) in enumerate(lines[:notes.height // 18]):
+        _text(surface, fonts, "tiny", line, (notes.x, notes.y + i * 18), color)
     for button in buttons:
         button.draw(surface, fonts, mouse)
 
@@ -689,11 +992,101 @@ def _draw_trade_scroll_glyphs(surface, layout, side: str, cx: int) -> None:
 # --------------------------------------------------------------------------
 # Trade response + game over
 # --------------------------------------------------------------------------
+#: Lines shown per side of an incoming offer; a longer side shows one fewer
+#: and ends with a "+N more" line, so both columns stay a fixed height.
+TRADE_RESPONSE_ROWS = 6
+_RESPONSE_PITCH = 18          # pixels between list lines
+
+
+def trade_response_layout() -> dict:
+    """Compute the trade-response dialog: panel, two columns and Accept/Reject.
+
+    main.py builds the buttons from this and `draw_trade_response` draws
+    from it, so the dialog and its clickable buttons always agree. Text
+    must stay above `limit`, clear of the button row.
+    """
+    panel = pygame.Rect(0, 0, 600, 400)
+    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    column_w = (panel.width - 80) // 2
+    column_h = 26 + TRADE_RESPONSE_ROWS * _RESPONSE_PITCH
+    return {
+        "panel": panel,
+        "receive": pygame.Rect(panel.x + 30, panel.y + 96, column_w, column_h),
+        "give": pygame.Rect(panel.right - 30 - column_w, panel.y + 96, column_w, column_h),
+        "accept": pygame.Rect(panel.centerx - 210, panel.bottom - 56, 190, 40),
+        "reject": pygame.Rect(panel.centerx + 20, panel.bottom - 56, 190, 40),
+        "limit": panel.bottom - 64,
+    }
+
+
+def offer_side_lines(game, side) -> list[str]:
+    """Readable lines for one side of a trade offer (or "Nothing").
+
+    Cash and Get Out of Jail Free cards come first, so a long list of
+    titles ending in "+N more" can never hide them.
+    """
+    lines = []
+    if side["cash"]:
+        lines.append(f"${side['cash']} cash")
+    if side["jail"]:
+        lines.append(f"{side['jail']} Get Out of Jail Free card{'s' if side['jail'] > 1 else ''}")
+    lines += [game.board[pos].name for pos in side["props"]]
+    return lines or ["Nothing"]
+
+
+def _capped(lines: list[str], cap: int) -> list[str]:
+    """Keep at most `cap` lines, ending with "+N more" when some are hidden."""
+    if len(lines) <= cap:
+        return lines
+    return [*lines[:cap - 1], f"+{len(lines) - cap + 1} more"]
+
+
+def trade_response_plan(game, offer, fonts) -> list:
+    """Place every line of an incoming offer: two capped columns, then notes.
+
+    Returns (font key, text, colour, rect) items for `draw_trade_response`.
+    Each line is shortened to its column's measured width; the mortgage
+    consequence notes follow below the longer column and stop before the
+    layout's `limit`, so nothing reaches the Accept/Reject row.
+    """
+    layout = trade_response_layout()
+    items = []
+
+    def place(key: str, text: str, color, x: int, y: int, width: int) -> int:
+        """Fit one line at (x, y), record it, and return its height."""
+        font = fonts[key]
+        text = _fit_text(font, text, width)
+        rect = pygame.Rect((x, y), font.size(text))
+        items.append((key, text, color, rect))
+        return rect.height
+
+    bottom = layout["receive"].y
+    # What the proposer gives is what the human receives, and vice versa.
+    for column, side, header, color in (("receive", offer["give"], "You receive", SUCCESS),
+                                        ("give", offer["get"], "You give", DANGER_TEXT)):
+        box = layout[column]
+        place("small", header, color, box.x, box.y, box.width)
+        y = box.y + 26
+        for line in _capped(offer_side_lines(game, side), TRADE_RESPONSE_ROWS):
+            place("tiny", line, WHITE, box.x + 10, y, box.width - 10)
+            y += _RESPONSE_PITCH
+        bottom = max(bottom, y)
+
+    panel = layout["panel"]
+    y = bottom + 10
+    for note in game.trade_consequence_lines(offer):
+        for line in _wrap_lines(fonts["tiny"], note, panel.width - 60):
+            if y + max(_RESPONSE_PITCH, fonts["tiny"].get_height()) > layout["limit"]:
+                return items
+            place("tiny", line, GOLD, panel.x + 30, y, panel.width - 60)
+            y += _RESPONSE_PITCH
+    return items
+
+
 def draw_trade_response(surface, fonts, game, buttons, mouse) -> None:
     """Draw the dialog asking a human to accept or reject an offer."""
     _dim(surface)
-    panel = pygame.Rect(0, 0, 560, 360)
-    panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+    panel = trade_response_layout()["panel"]
     pygame.draw.rect(surface, PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, GOLD, panel, 3, border_radius=12)
     offer = game.pending_trade
@@ -701,33 +1094,21 @@ def draw_trade_response(surface, fonts, game, buttons, mouse) -> None:
     _text(surface, fonts, "big", "TRADE OFFER", (panel.centerx, panel.y + 26),
           GOLD, center=True)
     _text(surface, fonts, "small", f"{proposer.name} offers you:",
-          (panel.x + 30, panel.y + 70), WHITE)
-
-    you_get = offer["give"]      # what the proposer gives = what you receive
-    you_give = offer["get"]
-    y = panel.y + 100
-    _text(surface, fonts, "small", "You receive:", (panel.x + 30, y), SUCCESS)
-    y += 24
-    for pos in you_get["props"]:
-        _text(surface, fonts, "tiny", "- " + game.board[pos].name, (panel.x + 44, y))
-        y += 18
-    if you_get["cash"]:
-        _text(surface, fonts, "tiny", f"- ${you_get['cash']} cash", (panel.x + 44, y))
-        y += 18
-    y += 8
-    _text(surface, fonts, "small", "You give:", (panel.x + 30, y), DANGER)
-    y += 24
-    for pos in you_give["props"]:
-        _text(surface, fonts, "tiny", "- " + game.board[pos].name, (panel.x + 44, y))
-        y += 18
-    if you_give["cash"]:
-        _text(surface, fonts, "tiny", f"- ${you_give['cash']} cash", (panel.x + 44, y))
-    consequence_y = panel.bottom - 100
-    for line in game.trade_consequence_lines(offer):
-        _text(surface, fonts, "tiny", line, (panel.x + 30, consequence_y), GOLD)
-        consequence_y += 18
+          (panel.x + 30, panel.y + 62), WHITE)
+    for key, text, color, rect in trade_response_plan(game, offer, fonts):
+        surface.blit(fonts[key].render(text, True, color), rect)
     for button in buttons:
         button.draw(surface, fonts, mouse)
+
+
+def winner_colors(player) -> tuple:
+    """Return the (text ink, swatch) colours of the game-over winner line.
+
+    Token colours are too dark to read as text on the dark background
+    (as low as 2.5:1), so the name is white and the token colour is shown
+    as a disc beside it instead.
+    """
+    return WHITE, player.token_color
 
 
 def draw_game_over(surface, fonts, game, buttons, mouse) -> None:
@@ -737,8 +1118,12 @@ def draw_game_over(surface, fonts, game, buttons, mouse) -> None:
           GOLD, center=True)
     if game.winner is not None:
         champ = game.players[game.winner]
-        _text(surface, fonts, "big", f"{champ.name} wins!",
-              (SCREEN_WIDTH // 2, 240), champ.token_color, center=True)
+        ink, swatch = winner_colors(champ)
+        line = _text(surface, fonts, "big", f"{champ.name} wins!",
+                     (SCREEN_WIDTH // 2, 240), ink, center=True)
+        disc = (line.left - PLAYER_DISC_RADIUS - 12, line.centery)
+        pygame.draw.aacircle(surface, swatch, disc, PLAYER_DISC_RADIUS)
+        pygame.draw.aacircle(surface, INK, disc, PLAYER_DISC_RADIUS, 2)
     # Final standings by net worth.
     ranked = sorted(game.players, key=game.net_worth, reverse=True)
     for i, player in enumerate(ranked):
