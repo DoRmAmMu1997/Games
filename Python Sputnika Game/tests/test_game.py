@@ -32,7 +32,7 @@ import pygame
 import game as game_module
 from game import OrbitalOrchardGame
 from physics import PhysicsWorld
-from settings import SPAWN_Y, TIERS
+from settings import FAIL_AGE_GATE, SPAWN_Y, TIERS
 
 
 class GameTestCase(unittest.TestCase):
@@ -63,6 +63,42 @@ class GameTestCase(unittest.TestCase):
         game = OrbitalOrchardGame()
         game.random = random.Random(seed)
         return game
+
+    def use_fake_clock(self, frame_ms: int = 20) -> None:
+        """Make every ``clock.tick`` report ``frame_ms`` without sleeping."""
+
+        self.game.clock = mock.Mock(tick=mock.Mock(return_value=frame_ms))
+
+
+class PauseClockTests(GameTestCase):
+    """Game time stands still while the pause menu is open."""
+
+    def test_pause_does_not_age_bodies(self) -> None:
+        """A body launched just before a pause is still fresh when play resumes."""
+
+        game = self.game
+        self.use_fake_clock(25)
+        game.start_round()
+        game.drop_current_body()
+        body = game.bodies[-1]
+        game.scene = "paused"
+
+        game.run(max_frames=40)  # one second of real time behind the pause menu
+
+        game.scene = "playing"
+        self.assertLess(body.age(game.now), FAIL_AGE_GATE)
+
+    def test_playing_still_advances_the_clock(self) -> None:
+        """Outside the pause menu the game clock follows frame time."""
+
+        game = self.game
+        self.use_fake_clock()
+        game.start_round()
+        before = game.now
+
+        game.run(max_frames=10)
+
+        self.assertAlmostEqual(game.now - before, 0.2, places=6)
 
 
 class SpawnInsideCircleTests(GameTestCase):

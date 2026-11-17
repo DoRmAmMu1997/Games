@@ -199,7 +199,10 @@ class OrbitalOrchardGame:
             # `dt` means "delta time": how many seconds passed since the previous frame.
             # Multiplying movement by `dt` keeps motion consistent across frame rates.
             dt = min(0.025, self.clock.tick(FPS) / 1000.0)
-            self.now += dt
+            # Game time stands still behind the pause menu, so bodies do not
+            # "age" past the fail-line grace gate while the player is away.
+            if self.scene != "paused":
+                self.now += dt
 
             # Every frame follows the same high-level order:
             # 1. read player/system input,
