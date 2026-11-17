@@ -144,7 +144,13 @@ HOTEL_COLOR = (208, 52, 52)
 
 # Highlights.
 HIGHLIGHT = (240, 206, 110)         # selected / actionable
-DANGER = (224, 84, 84)
+DANGER = (224, 84, 84)             # warning fills and strokes
+# Warning TEXT is a lighter coral of the same red: it reaches 4.5:1 contrast
+# on every dark surface it is drawn on (DANGER itself only manages 2.5:1 on
+# the current player's card).
+DANGER_TEXT = (255, 182, 170)
+PANEL_CARD_CURRENT = (52, 74, 60)   # the current player's card in the side panel
+BUTTON_FILL = (54, 86, 72)          # an ordinary button
 SUCCESS = (120, 210, 140)
 
 

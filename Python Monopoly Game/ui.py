@@ -15,15 +15,18 @@ import board_render
 from cards import format_card_text
 from settings import (
     BG,
+    BUTTON_FILL,
     CHANCE_CARD_COLOR,
     CHEST_CARD_COLOR,
     DANGER,
+    DANGER_TEXT,
     GOLD,
     GROUP_COLORS,
     HIGHLIGHT,
     INK,
     PANEL_BG,
     PANEL_CARD,
+    PANEL_CARD_CURRENT,
     PANEL_WIDTH,
     PANEL_X,
     PIP_RADIUS,
@@ -74,7 +77,7 @@ class Button:
         self.label = label
         self.key = key            # e.g. "roll", "buy", "end_turn"
         self.enabled = enabled
-        self.color = color or (54, 86, 72)
+        self.color = color or BUTTON_FILL
 
     def draw(self, surface: pygame.Surface, fonts: dict, mouse: tuple[int, int]) -> None:
         """Draw the button, brightening it slightly while hovered."""
@@ -244,7 +247,7 @@ def player_disc_center(rect: pygame.Rect) -> tuple[int, int]:
 
 def _draw_player_card(surface, fonts, game, player, rect, is_current) -> None:
     """Draw one player's summary card in the side panel."""
-    bg = PANEL_CARD if not is_current else (52, 74, 60)
+    bg = PANEL_CARD if not is_current else PANEL_CARD_CURRENT
     pygame.draw.rect(surface, bg, rect, border_radius=8)
     border = HIGHLIGHT if is_current else INK
     pygame.draw.rect(surface, border, rect, 3 if is_current else 1, border_radius=8)
@@ -257,14 +260,14 @@ def _draw_player_card(surface, fonts, game, player, rect, is_current) -> None:
     _text(surface, fonts, "med", player.name, (rect.x + 48, rect.y + 12), name_color)
 
     if player.bankrupt:
-        _text(surface, fonts, "small", "BANKRUPT", (rect.x + 48, rect.y + 40), DANGER)
+        _text(surface, fonts, "small", "BANKRUPT", (rect.x + 48, rect.y + 40), DANGER_TEXT)
         return
 
     _text(surface, fonts, "med", f"${player.cash}", (rect.x + 48, rect.y + 38), SUCCESS)
     tag = "AI" if not player.is_human else "You"
     _text(surface, fonts, "tiny", tag, (rect.right - 44, rect.y + 14), SOFT)
     if player.in_jail:
-        _text(surface, fonts, "tiny", "IN JAIL", (rect.right - 70, rect.y + 36), DANGER)
+        _text(surface, fonts, "tiny", "IN JAIL", (rect.right - 70, rect.y + 36), DANGER_TEXT)
 
     # A row of small swatches, one per property, grouped by colour.
     owned = sorted(game.properties_of(player))
@@ -572,7 +575,7 @@ def draw_assets(surface, fonts, game, selected_position, buttons, mouse) -> None
         button.draw(surface, fonts, mouse)
     for row, position in layout["title_rows"]:
         if position in game.mortgaged:
-            _text(surface, fonts, "tiny", "M", (row.right - 16, row.y + 5), DANGER)
+            _text(surface, fonts, "tiny", "M", (row.right - 16, row.y + 5), DANGER_TEXT)
         elif game.houses.get(position, 0):
             level = game.houses[position]
             marker = "H" if level == 5 else str(level)
@@ -934,7 +937,7 @@ def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
              for line in _wrap_lines(fonts["tiny"], note, notes.width)]
     error = game.trade_error(trade)
     if error:
-        lines += [(line, DANGER) for line in _wrap_lines(fonts["tiny"], error, notes.width)]
+        lines += [(line, DANGER_TEXT) for line in _wrap_lines(fonts["tiny"], error, notes.width)]
     for i, (line, color) in enumerate(lines[:notes.height // 18]):
         _text(surface, fonts, "tiny", line, (notes.x, notes.y + i * 18), color)
     for button in buttons:
@@ -1036,7 +1039,7 @@ def trade_response_plan(game, offer, fonts) -> list:
     bottom = layout["receive"].y
     # What the proposer gives is what the human receives, and vice versa.
     for column, side, header, color in (("receive", offer["give"], "You receive", SUCCESS),
-                                        ("give", offer["get"], "You give", DANGER)):
+                                        ("give", offer["get"], "You give", DANGER_TEXT)):
         box = layout[column]
         place("small", header, color, box.x, box.y, box.width)
         y = box.y + 26
@@ -1074,6 +1077,16 @@ def draw_trade_response(surface, fonts, game, buttons, mouse) -> None:
         button.draw(surface, fonts, mouse)
 
 
+def winner_colors(player) -> tuple:
+    """Return the (text ink, swatch) colours of the game-over winner line.
+
+    Token colours are too dark to read as text on the dark background
+    (as low as 2.5:1), so the name is white and the token colour is shown
+    as a disc beside it instead.
+    """
+    return WHITE, player.token_color
+
+
 def draw_game_over(surface, fonts, game, buttons, mouse) -> None:
     """Draw the end screen announcing the winner."""
     surface.fill(BG)
@@ -1081,8 +1094,12 @@ def draw_game_over(surface, fonts, game, buttons, mouse) -> None:
           GOLD, center=True)
     if game.winner is not None:
         champ = game.players[game.winner]
-        _text(surface, fonts, "big", f"{champ.name} wins!",
-              (SCREEN_WIDTH // 2, 240), champ.token_color, center=True)
+        ink, swatch = winner_colors(champ)
+        line = _text(surface, fonts, "big", f"{champ.name} wins!",
+                     (SCREEN_WIDTH // 2, 240), ink, center=True)
+        disc = (line.left - PLAYER_DISC_RADIUS - 12, line.centery)
+        pygame.draw.aacircle(surface, swatch, disc, PLAYER_DISC_RADIUS)
+        pygame.draw.aacircle(surface, INK, disc, PLAYER_DISC_RADIUS, 2)
     # Final standings by net worth.
     ranked = sorted(game.players, key=game.net_worth, reverse=True)
     for i, player in enumerate(ranked):

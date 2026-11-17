@@ -29,7 +29,17 @@ import cards
 import ui
 from game import MonopolyGame
 from main import MonopolyApp
-from settings import BOARD_FACE, INK, PANEL_CARD, WHITE
+from settings import (
+    BG,
+    BOARD_FACE,
+    BUTTON_FILL,
+    DANGER_TEXT,
+    INK,
+    PANEL_BG,
+    PANEL_CARD,
+    PANEL_CARD_CURRENT,
+    WHITE,
+)
 
 LONG_NAME = "Alexandra Q.xx"        # 14 characters: the longest name setup allows
 
@@ -341,6 +351,27 @@ class DialogSpacingTests(ShellTestCase):
         self.assert_stacked(centred, layout["panel"], first_row - 4)
         for _key, _text, _color, rect in plan:
             self.assertLessEqual(rect.bottom, first_row - 4)
+
+
+class TextContrastTests(unittest.TestCase):
+    """Warning text and the winner line reach a 4.5:1 contrast on their fills."""
+
+    def test_warning_text_is_readable_on_every_fill_it_sits_on(self) -> None:
+        """Red status text (BANKRUPT, IN JAIL, M, trade errors) reads on each surface."""
+        fills = {"window": BG, "dialog": PANEL_BG, "player card": PANEL_CARD,
+                 "current player card": PANEL_CARD_CURRENT, "button": BUTTON_FILL}
+        for name, fill in fills.items():
+            with self.subTest(fill=name):
+                self.assertGreaterEqual(contrast(DANGER_TEXT, fill), 4.5)
+
+    def test_winner_line_is_readable_for_every_token_colour(self) -> None:
+        """The winner's name is drawn in readable ink, with their token colour as a disc."""
+        game = long_name_game()
+        for player in game.players:
+            with self.subTest(player=player.name):
+                ink, swatch = ui.winner_colors(player)
+                self.assertGreaterEqual(contrast(ink, BG), 4.5)
+                self.assertEqual(swatch, player.token_color)
 
 
 def rim_blend(surface: pygame.Surface, center: tuple[int, int], radius: int,
