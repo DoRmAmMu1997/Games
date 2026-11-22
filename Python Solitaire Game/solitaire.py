@@ -29,9 +29,18 @@ FACE_DOWN_SPACING = 16
 FACE_UP_SPACING = 24
 
 # General layout values used to place piles on the canvas.
-TOP_ROW_Y = 20
-TABLEAU_Y = 180
+TOP_ROW_Y = 28
 COLUMN_GAP = 18
+# Pile names are centred this far above the top row of cards, and the
+# "N cards" counts this far below it, so neither touches a card, its shadow,
+# the canvas edge or the divider line.
+PILE_LABEL_OFFSET = 14
+PILE_COUNT_OFFSET = 16
+# The lighter top band ends at the divider line, which sits just below the
+# counts; the tableau starts a little further down so cards never touch it.
+TOP_BAND_HEIGHT = TOP_ROW_Y + CARD_HEIGHT + PILE_COUNT_OFFSET + 14
+DIVIDER_HEIGHT = 4
+TABLEAU_Y = TOP_BAND_HEIGHT + DIVIDER_HEIGHT + 10
 
 # One font for every header label and button, so the whole row fits.
 HEADER_FONT = ("Arial", 11, "bold")
@@ -2209,21 +2218,17 @@ class SolitaireApp:
             self.draw_animation()
 
     def draw_table_surface(self) -> None:
-        """Paint the green table background and a few simple accents."""
+        """Paint the green table background and a few simple accents.
+
+        The felt ovals are painted first so the top band and its divider
+        line are drawn over them and stay one clean, even colour.
+        """
         self.canvas.create_rectangle(
             0,
             0,
             WINDOW_WIDTH,
             CANVAS_HEIGHT,
             fill=BACKGROUND_COLOR,
-            outline="",
-        )
-        self.canvas.create_rectangle(
-            0,
-            0,
-            WINDOW_WIDTH,
-            150,
-            fill=TABLE_TOP_COLOR,
             outline="",
         )
         self.canvas.create_oval(
@@ -2244,9 +2249,17 @@ class SolitaireApp:
         )
         self.canvas.create_rectangle(
             0,
-            150,
+            0,
             WINDOW_WIDTH,
-            154,
+            TOP_BAND_HEIGHT,
+            fill=TABLE_TOP_COLOR,
+            outline="",
+        )
+        self.canvas.create_rectangle(
+            0,
+            TOP_BAND_HEIGHT,
+            WINDOW_WIDTH,
+            TOP_BAND_HEIGHT + DIVIDER_HEIGHT,
             fill="#0A6246",
             outline="",
         )
@@ -2255,14 +2268,14 @@ class SolitaireApp:
         """Draw the text labels above stock, waste, and foundations."""
         self.canvas.create_text(
             self.stock_rect()[0] + CARD_WIDTH / 2,
-            TOP_ROW_Y - 10,
+            TOP_ROW_Y - PILE_LABEL_OFFSET,
             text="Stock",
             fill="white",
             font=("Arial", 10, "bold"),
         )
         self.canvas.create_text(
             self.waste_rect()[0] + CARD_WIDTH / 2,
-            TOP_ROW_Y - 10,
+            TOP_ROW_Y - PILE_LABEL_OFFSET,
             text="Waste",
             fill="white",
             font=("Arial", 10, "bold"),
@@ -2272,7 +2285,7 @@ class SolitaireApp:
             x1, _, _, _ = self.foundation_rect(foundation_index)
             self.canvas.create_text(
                 x1 + CARD_WIDTH / 2,
-                TOP_ROW_Y - 10,
+                TOP_ROW_Y - PILE_LABEL_OFFSET,
                 text=f"{SUIT_SYMBOLS[suit]} Foundation",
                 fill="white",
                 font=("Arial", 10, "bold"),
@@ -2285,7 +2298,7 @@ class SolitaireApp:
             self.draw_card(rect[0], rect[1], self.game.stock[-1], face_up=False, selected=False)
             self.canvas.create_text(
                 rect[0] + CARD_WIDTH / 2,
-                rect[3] + 12,
+                rect[3] + PILE_COUNT_OFFSET,
                 text=f"{len(self.game.stock)} cards",
                 fill="white",
                 font=("Arial", 10),
@@ -2301,7 +2314,7 @@ class SolitaireApp:
             self.draw_card(rect[0], rect[1], self.game.waste[-1], face_up=True, selected=selected)
             self.canvas.create_text(
                 rect[0] + CARD_WIDTH / 2,
-                rect[3] + 12,
+                rect[3] + PILE_COUNT_OFFSET,
                 text=f"{len(self.game.waste)} cards",
                 fill="white",
                 font=("Arial", 10),

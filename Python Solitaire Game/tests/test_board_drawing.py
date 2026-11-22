@@ -20,9 +20,12 @@ if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
 from solitaire import (
+    CARD_HEIGHT,
     CARD_WIDTH,
     FOUNDATION_COUNT,
     TABLEAU_COLUMNS,
+    TABLEAU_Y,
+    TOP_ROW_Y,
     WINDOW_WIDTH,
     KlondikeGame,
     SolitaireApp,
@@ -147,6 +150,77 @@ class TableLayoutTests(DrawingTestCase):
             with self.subTest(foundation=index):
                 self.assertEqual(self.app.foundation_rect(index)[0], self.app.tableau_x(first_column + index))
         self.assertEqual(self.app.waste_rect()[0], self.app.tableau_x(1))
+
+
+# Half the height of a 10pt label, rounded up generously: real fonts differ
+# between machines, so every clearance below keeps a few pixels to spare.
+LABEL_HALF_HEIGHT = 8
+CLEARANCE = 2
+# Card shadows are drawn this far below each card.
+SHADOW_DROP = 5
+
+
+def calls_named(canvas: mock.Mock, name: str) -> list:
+    """Return every recorded canvas call of one kind, such as ``create_text``."""
+
+    return [call for call in canvas.method_calls if call[0] == name]
+
+
+class TopBandTests(DrawingTestCase):
+    """P3: the top band leaves room for pile names and card counts."""
+
+    def test_felt_ovals_are_painted_before_the_top_band(self) -> None:
+        """The decorative ovals sit underneath the band, never over it."""
+
+        self.app.draw_table_surface()
+
+        names = [call[0] for call in self.canvas.method_calls]
+        last_oval = max(index for index, name in enumerate(names) if name == "create_oval")
+        rectangles = [index for index, name in enumerate(names) if name == "create_rectangle"]
+        self.assertGreater(len(rectangles), 1)
+        self.assertTrue(all(index > last_oval for index in rectangles[1:]))
+
+    def band_and_divider(self) -> tuple[float, float]:
+        """Return the bottom of the top band and the bottom of the divider."""
+
+        self.app.draw_table_surface()
+        rectangles = [call[1] for call in calls_named(self.canvas, "create_rectangle")]
+        band, divider = rectangles[1], rectangles[2]
+        return band[3], divider[3]
+
+    def test_pile_names_clear_the_canvas_edge_and_cards(self) -> None:
+        """Every pile name fits between the canvas top and the top row of cards."""
+
+        self.app.draw_top_labels()
+
+        for call in calls_named(self.canvas, "create_text"):
+            with self.subTest(label=call[2]["text"]):
+                y = call[1][1]
+                self.assertGreaterEqual(y - LABEL_HALF_HEIGHT, CLEARANCE)
+                self.assertLessEqual(y + LABEL_HALF_HEIGHT, TOP_ROW_Y - CLEARANCE)
+
+    def test_card_counts_clear_the_cards_and_the_divider(self) -> None:
+        """The "N cards" counts sit below the card shadows and above the divider."""
+
+        divider_top = self.band_and_divider()[0]
+        self.canvas.reset_mock()
+        self.game.waste = [self.game.stock.pop()]
+        self.app.draw_stock()
+        self.app.draw_waste()
+
+        counts = [call for call in calls_named(self.canvas, "create_text") if "cards" in call[2]["text"]]
+        self.assertEqual(len(counts), 2)
+        for call in counts:
+            y = call[1][1]
+            self.assertGreaterEqual(y - LABEL_HALF_HEIGHT, TOP_ROW_Y + CARD_HEIGHT + SHADOW_DROP)
+            self.assertLessEqual(y + LABEL_HALF_HEIGHT, divider_top - CLEARANCE)
+
+    def test_divider_clears_the_tableau(self) -> None:
+        """The band's divider line ends well above the first tableau card."""
+
+        divider_bottom = self.band_and_divider()[1]
+
+        self.assertLessEqual(divider_bottom, TABLEAU_Y - 4)
 
 
 if __name__ == "__main__":
