@@ -316,11 +316,11 @@ class KlondikeGame:
             _log_save_error(self.high_score_path, error)
 
     def add_score(self, points: int) -> None:
-        """Add points to the current score and update the saved high score."""
+        """Add points to the current score; save only when the high score rises."""
         self.score += points
         if self.score > self.high_score:
             self.high_score = self.score
-        self.save_high_score()
+            self.save_high_score()
 
     def record_win(self) -> None:
         """Increase the saved win counter."""

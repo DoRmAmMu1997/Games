@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
@@ -217,6 +218,41 @@ class SaveFileTests(unittest.TestCase):
                 path.write_text(text, encoding="utf-8")
                 game = KlondikeGame(str(path), rng=random.Random(index))
                 self.assertEqual((game.high_score, game.wins, game.losses), (0, 0, 0))
+
+
+class ScoreSavingTests(unittest.TestCase):
+    """The score file is rewritten only when the high score rises (D8)."""
+
+    def setUp(self) -> None:
+        """Create a game whose best score so far is 100."""
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.game = make_game(self.tmp.name)
+        self.game.high_score = 100
+        self.game.score = 0
+
+    def test_points_below_the_record_do_not_write(self) -> None:
+        """Ordinary scoring under the high score never touches the disk."""
+
+        with mock.patch.object(self.game, "save_high_score") as save:
+            for _ in range(9):
+                self.game.add_score(10)
+
+        save.assert_not_called()
+        self.assertEqual(self.game.score, 90)
+
+    def test_crossing_the_record_writes_exactly_once(self) -> None:
+        """Passing the high score saves it once, at the moment it rises."""
+
+        self.game.score = 95
+        with mock.patch.object(self.game, "save_high_score") as save:
+            self.game.add_score(10)
+            self.game.add_score(-20)
+            self.game.add_score(10)
+
+        save.assert_called_once()
+        self.assertEqual(self.game.high_score, 105)
 
 
 class UndoTests(unittest.TestCase):
