@@ -207,6 +207,42 @@ class DrawOrderTests(GameTestCase):
         self.assertEqual(calls, ["body", "body", "launcher"])
 
 
+class MenuDangerTests(GameTestCase):
+    """Leaving a run in danger leaves no danger label behind the main menu."""
+
+    def test_menu_shows_a_calm_danger_line(self) -> None:
+        """In the menu the playfield gets no warning and no danger level."""
+
+        game = self.game
+        game.start_round()
+        game.warning_active = True
+        game.fail_timer = 1.5
+        game.scene = "menu"
+
+        with mock.patch.object(game_module, "draw_playfield") as playfield:
+            game._draw()
+
+        _, _, danger_ratio, warning_active = playfield.call_args.args
+        self.assertEqual(danger_ratio, 0.0)
+        self.assertFalse(warning_active)
+
+    def test_paused_run_still_shows_the_danger(self) -> None:
+        """Behind the pause menu the run's danger is still shown."""
+
+        game = self.game
+        game.start_round()
+        game.warning_active = True
+        game.fail_timer = 1.2
+        game.scene = "paused"
+
+        with mock.patch.object(game_module, "draw_playfield") as playfield:
+            game._draw()
+
+        _, _, danger_ratio, warning_active = playfield.call_args.args
+        self.assertAlmostEqual(danger_ratio, 0.5)
+        self.assertTrue(warning_active)
+
+
 class MergeDeterminismTests(GameTestCase):
     """Gameplay randomness flows through the game's own seeded generator."""
 

@@ -765,7 +765,11 @@ class OrbitalOrchardGame:
         camera = self.effects.camera_offset()
 
         # Draw the playfield shell before bodies go inside it.
-        draw_playfield(self.canvas, self.now, self.fail_timer / FAIL_GRACE if FAIL_GRACE else 0.0, self.warning_active)
+        # Danger belongs to a run: behind the main menu the line is calm and
+        # unlabelled, even if the player left a run while it was in danger.
+        in_run = self.scene in {"playing", "paused", "game_over"}
+        danger_ratio = fail_ratio(self.fail_timer) if in_run else 0.0
+        draw_playfield(self.canvas, self.now, danger_ratio, self.warning_active and in_run)
 
         # Draw smaller bodies first so larger ones can overlap them naturally.
         for body in sorted(self.bodies, key=lambda item: item.radius):
