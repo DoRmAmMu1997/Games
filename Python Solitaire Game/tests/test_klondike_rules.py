@@ -186,6 +186,39 @@ class MoveRuleTests(unittest.TestCase):
         self.assertTrue(self.game.has_won())
 
 
+class SaveFileTests(unittest.TestCase):
+    """Damaged or wrong-shaped score files load as zeros instead of crashing (D6)."""
+
+    def setUp(self) -> None:
+        """Create a temporary folder to hold the hand-written score files."""
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_wrong_shaped_saves_load_as_zeros(self) -> None:
+        """Every malformed file below loads a zero high score, wins and losses."""
+
+        bad_files = [
+            "[]",
+            "null",
+            '"abc"',
+            "7",
+            "Infinity",
+            "1e400",
+            "-Infinity",
+            "NaN",
+            "[" * 100000,
+            '{"high_score": Infinity, "wins": 1e400, "losses": -Infinity}',
+            '{"high_score": NaN, "wins": [], "losses": null}',
+        ]
+        for index, text in enumerate(bad_files):
+            with self.subTest(save=text[:40]):
+                path = Path(self.tmp.name) / f"bad_{index}.json"
+                path.write_text(text, encoding="utf-8")
+                game = KlondikeGame(str(path), rng=random.Random(index))
+                self.assertEqual((game.high_score, game.wins, game.losses), (0, 0, 0))
+
+
 class UndoTests(unittest.TestCase):
     """Snapshot/restore powers the undo stack."""
 

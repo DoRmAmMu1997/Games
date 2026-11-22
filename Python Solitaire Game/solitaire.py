@@ -270,15 +270,24 @@ class KlondikeGame:
         try:
             with open(self.high_score_path, encoding="utf-8") as file:
                 data = json.load(file)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError, RecursionError, json.JSONDecodeError):
             # If the file is missing or broken, silently start from zeros.
+            # RecursionError covers absurdly deep nesting such as "[[[[...".
+            data = {}
+        if not isinstance(data, dict):
+            # Valid JSON of the wrong shape (a list, a number, null) is as
+            # useless as a broken file, so it also starts from zeros.
             data = {}
 
         def safe_int(name: str) -> int:
-            """Read one numeric field safely and clamp it to 0 or higher."""
+            """Read one numeric field safely and clamp it to 0 or higher.
+
+            OverflowError covers JSON numbers such as 1e400 that load as
+            infinity, which int() cannot convert.
+            """
             try:
                 return max(0, int(data.get(name, 0)))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 return 0
 
         return {
