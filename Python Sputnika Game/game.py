@@ -561,7 +561,6 @@ class OrbitalOrchardGame:
             merged_body.pulse = 0.95
             merged_body.flash = 0.95
             merged_body.birth_pop = 1.0
-            merged_body.lock_merge(self.now)
 
             # Ensure the newly spawned result is still safely inside the bubble.
             self.world.keep_inside(merged_body)

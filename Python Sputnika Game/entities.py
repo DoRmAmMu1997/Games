@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import pygame
 
-from settings import FAIL_LINE_Y, MERGE_ARM_TIME, POST_MERGE_LOCK, TIERS, WHITE, shade
+from settings import FAIL_LINE_Y, MERGE_ARM_TIME, TIERS, WHITE, shade
 
 
 def _random_phase() -> float:
@@ -44,8 +44,7 @@ class CelestialBody:
     seed: float = field(default_factory=random.random)
     hover_phase: float = field(default_factory=_random_phase)
 
-    # Merge/impact timers prevent repeated triggers from happening too fast.
-    merge_locked_until: float = 0.0
+    # The impact timer prevents repeated squash triggers from happening too fast.
     impact_cooldown_until: float = 0.0
 
     # Short-lived animation values.
@@ -76,11 +75,7 @@ class CelestialBody:
         self.mass = max(4.0, (self.radius * self.radius) * 0.018)
         self.inv_mass = 1.0 / self.mass
 
-        # Fresh bodies are briefly prevented from merging instantly.
         # Dataclasses call `__post_init__` right after the generated `__init__`.
-        if self.merge_locked_until == 0.0:
-            self.merge_locked_until = self.created_at + POST_MERGE_LOCK
-
         # Each body also gets a different blink rhythm so they feel less robotic.
         if self.blink_cooldown == 0.0:
             self.blink_cooldown = 1.0 + random.random() * 2.6
@@ -100,12 +95,8 @@ class CelestialBody:
         return now - self.created_at
 
     def can_merge(self, now: float) -> bool:
-        """Return True only when the body is old enough and not merge-locked."""
-        return now >= self.merge_locked_until and self.age(now) >= MERGE_ARM_TIME
-
-    def lock_merge(self, now: float, delay: float = POST_MERGE_LOCK) -> None:
-        """Push the merge lock into the future by `delay` seconds."""
-        self.merge_locked_until = now + delay
+        """Return True once the body is old enough to merge (`MERGE_ARM_TIME`)."""
+        return self.age(now) >= MERGE_ARM_TIME
 
     def register_impact(self, now: float, strength: float) -> bool:
         """Trigger squash/flash feedback for a noticeable impact.

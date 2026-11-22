@@ -95,12 +95,12 @@ PREVIEW_GLOW_EXTRA = 4
 OVERLAY_PADDING = 4
 
 # Merge rules.
-# `MERGE_ARM_TIME` stops fresh bodies from instantly re-merging the same frame.
-# `POST_MERGE_LOCK` gives newly created merged bodies a short cooldown too.
+# `MERGE_ARM_TIME` stops fresh bodies (newly launched or newly merged) from
+# instantly re-merging; every body is created with `created_at = now`, so this
+# one age check covers merged results too.
 # `MERGE_CONTACT_SLOP` slightly widens the allowed merge distance so collisions
 # feel more forgiving than strict perfect circle contact.
 MERGE_ARM_TIME = 0.18
-POST_MERGE_LOCK = 0.08
 MERGE_CONTACT_SLOP = 4.0
 # The merged body keeps this fraction of the two parents' combined velocity,
 # so chain merges stay exciting but readable instead of ricocheting.
