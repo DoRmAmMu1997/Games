@@ -34,6 +34,11 @@ TOP_ROW_Y = 20
 TABLEAU_Y = 180
 COLUMN_GAP = 18
 
+# One font for every header label and button, so the whole row fits.
+HEADER_FONT = ("Arial", 11, "bold")
+# Gap after each header label; kept small so long-term stats still fit.
+HEADER_LABEL_GAP = 10
+
 # Window and canvas sizes.
 WINDOW_WIDTH = 860
 WINDOW_HEIGHT = 860
@@ -1451,27 +1456,33 @@ class SolitaireApp:
         top_frame = tk.Frame(self.root, bg=BACKGROUND_COLOR, padx=12, pady=10)
         top_frame.pack(fill="x")
 
+        # Pack the button group FIRST. tkinter's packer hands out space in
+        # packing order, so packing the buttons before the labels guarantees
+        # they keep their full width; if the long statistics labels came
+        # first they could squeeze the last button ("Help") off the window.
+        button_frame = tk.Frame(top_frame, bg=BACKGROUND_COLOR)
+        button_frame.pack(side="right")
+
         # `Any` values let the same dict splat into every tk.Label call below
-        # without fighting tkinter's very specific per-option stub types.
+        # without fighting tkinter's very specific per-option stub types. The
+        # labels share the buttons' font so the whole header row fits.
         label_style: dict[str, Any] = {
             "bg": BACKGROUND_COLOR,
             "fg": "white",
-            "font": ("Arial", 12, "bold"),
+            "font": HEADER_FONT,
         }
 
-        tk.Label(top_frame, textvariable=self.score_var, **label_style).pack(side="left", padx=(0, 14))
-        tk.Label(top_frame, textvariable=self.high_score_var, **label_style).pack(side="left", padx=(0, 14))
-        tk.Label(top_frame, textvariable=self.time_var, **label_style).pack(side="left", padx=(0, 14))
+        label_gap = (0, HEADER_LABEL_GAP)
+        tk.Label(top_frame, textvariable=self.score_var, **label_style).pack(side="left", padx=label_gap)
+        tk.Label(top_frame, textvariable=self.high_score_var, **label_style).pack(side="left", padx=label_gap)
+        tk.Label(top_frame, textvariable=self.time_var, **label_style).pack(side="left", padx=label_gap)
         tk.Label(top_frame, textvariable=self.stats_var, **label_style).pack(side="left")
-
-        button_frame = tk.Frame(top_frame, bg=BACKGROUND_COLOR)
-        button_frame.pack(side="right")
 
         tk.Button(
             button_frame,
             text="Undo",
             command=self.undo_last_action,
-            font=("Arial", 11, "bold"),
+            font=HEADER_FONT,
             padx=12,
             pady=4,
         ).pack(side="left", padx=(0, 8))
@@ -1480,7 +1491,7 @@ class SolitaireApp:
             button_frame,
             text="Hint",
             command=self.show_hint,
-            font=("Arial", 11, "bold"),
+            font=HEADER_FONT,
             padx=12,
             pady=4,
         ).pack(side="left", padx=(0, 8))
@@ -1489,7 +1500,7 @@ class SolitaireApp:
             button_frame,
             text="New Game",
             command=self.start_new_game,
-            font=("Arial", 11, "bold"),
+            font=HEADER_FONT,
             padx=12,
             pady=4,
         ).pack(side="left", padx=(0, 8))
@@ -1498,7 +1509,7 @@ class SolitaireApp:
             button_frame,
             text="Help",
             command=self.show_help,
-            font=("Arial", 11, "bold"),
+            font=HEADER_FONT,
             padx=12,
             pady=4,
         ).pack(side="left")
