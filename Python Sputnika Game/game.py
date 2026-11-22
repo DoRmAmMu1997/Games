@@ -81,7 +81,15 @@ def _log_save_error(error: Exception) -> None:
 class OrbitalOrchardGame:
     """Top-level game object that keeps all subsystems working together."""
 
-    def __init__(self) -> None:
+    def __init__(self, persist: bool = True) -> None:
+        """Build the window, subsystems, and starting state.
+
+        `persist=False` still reads saved progress (so the HUD shows real
+        records) but never writes it. The automated smoke test uses this to
+        play a real round without touching the player's save.
+        """
+        self.persist = persist
+
         # Set the desktop window title that the player sees in the task bar.
         pygame.display.set_caption(WINDOW_TITLE)
 
@@ -698,6 +706,8 @@ class OrbitalOrchardGame:
 
     def _save_progress(self) -> None:
         """Persist high score and lifetime stats with a crash-safe atomic write."""
+        if not self.persist:
+            return
         payload = {
             "high_score": self.high_score,
             "games_played": self.games_played,

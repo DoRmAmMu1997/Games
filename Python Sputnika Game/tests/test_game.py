@@ -198,6 +198,33 @@ class MergeDeterminismTests(GameTestCase):
         self.assertEqual(first.seed, second.seed)
 
 
+class NoPersistTests(GameTestCase):
+    """``persist=False`` reads saved progress but never writes it."""
+
+    def test_non_persisting_game_leaves_the_save_untouched(self) -> None:
+        """Playing, recording and losing a round does not change a pre-seeded save."""
+
+        self.save_path.parent.mkdir(parents=True, exist_ok=True)
+        original = '{"high_score": 5, "games_played": 3, "best_tier": 2}'
+        self.save_path.write_text(original, encoding="utf-8")
+
+        game = OrbitalOrchardGame(persist=False)
+        self.assertEqual((game.high_score, game.games_played, game.lifetime_best_tier), (5, 3, 2))
+        game.start_round()
+        game.score = 999
+        game._trigger_game_over()
+
+        self.assertEqual(game.high_score, 999)
+        self.assertEqual(self.save_path.read_text(encoding="utf-8"), original)
+        self.assertEqual(sorted(path.name for path in self.save_path.parent.iterdir()), ["save_data.json"])
+
+    def test_default_game_still_saves(self) -> None:
+        """Normal games keep saving progress."""
+
+        self.game.start_round()
+        self.assertTrue(self.save_path.exists())
+
+
 class CorruptSaveTests(GameTestCase):
     """A damaged save file loads as fresh progress instead of crashing startup."""
 

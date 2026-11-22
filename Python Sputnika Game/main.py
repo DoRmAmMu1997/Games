@@ -64,20 +64,24 @@ def main() -> None:
             with contextlib.suppress(pygame.error):
                 pygame.display.set_icon(pygame.image.load(str(icon_path)))
 
+        if os.environ.get("ORBITAL_ORCHARD_AUTOTEST"):
+            # Headless smoke test: play a short real round (four launches, about
+            # 120 frames) and exit. `persist=False` reads the saved progress but
+            # never writes it, so the test leaves the player's save untouched.
+            game = OrbitalOrchardGame(persist=False)
+            game.start_round()
+            for _ in range(4):
+                game.drop_current_body()
+                game.run(max_frames=30)
+            return
+
         # Build the main game object, which owns the window, world state, and loop.
         # From this point on, almost all interesting game behavior lives in that object.
         game = OrbitalOrchardGame()
 
-        # During headless verification we do not want the game to run forever,
-        # so an environment variable asks the game to stop after a few frames.
-        #
-        # In normal play this variable is not set, so `max_frames` becomes `None`
-        # and the game loop keeps running until the player closes the window.
-        max_frames = 6 if os.environ.get("ORBITAL_ORCHARD_AUTOTEST") else None
-
         # Hand control over to the game loop.
-        # `run()` will keep looping until the player quits or a test frame limit is reached.
-        game.run(max_frames=max_frames)
+        # `run()` will keep looping until the player closes the window.
+        game.run()
     finally:
         # Shut pygame down even if the loop exits because of an error.
         # This helps avoid "stuck" audio/display resources after crashes.
