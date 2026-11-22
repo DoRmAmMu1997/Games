@@ -548,9 +548,14 @@ class OrbitalOrchardGame:
                 position=pygame.Vector2(event.position),
                 velocity=pygame.Vector2(event.velocity),
                 created_at=self.now,
+                seed=self.random.random(),
             )
-            # We intentionally let the merged body pick a fresh default random
-            # seed so its new personality/animation can feel like a distinct orb.
+            # The merged body gets a fresh seed so its orbital drift and idle
+            # personality feel like a distinct orb. The seed comes from the
+            # game's own seeded generator (not the global `random`), because it
+            # changes the body's gravity drift: seeded runs, tests, and
+            # simulations must replay exactly. The global `random` is kept for
+            # purely cosmetic things such as hover phase, blinks, and particles.
             # `pulse`/`flash`/`birth_pop` together drive the "punchy arrival":
             # the body flashes, pops outward, and scales up from small to full.
             merged_body.pulse = 0.95

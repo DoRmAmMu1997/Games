@@ -30,7 +30,9 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import game as game_module
+from entities import CelestialBody
 from game import OrbitalOrchardGame
+from merge_logic import find_merge_events
 from physics import PhysicsWorld
 from settings import FAIL_AGE_GATE, SPAWN_Y, TIERS
 
@@ -165,6 +167,35 @@ class SpawnOverlayTests(GameTestCase):
                     pygame.image.tobytes(game.canvas, "RGB"),
                     pygame.image.tobytes(expected, "RGB"),
                 )
+
+
+class MergeDeterminismTests(GameTestCase):
+    """Gameplay randomness flows through the game's own seeded generator."""
+
+    def _merge_once(self, game: OrbitalOrchardGame) -> CelestialBody:
+        """Merge two touching tier-0 bodies in ``game`` and return the result."""
+
+        game.start_round()
+        radius = TIERS[0].radius
+        center = game.world.center
+        game.bodies = [
+            CelestialBody(1, 0, pygame.Vector2(center.x, center.y), pygame.Vector2(), game.now - 5.0),
+            CelestialBody(2, 0, pygame.Vector2(center.x + radius, center.y), pygame.Vector2(), game.now - 5.0),
+        ]
+        game._next_body_id = 3
+        game._apply_merges(find_merge_events(game.bodies, game.now))
+        return game.bodies[-1]
+
+    def test_identical_game_seeds_give_identical_merged_seeds(self) -> None:
+        """Two games seeded the same way produce merged bodies with the same seed."""
+
+        random.seed(1)  # the global generator must not matter
+        first = self._merge_once(self.make_game(seed=99))
+        random.seed(2)
+        second = self._merge_once(self.make_game(seed=99))
+
+        self.assertEqual(first.tier, 1)
+        self.assertEqual(first.seed, second.seed)
 
 
 class CorruptSaveTests(GameTestCase):
