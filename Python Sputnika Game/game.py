@@ -74,6 +74,7 @@ from ui import (
     draw_playfield,
     place_game_over_buttons,
     place_menu_buttons,
+    place_pause_buttons,
 )
 
 
@@ -196,6 +197,7 @@ class OrbitalOrchardGame:
         # Overlay buttons are laid out inside their modals by ui.py; placing them
         # now means their click areas are right even before the first frame.
         place_menu_buttons([self.play_button])
+        place_pause_buttons([self.resume_button, self.pause_restart_button, self.pause_menu_button])
         place_game_over_buttons([self.over_restart_button, self.over_menu_button])
 
     @property

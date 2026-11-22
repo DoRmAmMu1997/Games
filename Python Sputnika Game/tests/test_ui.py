@@ -25,7 +25,7 @@ import pygame
 import ui
 from assets import AssetLibrary
 from physics import PhysicsWorld
-from settings import CONTAINER_RADIUS, PLAYFIELD_CENTER, SCREEN_HEIGHT, SCREEN_WIDTH, SPAWN_WEIGHTS, TIERS
+from settings import CONTAINER_RADIUS, PLAYFIELD_CENTER, SCREEN_HEIGHT, SCREEN_WIDTH, SIDEBAR_X, SPAWN_WEIGHTS, TIERS
 
 
 class UiTestCase(unittest.TestCase):
@@ -218,6 +218,21 @@ class ModalLayoutTests(UiTestCase):
             with self.subTest(new_record=new_record):
                 texts = ui.game_over_texts(self.assets, 987_654, 987_654, new_record, 9_999, "Quasar Crown")
                 self._check(ui.GAME_OVER_MODAL, texts, buttons)
+
+    def test_in_run_modals_clear_the_sidebar(self) -> None:
+        """Each modal, with its 14 px glow, ends at least 8 px before the sidebar."""
+
+        for name, modal in (("pause", ui.PAUSE_MODAL), ("game over", ui.GAME_OVER_MODAL)):
+            with self.subTest(modal=name):
+                self.assertLessEqual(modal.right + 14 + 8, SIDEBAR_X)
+                self.assertGreaterEqual(modal.left - 14, 8)
+
+    def test_pause_layout(self) -> None:
+        """The pause title, hint and three buttons fit inside the pause modal."""
+
+        buttons = [ui.Button(pygame.Rect(0, 0, 10, 10), label) for label in ("Resume", "Restart", "Main Menu")]
+        ui.place_pause_buttons(buttons)
+        self._check(ui.PAUSE_MODAL, ui.pause_texts(self.assets), buttons)
 
 
 def _luminance(color: tuple[int, ...]) -> float:

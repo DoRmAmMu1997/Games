@@ -48,8 +48,14 @@ DANGER_LABEL_ROWS = 4
 MENU_VEIL = (4, 8, 16, 120)
 
 # Overlay modals. Every button and text line is placed relative to these.
+# The main menu has no sidebar beside it, so it is centred on the screen. The
+# pause and game-over modals appear mid-run, so they are centred over the
+# bubble and stay clear of the sidebar HUD.
 MENU_MODAL = pygame.Rect(188, 236, 648, 584)
-GAME_OVER_MODAL = pygame.Rect(220, 300, 594, 460)
+PAUSE_MODAL = pygame.Rect(0, 316, 520, 430)
+PAUSE_MODAL.centerx = PLAYFIELD_CENTER[0]
+GAME_OVER_MODAL = pygame.Rect(0, 300, 594, 460)
+GAME_OVER_MODAL.centerx = PLAYFIELD_CENTER[0]
 
 # Largest visible radius (glow included) of the current and next queue previews.
 CURRENT_SLOT_RADIUS = 46
@@ -574,6 +580,25 @@ def draw_menu_overlay(
         button.draw(surface, assets, mouse_pos)
 
 
+def place_pause_buttons(buttons: list[Button]) -> None:
+    """Stack the pause buttons inside the pause modal."""
+    for index, button in enumerate(buttons):
+        button.rect.size = (310, 60)
+        button.rect.centerx = PAUSE_MODAL.centerx
+        button.rect.y = PAUSE_MODAL.y + 184 + index * 74
+
+
+def pause_texts(assets) -> list[tuple[pygame.Surface, pygame.Rect]]:
+    """Render and place the pause modal's title and hint."""
+    modal = PAUSE_MODAL
+    title = assets.header_font.render("Paused", True, WHITE)
+    hint = assets.small_font.render("Take a breath. Your orchard is waiting.", True, SOFT_WHITE)
+    return [
+        (title, title.get_rect(center=(modal.centerx, modal.y + 74))),
+        (hint, hint.get_rect(center=(modal.centerx, modal.y + 134))),
+    ]
+
+
 def draw_pause_overlay(
     surface: pygame.Surface,
     assets,
@@ -586,22 +611,13 @@ def draw_pause_overlay(
     # The dark veil dims gameplay behind the modal so the pause state is readable.
     veil.fill((4, 8, 16, 150))
     surface.blit(veil, (0, 0))
-    modal = pygame.Rect(252, 316, 520, 430)
-    draw_panel(surface, modal, (10, 18, 42, 236), (108, 148, 238), radius=34)
-    title = assets.header_font.render("Paused", True, WHITE)
-    surface.blit(title, title.get_rect(center=(modal.centerx, modal.y + 74)))
-    hint = assets.small_font.render("Take a breath. Your orchard is waiting.", True, SOFT_WHITE)
-    surface.blit(hint, hint.get_rect(center=(modal.centerx, modal.y + 134)))
+    draw_panel(surface, PAUSE_MODAL, (10, 18, 42, 236), (108, 148, 238), radius=34)
+    for text, rect in pause_texts(assets):
+        surface.blit(text, rect)
 
     # Reposition buttons every frame relative to the modal so the layout stays
     # consistent even if button objects are reused elsewhere.
-    # Doing this here also means the pause menu can be resized/reframed later
-    # without manually updating three separate button rectangles in `game.py`.
-    for index, button in enumerate(buttons):
-        button.rect.size = (310, 60)
-        button.rect.centerx = modal.centerx
-        button.rect.y = modal.y + 184 + index * 74
-
+    place_pause_buttons(buttons)
     for button in buttons:
         button.draw(surface, assets, mouse_pos)
 
