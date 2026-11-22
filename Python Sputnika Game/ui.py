@@ -26,6 +26,28 @@ from settings import (
     shade,
 )
 
+# Sidebar panels: score on top, the drop queue, then controls and progress.
+SCORE_PANEL = pygame.Rect(SIDEBAR_X, 42, SIDEBAR_WIDTH, 190)
+QUEUE_PANEL = pygame.Rect(SIDEBAR_X, 252, SIDEBAR_WIDTH, 316)
+INFO_PANEL = pygame.Rect(SIDEBAR_X, 588, SIDEBAR_WIDTH, 356)
+
+# Largest visible radius (glow included) of the current and next queue previews.
+CURRENT_SLOT_RADIUS = 46
+NEXT_SLOT_RADIUS = 24
+
+# Spare pixels around a preview backplate so its outermost halo ring is never clipped.
+BACKPLATE_PADDING = 8
+
+# The controls reference: (keys, action) per row.
+CONTROL_ROWS = (
+    ("Mouse / A, D", "Move"),
+    ("Right drag / W, S", "Angle"),
+    ("Wheel / Up, Dn", "Fine aim"),
+    ("Click / Space", "Launch"),
+    ("Esc / P", "Pause"),
+    ("R / M", "Restart / Menu"),
+)
+
 
 def draw_panel(
     target: pygame.Surface,
@@ -145,12 +167,87 @@ def draw_preview_backplate(
     The previews are important gameplay information, so this helper gives them a
     visual stage of their own. That makes the queue easier to scan at a glance.
     """
-    halo = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-    halo_center = pygame.Vector2(halo.get_width() / 2, halo.get_height() / 2)
+    # The widest halo ring is drawn out to `radius + 6`, so the surface gets
+    # `BACKPLATE_PADDING` spare pixels beyond `radius` on every side; a surface
+    # only `radius` wide would clip the halo into a square.
+    half = radius + BACKPLATE_PADDING
+    halo = pygame.Surface((half * 2, half * 2), pygame.SRCALPHA)
+    halo_center = pygame.Vector2(half, half)
     for ring, alpha in ((0, 36), (8, 20), (16, 10)):
         pygame.draw.circle(halo, (*color, alpha), halo_center, radius - 10 + ring, width=10 if ring else 0)
     pygame.draw.circle(halo, (255, 255, 255, 26), halo_center, radius - 18, width=2)
     target.blit(halo, halo.get_rect(center=center))
+
+
+def preview_scale(orb: pygame.Surface, slot_radius: float, max_scale: float) -> float:
+    """Return how much to scale a preview orb so its visible art fits its slot.
+
+    `orb` is the tier's full orb art (glow included). Small tiers keep the
+    friendly `max_scale`; larger tiers shrink so their glow never spills over
+    the labels around the slot.
+    """
+    visible = orb.get_bounding_rect()
+    half_extent = max(visible.w, visible.h) / 2.0
+    return min(max_scale, slot_radius / half_extent) if half_extent > 0 else max_scale
+
+
+@dataclass(slots=True)
+class PreviewSlot:
+    """Where and how big one drop-queue preview orb is drawn."""
+
+    tier: int
+    center: tuple[int, int]
+    scale: float
+    alpha: int
+    backplate_radius: int
+    backplate_color: tuple[int, int, int]
+
+
+def queue_layout(
+    assets, game, queue_rect: pygame.Rect
+) -> tuple[list[tuple[pygame.Surface, pygame.Rect]], list[PreviewSlot]]:
+    """Lay out the Drop Queue panel: its text items and its two preview slots.
+
+    Returning the layout (instead of drawing straight away) lets the tests
+    check that previews never cover the labels, using the real fonts.
+    """
+    left, top, middle = queue_rect.x, queue_rect.y, queue_rect.centerx
+    texts: list[tuple[pygame.Surface, pygame.Rect]] = []
+
+    def add_text(surface: pygame.Surface, **anchor: tuple[int, int]) -> None:
+        """Record one rendered label at its anchored position."""
+        texts.append((surface, surface.get_rect(**anchor)))
+
+    add_text(assets.small_font.render("Drop Queue", True, SOFT_WHITE), topleft=(left + 20, top + 16))
+    add_text(assets.body_font.render(game.current_body_name, True, WHITE), center=(middle, top + 172))
+    add_text(assets.tiny_font.render("Current", True, GLOW), center=(middle, top + 198))
+    # The next body's caption and name share one line, centred as a pair.
+    next_hint = assets.tiny_font.render("Next", True, GLOW)
+    next_name = assets.small_font.render(game.next_body_name, True, SOFT_WHITE)
+    pair_left = middle - (next_hint.get_width() + 8 + next_name.get_width()) // 2
+    add_text(next_hint, midleft=(pair_left, top + 288))
+    add_text(next_name, midleft=(pair_left + next_hint.get_width() + 8, top + 288))
+
+    current_scale = preview_scale(assets.get_body_surface(game.current_tier), CURRENT_SLOT_RADIUS, 1.12)
+    next_scale = preview_scale(assets.get_body_surface(game.next_tier), NEXT_SLOT_RADIUS, 0.82)
+    slots = [
+        PreviewSlot(game.current_tier, (middle, top + 104), current_scale, 255, CURRENT_SLOT_RADIUS + 6, GLOW),
+        PreviewSlot(game.next_tier, (middle, top + 244), next_scale, 215, NEXT_SLOT_RADIUS + 6, shade(GLOW, 0.88)),
+    ]
+    return texts, slots
+
+
+def control_rows(assets, info_rect: pygame.Rect) -> list[tuple[pygame.Surface, pygame.Rect]]:
+    """Lay out the controls reference as two columns: keys left, action right."""
+    items: list[tuple[pygame.Surface, pygame.Rect]] = []
+    for index, (keys, action) in enumerate(CONTROL_ROWS):
+        color = WHITE if index < 2 else SOFT_WHITE
+        y = info_rect.y + 56 + index * 28
+        keys_text = assets.tiny_font.render(keys, True, color)
+        action_text = assets.tiny_font.render(action, True, GLOW)
+        items.append((keys_text, keys_text.get_rect(topleft=(info_rect.x + 20, y))))
+        items.append((action_text, action_text.get_rect(topright=(info_rect.right - 20, y))))
+    return items
 
 
 @dataclass(slots=True)
@@ -281,9 +378,9 @@ def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, war
 def draw_hud(surface: pygame.Surface, game, assets) -> None:
     """Draw the sidebar HUD with score, queue, controls, and warning meter."""
     # These panels divide the sidebar into clear chunks of information.
-    score_rect = pygame.Rect(SIDEBAR_X, 42, SIDEBAR_WIDTH, 190)
-    queue_rect = pygame.Rect(SIDEBAR_X, 252, SIDEBAR_WIDTH, 292)
-    info_rect = pygame.Rect(SIDEBAR_X, 564, SIDEBAR_WIDTH, 380)
+    score_rect = SCORE_PANEL
+    queue_rect = QUEUE_PANEL
+    info_rect = INFO_PANEL
 
     draw_panel(surface, score_rect)
     draw_panel(surface, queue_rect)
@@ -304,54 +401,35 @@ def draw_hud(surface: pygame.Surface, game, assets) -> None:
     surface.blit(body_count, (score_rect.x + 20, score_rect.y + 156))
 
     # Current and next drop previews.
-    # The current preview is slightly larger so the player's next action is obvious.
-    queue_title = assets.small_font.render("Drop Queue", True, SOFT_WHITE)
-    surface.blit(queue_title, (queue_rect.x + 20, queue_rect.y + 16))
+    # The current preview is larger so the player's next action is obvious.
+    # Each preview is scaled to fit its slot (see `queue_layout`), so big
+    # tiers never cover the panel title or the labels around them.
+    texts, slots = queue_layout(assets, game, queue_rect)
     draw_section_rule(surface, queue_rect.x + 20, queue_rect.y + 40, queue_rect.w - 40, GLOW)
+    for slot in slots:
+        draw_preview_backplate(surface, slot.center, slot.backplate_radius, slot.backplate_color)
+        assets.draw_preview_orb(surface, slot.tier, slot.center, game.now, scale=slot.scale, alpha=slot.alpha)
+    for text, rect in texts:
+        surface.blit(text, rect)
 
-    draw_preview_backplate(surface, (queue_rect.centerx, queue_rect.y + 96), 72, GLOW)
-    assets.draw_preview_orb(surface, game.current_tier, (queue_rect.centerx, queue_rect.y + 96), game.now, scale=1.12)
-    current_name = assets.body_font.render(game.current_body_name, True, WHITE)
-    surface.blit(current_name, current_name.get_rect(center=(queue_rect.centerx, queue_rect.y + 168)))
-    current_hint = assets.tiny_font.render("Current", True, GLOW)
-    surface.blit(current_hint, current_hint.get_rect(center=(queue_rect.centerx, queue_rect.y + 196)))
-
-    next_orb_center = (queue_rect.centerx, queue_rect.y + 228)
-    draw_preview_backplate(surface, next_orb_center, 54, shade(GLOW, 0.88))
-    assets.draw_preview_orb(surface, game.next_tier, next_orb_center, game.now, scale=0.82, alpha=215)
-    next_name = assets.small_font.render(game.next_body_name, True, SOFT_WHITE)
-    surface.blit(next_name, next_name.get_rect(center=(queue_rect.centerx, queue_rect.y + 264)))
-    next_hint = assets.tiny_font.render("Next", True, GLOW)
-    surface.blit(next_hint, next_hint.get_rect(center=(queue_rect.centerx, queue_rect.y + 286)))
-
-    # Compact controls reference for the player.
-    # Keeping these strings here makes the HUD easy to tweak without changing
-    # the input logic itself.
+    # Compact controls reference for the player: keys on the left, the action
+    # they perform right-aligned, so long key lists can never run off the panel.
     controls_title = assets.small_font.render("Controls", True, SOFT_WHITE)
     surface.blit(controls_title, (info_rect.x + 20, info_rect.y + 16))
     draw_section_rule(surface, info_rect.x + 20, info_rect.y + 40, info_rect.w - 40, GLOW)
-    controls = [
-        "Mouse near top / A,D   Move",
-        "Right drag / W,S       Angle",
-        "Wheel / Up,Down        Fine aim",
-        "Left click / Space     Launch",
-        "Esc/P pause  R restart",
-        "M menu",
-    ]
-    for index, line in enumerate(controls):
-        text = assets.tiny_font.render(line, True, WHITE if index < 2 else SOFT_WHITE)
-        surface.blit(text, (info_rect.x + 20, info_rect.y + 58 + index * 32))
+    for text, rect in control_rows(assets, info_rect):
+        surface.blit(text, rect)
 
     # Progress summary: best body reached this run.
     best_tier = assets.small_font.render("Best body", True, SOFT_WHITE)
-    surface.blit(best_tier, (info_rect.x + 20, info_rect.y + 252))
+    surface.blit(best_tier, (info_rect.x + 20, info_rect.y + 232))
     unlocked = assets.ui_font.render(game.best_tier_name, True, SUCCESS if game.goal_reached else WHITE)
-    surface.blit(unlocked, (info_rect.x + 20, info_rect.y + 286))
+    surface.blit(unlocked, (info_rect.x + 20, info_rect.y + 258))
 
     # The stress meter updates continuously based on stack height, then fills the
     # final segment from the actual fail countdown while the player is in danger.
     danger = min(1.0, game.container_stress)
-    bar_rect = pygame.Rect(info_rect.x + 20, info_rect.y + 344, info_rect.w - 40, 18)
+    bar_rect = pygame.Rect(info_rect.x + 20, info_rect.y + 318, info_rect.w - 40, 18)
     pygame.draw.rect(surface, (18, 28, 52), bar_rect, border_radius=10)
     fill_width = max(8, int(bar_rect.w * danger)) if danger > 0.0 else 0
     if fill_width > 0:

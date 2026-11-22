@@ -23,7 +23,8 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import ui
-from settings import CONTAINER_RADIUS, PLAYFIELD_CENTER, SCREEN_HEIGHT, SCREEN_WIDTH
+from assets import AssetLibrary
+from settings import CONTAINER_RADIUS, PLAYFIELD_CENTER, SCREEN_HEIGHT, SCREEN_WIDTH, SPAWN_WEIGHTS, TIERS
 
 
 class UiTestCase(unittest.TestCase):
@@ -79,6 +80,92 @@ class BubbleGlowTests(UiTestCase):
         for name, point in (("left", (cx - reach, cy)), ("right", (cx + reach, cy)), ("bottom", (cx, cy + reach))):
             with self.subTest(side=name):
                 self.assertGreater(target.get_at(point).b, 20)
+
+
+class FakeGame:
+    """Just enough game state for the sidebar layout helpers."""
+
+    def __init__(self, current_tier: int, next_tier: int) -> None:
+        """Queue ``current_tier`` now and ``next_tier`` after it."""
+
+        self.current_tier = current_tier
+        self.next_tier = next_tier
+        self.current_body_name = TIERS[current_tier].name
+        self.next_body_name = TIERS[next_tier].name
+
+
+class SidebarLayoutTests(UiTestCase):
+    """The sidebar's text and previews fit their panels without overlapping."""
+
+    # Real breathing room, never a one-pixel fit: content stays this far inside
+    # each panel border, and previews stay this far from any label.
+    PANEL_MARGIN = 10
+    GAP = 3
+    assets: AssetLibrary
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Build the real asset library (fonts and orb art) once."""
+
+        super().setUpClass()
+        cls.assets = AssetLibrary()
+
+    def _orb_rect(self, slot) -> pygame.Rect:
+        """Return the visible area of a preview orb, including its idle bob."""
+
+        visible = self.assets.get_body_surface(slot.tier).get_bounding_rect()
+        side = max(visible.w, visible.h) * slot.scale
+        rect = pygame.Rect(0, 0, round(side), round(side) + 5)  # +5 covers the +-2.2 px bob
+        rect.center = slot.center
+        return rect
+
+    def test_queue_previews_never_cover_labels(self) -> None:
+        """For every spawnable current/next pair, orbs clear all text by a gap."""
+
+        inner = ui.QUEUE_PANEL.inflate(-2 * self.PANEL_MARGIN, -2 * self.PANEL_MARGIN)
+        for current in range(len(SPAWN_WEIGHTS)):
+            for upcoming in range(len(SPAWN_WEIGHTS)):
+                texts, slots = ui.queue_layout(self.assets, FakeGame(current, upcoming), ui.QUEUE_PANEL)
+                with self.subTest(current=current, upcoming=upcoming):
+                    orbs = [self._orb_rect(slot) for slot in slots]
+                    for orb in orbs:
+                        self.assertTrue(inner.contains(orb), orb)
+                        for _, text in texts:
+                            self.assertFalse(orb.inflate(2 * self.GAP, 2 * self.GAP).colliderect(text), (orb, text))
+                    self.assertFalse(orbs[0].colliderect(orbs[1]))
+                    for _, text in texts:
+                        self.assertTrue(inner.contains(text), text)
+
+    def test_queue_labels_fit_for_every_tier_name(self) -> None:
+        """Even the longest tier name stays inside the queue panel."""
+
+        inner = ui.QUEUE_PANEL.inflate(-2 * self.PANEL_MARGIN, -2 * self.PANEL_MARGIN)
+        for tier in range(len(TIERS)):
+            game = FakeGame(0, 0)
+            game.current_body_name = game.next_body_name = TIERS[tier].name
+            texts, _ = ui.queue_layout(self.assets, game, ui.QUEUE_PANEL)
+            for _, text in texts:
+                with self.subTest(tier=tier):
+                    self.assertTrue(inner.contains(text), text)
+
+    def test_control_rows_fit_the_panel(self) -> None:
+        """Keys and actions stay inside the controls panel and never touch."""
+
+        inner = ui.INFO_PANEL.inflate(-2 * self.PANEL_MARGIN, -2 * self.PANEL_MARGIN)
+        items = ui.control_rows(self.assets, ui.INFO_PANEL)
+        for keys, action in zip(items[0::2], items[1::2], strict=True):
+            with self.subTest(row=keys[1].y):
+                self.assertTrue(inner.contains(keys[1]), keys[1])
+                self.assertTrue(inner.contains(action[1]), action[1])
+                self.assertGreaterEqual(action[1].left - keys[1].right, 8)
+
+    def test_backplate_halo_is_not_clipped(self) -> None:
+        """The outer halo ring (out to ``radius + 6``) is drawn, not cut off."""
+
+        target = pygame.Surface((200, 200), pygame.SRCALPHA)
+        ui.draw_preview_backplate(target, (100, 100), 50, (110, 185, 255))
+        self.assertGreater(target.get_at((100 + 50 + 4, 100)).a, 0)
+        self.assertGreater(target.get_at((100, 100 - 50 - 4)).a, 0)
 
 
 if __name__ == "__main__":
