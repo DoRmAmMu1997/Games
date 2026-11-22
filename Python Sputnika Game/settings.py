@@ -153,6 +153,12 @@ IMPACT_EVENT_SPEED = 140.0
 MAX_BODIES = 80
 SPAWN_WEIGHTS = [38, 28, 18, 11, 5]
 
+# Floating score/combo popups stay fully opaque until only this share of
+# their lifetime is left, then fade out. They get a dark outline in
+# `POPUP_OUTLINE` so they stay readable over bright orbs.
+POPUP_FADE_SHARE = 0.5
+POPUP_OUTLINE = (8, 12, 26)
+
 # Cosmetic background density.
 BACKGROUND_STAR_COUNT = 150
 

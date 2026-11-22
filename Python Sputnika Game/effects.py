@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import pygame
 
-from settings import SCREEN_HEIGHT, SCREEN_WIDTH, SOFT_WHITE, WHITE
+from settings import POPUP_FADE_SHARE, POPUP_OUTLINE, SCREEN_HEIGHT, SCREEN_WIDTH, SOFT_WHITE, WHITE
 
 
 @dataclass(slots=True)
@@ -64,12 +64,33 @@ class PopupText:
     color: tuple[int, int, int]
     life: float
     scale: float = 1.0
+    # How long the popup lives in total. Filled in from `life` when the popup
+    # is created, so the fade can be measured against the popup's own lifetime.
+    duration: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Remember the popup's full lifetime for the fade-out."""
+        if self.duration <= 0.0:
+            self.duration = self.life
 
     def update(self, dt: float) -> None:
         """Move upward gently while fading over time."""
         self.life -= dt
         self.position += self.velocity * dt
         self.velocity *= 0.92
+
+
+def popup_alpha(popup: PopupText) -> int:
+    """Return a popup's opacity: fully opaque at first, then fading to zero.
+
+    The popup stays at full strength until only `POPUP_FADE_SHARE` of its own
+    lifetime is left, then fades out smoothly. (Measuring every popup against
+    one shared lifetime made short score popups start already half faded.)
+    """
+    fade_window = popup.duration * POPUP_FADE_SHARE
+    if fade_window <= 0.0:
+        return 0
+    return int(255 * max(0.0, min(1.0, popup.life / fade_window)))
 
 
 class EffectsManager:
@@ -282,12 +303,24 @@ class EffectsManager:
             # Text popups are rendered after the overlay so they stay crisp.
             # If we drew them onto the big transparent overlay first, they would
             # look blurrier and would be harder to read.
-            alpha = int(max(0.0, min(1.0, popup.life / 1.4)) * 255)
-            base = assets.body_font.render(popup.text, True, popup.color)
+            # Each popup is built on its own alpha surface: a dark outline (the
+            # text stamped at small offsets all around) with the coloured text
+            # on top, so it stays readable over bright, busy orbs.
+            text = assets.body_font.render(popup.text, True, popup.color)
+            outline = assets.body_font.render(popup.text, True, POPUP_OUTLINE)
+            thickness = 2
+            base = pygame.Surface(
+                (text.get_width() + thickness * 2, text.get_height() + thickness * 2), pygame.SRCALPHA
+            )
+            for dx in (-thickness, 0, thickness):
+                for dy in (-thickness, 0, thickness):
+                    if dx or dy:
+                        base.blit(outline, (thickness + dx, thickness + dy))
+            base.blit(text, (thickness, thickness))
             if abs(popup.scale - 1.0) > 0.01:
                 width = max(1, int(base.get_width() * popup.scale))
                 height = max(1, int(base.get_height() * popup.scale))
                 base = pygame.transform.smoothscale(base, (width, height))
-            base.set_alpha(alpha)
+            base.set_alpha(popup_alpha(popup))
             center = (int(popup.position.x + camera_offset.x), int(popup.position.y + camera_offset.y))
             target.blit(base, base.get_rect(center=center))
