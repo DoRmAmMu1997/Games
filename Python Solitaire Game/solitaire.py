@@ -530,6 +530,10 @@ class KlondikeGame:
         if selection.source_type == "waste":
             return [self.waste.pop()]
         if selection.source_type == "foundation":
+            # Taking a card back off a foundation refunds the points it earned,
+            # so moving it down and up again can never farm score. The score
+            # may dip below zero; the high score is deliberately left alone.
+            self.score -= self.FOUNDATION_POINTS
             return [self.foundations[selection.pile_index].pop()]
         column = self.tableau[selection.pile_index]
         moving_cards = column[selection.card_index:]
@@ -1410,7 +1414,8 @@ class SolitaireApp:
             "Scoring\n"
             "+10 for every card sent to a foundation, +5 for revealing a "
             "face-down card, plus a time bonus and a 100-point win bonus for "
-            "finishing the game.",
+            "finishing the game. Taking a card back off a foundation costs "
+            "the 10 points it earned.",
             parent=self.root,
         )
 

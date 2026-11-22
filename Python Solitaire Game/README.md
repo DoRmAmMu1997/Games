@@ -78,6 +78,8 @@ foundation is built up in a single suit, from Ace to King.
 ## Scoring
 
 - **+10** for every card moved onto a foundation.
+- **-10** for taking a card back off a foundation, so moving the same card
+  down and up again never farms points.
 - **+5** for every face-down tableau card that gets revealed.
 - **+100** win bonus for completing the game.
 - **Time bonus** — a decreasing bonus (up to 700 points) for finishing quickly.

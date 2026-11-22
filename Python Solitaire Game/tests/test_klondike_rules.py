@@ -153,6 +153,30 @@ class MoveRuleTests(unittest.TestCase):
             self.game.score, self.game.FOUNDATION_POINTS + self.game.REVEAL_POINTS
         )
 
+    def test_foundation_round_trips_are_score_neutral(self) -> None:
+        """Pulling a card off a foundation gives back its 10 points (D4).
+
+        Without the refund a player could farm points forever by moving the
+        same card down to the tableau and back up again.
+        """
+
+        hearts = FOUNDATION_SUITS.index("hearts")
+        self.game.foundations[hearts] = [Card("hearts", rank, True) for rank in range(1, 6)]
+        self.game.tableau[0] = [Card("spades", 6, face_up=True)]
+        self.game.score = 40
+        high_score = self.game.high_score
+
+        for _ in range(50):
+            down_move = self.game.selection_from_foundation(hearts)
+            assert down_move is not None
+            self.assertTrue(self.game.move_selection_to_tableau(down_move, 0))
+            up_move = self.game.selection_from_tableau(0, 1)
+            assert up_move is not None
+            self.assertTrue(self.game.move_selection_to_foundation(up_move, hearts))
+
+        self.assertEqual(self.game.score, 40)
+        self.assertEqual(self.game.high_score, max(high_score, 40))
+
     def test_has_won_requires_full_foundations(self) -> None:
         """The win check demands 13 cards on all four foundations."""
 
