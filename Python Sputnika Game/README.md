@@ -10,10 +10,11 @@ Orbital Orchard is a desktop Python puzzle game built with `pygame-ce`. You drop
 - `physics.py` runs the circle-body simulation and bubble collision solver.
 - `entities.py` defines the celestial body objects and their animated face rendering.
 - `merge_logic.py` finds valid same-tier merge pairs and computes their results.
+- `rules.py` holds the pygame-free scoring and danger rules: combos, the fail timer, the stress meter, and save cleaning.
 - `effects.py` handles particles, score popups, ring pulses, and screen shake.
 - `ui.py` draws panels, buttons, overlays, and the container HUD.
 - `assets.py` generates placeholder art, background stars, fonts, and simple procedural sounds.
-- `tests/` holds the headless engine test suite (merge rules, physics, data tables).
+- `tests/` holds the headless test suite: engine rules, physics, the game shell, and rendering/layout checks.
 - `requirements.txt` lists the runtime dependency.
 
 ## Beginner Reading Notes
@@ -43,13 +44,25 @@ If saving ever fails (for example, a full or read-only disk), the game keeps run
 
 ## Tests
 
-The merge rules, physics guarantees, and data tables have a headless test suite that never opens a window:
+Everything runs headless (SDL's dummy video and audio drivers), so no window ever opens and the tests never touch your real save file. From this folder:
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-For a quick full-app smoke test (engine + rendering together), set `ORBITAL_ORCHARD_AUTOTEST=1` and run `python main.py`; the game plays a few frames in a hidden window and exits.
+CI runs the same suite through pytest with a coverage floor:
+
+```bash
+python -m pytest tests -q --cov=merge_logic --cov=physics --cov=rules --cov-fail-under=93
+```
+
+What the suite covers:
+
+- **Engine rules** (`test_rules.py`, `test_merge_logic.py`, `test_physics.py`, `test_progression.py`): combos, the fail timer and stress meter, save cleaning, merge detection, the wall and pair solver, and a broad phase that must match an all-pairs solver bit for bit.
+- **Game shell** (`test_game.py`): spawning inside the bubble, the paused clock, deterministic merges, corrupt saves, when progress is saved, error logging, and draw order.
+- **Rendering and layout** (`test_ui.py`, `test_effects.py`, `test_assets.py`): panels keep their gloss inside rounded corners, the bubble glow stays round, sidebar and modal text fits with real margins and never overlaps, the danger label stays clear of the launcher, popups stay opaque and stack, orb art has no see-through holes, and content-sized overlays draw the same pixels as full-screen ones. Layout checks use the real fonts with generous margins (never a one-pixel fit), and colour checks compare the chosen colours directly instead of sampling antialiased pixels, so they hold with other fonts and on other platforms.
+
+For a quick full-app smoke test, set `ORBITAL_ORCHARD_AUTOTEST=1` and run `python main.py`: the game plays a short real round (four launches, about 120 frames) in a hidden window and exits. It reads your saved progress but never writes it.
 
 ## Build a Standalone .exe
 
