@@ -1051,7 +1051,10 @@ class KlondikeGame:
             if self.can_move_to_tableau_cards(cards, column):
                 equivalent_destinations.append(column_index)
 
-        if len(equivalent_destinations) < 2:
+        # One of several equal destinations must stay available: the lowest
+        # column is the canonical choice, so the move itself is never hidden
+        # just because there is more than one place to put it.
+        if len(equivalent_destinations) < 2 or destination_index == min(equivalent_destinations):
             return False
 
         return not any(
