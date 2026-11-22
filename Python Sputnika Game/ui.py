@@ -31,6 +31,10 @@ SCORE_PANEL = pygame.Rect(SIDEBAR_X, 42, SIDEBAR_WIDTH, 190)
 QUEUE_PANEL = pygame.Rect(SIDEBAR_X, 252, SIDEBAR_WIDTH, 316)
 INFO_PANEL = pygame.Rect(SIDEBAR_X, 588, SIDEBAR_WIDTH, 356)
 
+# Overlay modals. Every button and text line is placed relative to these.
+MENU_MODAL = pygame.Rect(188, 236, 648, 584)
+GAME_OVER_MODAL = pygame.Rect(220, 300, 594, 460)
+
 # Largest visible radius (glow included) of the current and next queue previews.
 CURRENT_SLOT_RADIUS = 46
 NEXT_SLOT_RADIUS = 24
@@ -443,6 +447,36 @@ def draw_hud(surface: pygame.Surface, game, assets) -> None:
     surface.blit(warning_text, (bar_rect.x, bar_rect.y - 24))
 
 
+def place_menu_buttons(buttons: list[Button]) -> None:
+    """Centre the menu buttons along the bottom of the menu modal."""
+    for index, button in enumerate(reversed(buttons)):
+        button.rect.size = (260, 64)
+        button.rect.centerx = MENU_MODAL.centerx
+        button.rect.bottom = MENU_MODAL.bottom - 24 - index * 78
+
+
+def menu_texts(
+    assets, high_score: int, games_played: int, best_tier_name: str
+) -> list[tuple[pygame.Surface, pygame.Rect]]:
+    """Render and place every text line of the main menu modal."""
+    modal = MENU_MODAL
+    lines = [
+        (assets.title_font, "Orbital", WHITE, 84),
+        (assets.title_font, "Orchard", WHITE, 168),
+        (assets.small_font, "Drop, bounce, and merge celestial cuties into a Quasar Crown.", SOFT_WHITE, 228),
+        (assets.ui_font, "Stack bodies inside the bubble.", WHITE, 286),
+        (assets.ui_font, "Touch two matching tiers to evolve them.", WHITE, 332),
+        (assets.ui_font, "Keep old bodies under the red danger line.", WHITE, 378),
+        (assets.small_font, f"Local high score: {high_score:,}", GLOW, 424),
+        (assets.tiny_font, f"Games played: {games_played:,}    Best body: {best_tier_name}", SOFT_WHITE, 458),
+    ]
+    texts = []
+    for font, text, color, offset in lines:
+        surface = font.render(text, True, color)
+        texts.append((surface, surface.get_rect(center=(modal.centerx, modal.y + offset))))
+    return texts
+
+
 def draw_menu_overlay(
     surface: pygame.Surface,
     assets,
@@ -453,37 +487,15 @@ def draw_menu_overlay(
     mouse_pos: tuple[int, int],
 ) -> None:
     """Draw the main menu overlay."""
-    modal = pygame.Rect(188, 244, 648, 520)
-
     # Menus are just overlays drawn on top of the existing background.
     # The main loop decides *when* to draw them, this function decides *how*.
-    draw_panel(surface, modal, (10, 18, 42, 230), (108, 148, 238), radius=34)
+    draw_panel(surface, MENU_MODAL, (10, 18, 42, 230), (108, 148, 238), radius=34)
+    for text, rect in menu_texts(assets, high_score, games_played, best_tier_name):
+        surface.blit(text, rect)
 
-    title = assets.title_font.render("Orbital", True, WHITE)
-    title2 = assets.title_font.render("Orchard", True, WHITE)
-    surface.blit(title, title.get_rect(center=(modal.centerx, modal.y + 88)))
-    surface.blit(title2, title2.get_rect(center=(modal.centerx, modal.y + 164)))
-
-    subtitle_text = "Drop, bounce, and merge celestial cuties into a Quasar Crown."
-    subtitle = assets.small_font.render(subtitle_text, True, SOFT_WHITE)
-    surface.blit(subtitle, subtitle.get_rect(center=(modal.centerx, modal.y + 228)))
-
-    tips = [
-        "Stack bodies inside the bubble.",
-        "Touch two matching tiers to evolve them.",
-        "Keep old bodies under the red danger line.",
-    ]
-    for index, line in enumerate(tips):
-        text = assets.ui_font.render(line, True, WHITE)
-        surface.blit(text, text.get_rect(center=(modal.centerx, modal.y + 286 + index * 46)))
-
-    best = assets.small_font.render(f"Local high score: {high_score:,}", True, GLOW)
-    surface.blit(best, best.get_rect(center=(modal.centerx, modal.y + 420)))
-    stats_line = f"Games played: {games_played:,}    Best body: {best_tier_name}"
-    stats = assets.tiny_font.render(stats_line, True, SOFT_WHITE)
-    surface.blit(stats, stats.get_rect(center=(modal.centerx, modal.y + 456)))
-
-    # Buttons are passed in from the game object so click handling stays there.
+    # Buttons are passed in from the game object so click handling stays there;
+    # they are placed inside the modal here so the layout lives in one place.
+    place_menu_buttons(buttons)
     for button in buttons:
         button.draw(surface, assets, mouse_pos)
 
@@ -520,6 +532,39 @@ def draw_pause_overlay(
         button.draw(surface, assets, mouse_pos)
 
 
+def place_game_over_buttons(buttons: list[Button]) -> None:
+    """Stack the game-over buttons inside the bottom of the game-over modal."""
+    for index, button in enumerate(buttons):
+        button.rect.size = (320, 60)
+        button.rect.centerx = GAME_OVER_MODAL.centerx
+        button.rect.y = GAME_OVER_MODAL.y + 296 + index * 74
+
+
+def game_over_texts(
+    assets,
+    score: int,
+    high_score: int,
+    new_record: bool,
+    games_played: int,
+    best_tier_name: str,
+) -> list[tuple[pygame.Surface, pygame.Rect]]:
+    """Render and place every text line of the game-over modal."""
+    modal = GAME_OVER_MODAL
+    status = "New high score!" if new_record else f"Best: {high_score:,}"
+    lines = [
+        (assets.header_font, "Orbit Lost", WHITE, 70),
+        (assets.score_font, f"{score:,}", WHITE, 148),
+        (assets.small_font, "Final score", SOFT_WHITE, 192),
+        (assets.small_font, status, SUCCESS if new_record else GLOW, 228),
+        (assets.tiny_font, f"Games played: {games_played:,}    Best ever: {best_tier_name}", SOFT_WHITE, 262),
+    ]
+    texts = []
+    for font, text, color, offset in lines:
+        surface = font.render(text, True, color)
+        texts.append((surface, surface.get_rect(center=(modal.centerx, modal.y + offset))))
+    return texts
+
+
 def draw_game_over_overlay(
     surface: pygame.Surface,
     assets,
@@ -535,30 +580,11 @@ def draw_game_over_overlay(
     veil = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     veil.fill((6, 10, 18, 165))
     surface.blit(veil, (0, 0))
-    modal = pygame.Rect(220, 300, 594, 436)
-    draw_panel(surface, modal, (10, 18, 42, 240), (255, 140, 140), radius=34)
-
-    title = assets.header_font.render("Orbit Lost", True, WHITE)
-    surface.blit(title, title.get_rect(center=(modal.centerx, modal.y + 70)))
-    score_text = assets.score_font.render(f"{score:,}", True, WHITE)
-    surface.blit(score_text, score_text.get_rect(center=(modal.centerx, modal.y + 148)))
-    label = assets.small_font.render("Final score", True, SOFT_WHITE)
-    surface.blit(label, label.get_rect(center=(modal.centerx, modal.y + 190)))
-
-    status = "New high score!" if new_record else f"Best: {high_score:,}"
-    status_color = SUCCESS if new_record else GLOW
-    status_text = assets.small_font.render(status, True, status_color)
-    surface.blit(status_text, status_text.get_rect(center=(modal.centerx, modal.y + 228)))
-
-    stats_line = f"Games played: {games_played:,}    Best ever: {best_tier_name}"
-    stats_text = assets.tiny_font.render(stats_line, True, SOFT_WHITE)
-    surface.blit(stats_text, stats_text.get_rect(center=(modal.centerx, modal.y + 264)))
+    draw_panel(surface, GAME_OVER_MODAL, (10, 18, 42, 240), (255, 140, 140), radius=34)
+    for text, rect in game_over_texts(assets, score, high_score, new_record, games_played, best_tier_name):
+        surface.blit(text, rect)
 
     # Place the retry buttons relative to the modal, matching the pause overlay.
-    for index, button in enumerate(buttons):
-        button.rect.size = (320, 60)
-        button.rect.centerx = modal.centerx
-        button.rect.y = modal.y + 300 + index * 74
-
+    place_game_over_buttons(buttons)
     for button in buttons:
         button.draw(surface, assets, mouse_pos)

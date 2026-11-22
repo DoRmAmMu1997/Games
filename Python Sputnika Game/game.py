@@ -63,7 +63,16 @@ from settings import (
     WINDOW_TITLE,
     clamp,
 )
-from ui import Button, draw_game_over_overlay, draw_hud, draw_menu_overlay, draw_pause_overlay, draw_playfield
+from ui import (
+    Button,
+    draw_game_over_overlay,
+    draw_hud,
+    draw_menu_overlay,
+    draw_pause_overlay,
+    draw_playfield,
+    place_game_over_buttons,
+    place_menu_buttons,
+)
 
 
 def _log_error(error: Exception) -> None:
@@ -182,6 +191,10 @@ class OrbitalOrchardGame:
         self.pause_menu_button = Button(pygame.Rect(357, 648, 310, 60), "Main Menu", accent=(150, 220, 255))
         self.over_restart_button = Button(pygame.Rect(352, 578, 320, 60), "Play Again", accent=(255, 170, 110))
         self.over_menu_button = Button(pygame.Rect(352, 648, 320, 60), "Main Menu", accent=(150, 220, 255))
+        # Overlay buttons are laid out inside their modals by ui.py; placing them
+        # now means their click areas are right even before the first frame.
+        place_menu_buttons([self.play_button])
+        place_game_over_buttons([self.over_restart_button, self.over_menu_button])
 
     @property
     def current_body_name(self) -> str:

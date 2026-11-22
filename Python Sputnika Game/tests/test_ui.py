@@ -168,5 +168,56 @@ class SidebarLayoutTests(UiTestCase):
         self.assertGreater(target.get_at((100, 100 - 50 - 4)).a, 0)
 
 
+class ModalLayoutTests(UiTestCase):
+    """Menu and game-over modals hold their text and buttons with room to spare."""
+
+    TEXT_MARGIN = 24
+    BUTTON_MARGIN = 16
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Build the real asset library (fonts) once."""
+
+        super().setUpClass()
+        cls.assets = AssetLibrary()
+
+    assets: AssetLibrary
+
+    def _check(self, modal: pygame.Rect, texts, buttons: list[ui.Button]) -> None:
+        """Assert texts and buttons sit inside ``modal`` and never overlap each other."""
+
+        text_area = modal.inflate(-2 * self.TEXT_MARGIN, -2 * self.TEXT_MARGIN)
+        button_area = modal.inflate(-2 * self.BUTTON_MARGIN, -2 * self.BUTTON_MARGIN)
+        rects = [rect for _, rect in texts]
+        for rect in rects:
+            self.assertTrue(text_area.contains(rect), (rect, text_area))
+        for button in buttons:
+            self.assertTrue(button_area.contains(button.rect), (button.rect, button_area))
+            for rect in rects:
+                self.assertFalse(button.rect.colliderect(rect), (button.rect, rect))
+        everything = rects + [button.rect for button in buttons]
+        for index, first in enumerate(everything):
+            for second in everything[index + 1 :]:
+                self.assertFalse(first.colliderect(second), (first, second))
+
+    def test_menu_layout(self) -> None:
+        """The title, tips, stats and Start button all fit inside the menu modal."""
+
+        button = ui.Button(pygame.Rect(0, 0, 10, 10), "Start Run")
+        ui.place_menu_buttons([button])
+        texts = ui.menu_texts(self.assets, 123_456, 9_999, "Quasar Crown")
+        self._check(ui.MENU_MODAL, texts, [button])
+
+    def test_game_over_layout(self) -> None:
+        """Score, status, stats and both buttons fit inside the game-over modal."""
+
+        buttons = [ui.Button(pygame.Rect(0, 0, 10, 10), label) for label in ("Play Again", "Main Menu")]
+        ui.place_game_over_buttons(buttons)
+        for new_record in (False, True):
+            with self.subTest(new_record=new_record):
+                texts = ui.game_over_texts(self.assets, 987_654, 987_654, new_record, 9_999, "Quasar Crown")
+                self._check(ui.GAME_OVER_MODAL, texts, buttons)
+
+
 if __name__ == "__main__":
     unittest.main()
