@@ -188,7 +188,11 @@ class Button:
 def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, warning_active: bool) -> None:
     """Draw the bubble container and its danger line."""
     center = pygame.Vector2(PLAYFIELD_CENTER)
-    bubble_rect = pygame.Rect(0, 0, CONTAINER_RADIUS * 2 + 28, CONTAINER_RADIUS * 2 + 28)
+    # The outer glow rings reach 30 px past the rim, so the glow surface needs
+    # that much room (plus a little spare) on every side; a smaller surface
+    # would cut the round glow off in flat edges.
+    glow_reach = 30 + 4
+    bubble_rect = pygame.Rect(0, 0, (CONTAINER_RADIUS + glow_reach) * 2, (CONTAINER_RADIUS + glow_reach) * 2)
     bubble_rect.center = (int(center.x), int(center.y))
 
     # The outer glow gives the glass bubble a soft luminous edge.

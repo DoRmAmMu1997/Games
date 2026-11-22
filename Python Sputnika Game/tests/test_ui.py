@@ -23,6 +23,7 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import ui
+from settings import CONTAINER_RADIUS, PLAYFIELD_CENTER, SCREEN_HEIGHT, SCREEN_WIDTH
 
 
 class UiTestCase(unittest.TestCase):
@@ -62,6 +63,22 @@ class PanelTests(UiTestCase):
         button.draw(target, Assets(), (-1, -1))
         shine = target.get_at((button.rect.centerx - 60, button.rect.y + 10))
         self.assertLess(max(shine.r, shine.g, shine.b), 160)
+
+
+class BubbleGlowTests(UiTestCase):
+    """The bubble's outer glow stays round instead of being cut off flat."""
+
+    def test_glow_reaches_past_the_old_clip_on_every_side(self) -> None:
+        """Glow pixels exist 18 px outside the rim to the left, right and below."""
+
+        target = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        target.fill((0, 0, 0))
+        ui.draw_playfield(target, 0.0, 0.0, False)
+        cx, cy = PLAYFIELD_CENTER
+        reach = CONTAINER_RADIUS + 18
+        for name, point in (("left", (cx - reach, cy)), ("right", (cx + reach, cy)), ("bottom", (cx, cy + reach))):
+            with self.subTest(side=name):
+                self.assertGreater(target.get_at(point).b, 20)
 
 
 if __name__ == "__main__":
