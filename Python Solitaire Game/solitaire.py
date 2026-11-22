@@ -229,6 +229,8 @@ class KlondikeGame:
         self.tableau: list[list[Card]] = [[] for _ in range(TABLEAU_COLUMNS)]
         self.won = False
         self.lost = False
+        # Every board position this deal has left behind; see find_best_move.
+        self._seen_positions: set[tuple] = set()
 
         # Start with a fresh shuffled board.
         self.new_game()
@@ -243,6 +245,7 @@ class KlondikeGame:
         self.tableau = [[] for _ in range(TABLEAU_COLUMNS)]
         self.won = False
         self.lost = False
+        self._seen_positions = set()
 
         # Build and shuffle a full 52-card deck.
         deck = self.create_shuffled_deck()
@@ -350,6 +353,9 @@ class KlondikeGame:
             "waste": self.serialize_cards(self.waste),
             "foundations": [self.serialize_cards(pile) for pile in self.foundations],
             "tableau": [self.serialize_cards(column) for column in self.tableau],
+            # Undo must also forget the positions it takes back, or the hint
+            # engine would keep avoiding moves the player never really made.
+            "seen_positions": frozenset(self._seen_positions),
         }
 
     def restore_snapshot(self, snapshot: dict) -> None:
@@ -366,6 +372,7 @@ class KlondikeGame:
         self.waste = self.deserialize_cards(snapshot["waste"])
         self.foundations = [self.deserialize_cards(pile) for pile in snapshot["foundations"]]
         self.tableau = [self.deserialize_cards(column) for column in snapshot["tableau"]]
+        self._seen_positions = set(snapshot["seen_positions"])
         self.save_high_score()
 
     def serialize_cards(self, cards: list[Card]) -> list[dict]:
@@ -392,6 +399,8 @@ class KlondikeGame:
 
     def draw_from_stock(self) -> str:
         """Draw from the stock or recycle waste back into stock."""
+        if self.stock or self.waste:
+            self.remember_position()
         if self.stock:
             # Normal draw: reveal one card and place it on the waste pile.
             card = self.stock.pop()
@@ -516,6 +525,7 @@ class KlondikeGame:
             return False
         if not self.can_move_to_tableau(selection.cards, column_index):
             return False
+        self.remember_position()
         moving_cards = self.remove_selection(selection)
         self.tableau[column_index].extend(moving_cards)
         return True
@@ -529,6 +539,7 @@ class KlondikeGame:
         card = selection.cards[0]
         if not self.can_move_to_foundation(card, foundation_index):
             return False
+        self.remember_position()
         moving_cards = self.remove_selection(selection)
         self.foundations[foundation_index].extend(moving_cards)
         self.add_score(self.FOUNDATION_POINTS)
@@ -561,6 +572,79 @@ class KlondikeGame:
         if column and not column[-1].face_up:
             column[-1].face_up = True
             self.add_score(self.REVEAL_POINTS)
+
+    def position_key(self) -> tuple:
+        """Return the whole board as one hashable value.
+
+        Beginner note: Python sets can only hold hashable (unchangeable)
+        values, and lists are changeable, so every pile is turned into a
+        tuple of (suit, rank, face_up) tuples before it goes into the set.
+        """
+        return self.position_key_for(self.stock, self.waste, self.foundations, self.tableau)
+
+    def position_key_for(
+        self,
+        stock: list[Card],
+        waste: list[Card],
+        foundations: list[list[Card]],
+        tableau: list[list[Card]],
+    ) -> tuple:
+        """Build a hashable position key from any supplied set of piles."""
+
+        def pile_key(cards: list[Card]) -> tuple:
+            """Freeze one pile into a tuple of card tuples."""
+            return tuple((card.suit, card.rank, card.face_up) for card in cards)
+
+        return (
+            pile_key(stock),
+            pile_key(waste),
+            tuple(pile_key(pile) for pile in foundations),
+            tuple(pile_key(column) for column in tableau),
+        )
+
+    def remember_position(self) -> None:
+        """Record the current board just before a draw, recycle, or move changes it."""
+        self._seen_positions.add(self.position_key())
+
+    def position_after(self, move: HintMove) -> tuple:
+        """Return the position key the board would have after playing `move`.
+
+        Everything happens on copied cards, so the real board never changes.
+        A future-waste move first replays its stock clicks the same way
+        `draw_from_stock` would, then plays the top waste card.
+        """
+        stock = [Card(card.suit, card.rank, card.face_up) for card in self.stock]
+        waste = [Card(card.suit, card.rank, card.face_up) for card in self.waste]
+        foundations = [[Card(card.suit, card.rank, card.face_up) for card in pile] for pile in self.foundations]
+        tableau = [[Card(card.suit, card.rank, card.face_up) for card in column] for column in self.tableau]
+
+        for _ in range(move.stock_clicks):
+            if stock:
+                card = stock.pop()
+                card.face_up = True
+                waste.append(card)
+            else:
+                while waste:
+                    card = waste.pop()
+                    card.face_up = False
+                    stock.append(card)
+
+        if move.source_type in ("waste", "future_waste"):
+            moving = [waste.pop()]
+        elif move.source_type == "foundation":
+            moving = [foundations[move.source_index].pop()]
+        else:
+            column = tableau[move.source_index]
+            moving = column[move.source_card_index:]
+            del column[move.source_card_index:]
+            if column and not column[-1].face_up:
+                column[-1].face_up = True
+
+        if move.destination_type == "foundation":
+            foundations[move.destination_index].extend(moving)
+        else:
+            tableau[move.destination_index].extend(moving)
+        return self.position_key_for(stock, waste, foundations, tableau)
 
     def has_won(self) -> bool:
         """The game is won when every foundation contains 13 cards."""
@@ -610,7 +694,9 @@ class KlondikeGame:
     #      shuffles (ace diversions, king shuffles between empty columns,
     #      redundant transfers, unproductive foundation returns).
     #   3. RANK      - `hint_sort_key` / `hint_priority` order what survived;
-    #      the lowest priority number wins.
+    #      the lowest priority number wins, except that `find_best_move`
+    #      skips any move whose result (`position_after`) is a position the
+    #      deal has already been in, so hint play does not loop.
     #   4. DESCRIBE  - `describe_hint` turns the winning move into the text
     #      the player reads.
     #
@@ -631,18 +717,30 @@ class KlondikeGame:
         We first prefer moves that are possible right now. If none exist, we
         also look ahead through future stock draws so the hint button can say
         how many clicks away the next useful waste move is.
+
+        Beginner note: without a memory, a hint engine can happily suggest
+        moving a card one way and then straight back again, forever. The
+        game remembers every position it has left (`_seen_positions`), and
+        a move whose result is already in that set is skipped in favour of
+        the next-best move. This only changes WHICH move is suggested, never
+        WHETHER one exists, so loss detection is unaffected.
         """
         current_moves = self.current_legal_moves()
-        if current_moves:
-            current_moves.sort(key=self.hint_sort_key)
-            return current_moves[0]
+        current_moves.sort(key=self.hint_sort_key)
+        for move in current_moves:
+            if self.position_after(move) not in self._seen_positions:
+                return move
 
         future_moves = self.future_waste_moves()
-        if future_moves:
-            future_moves.sort(key=self.hint_sort_key)
-            return future_moves[0]
+        future_moves.sort(key=self.hint_sort_key)
+        for move in future_moves:
+            if self.position_after(move) not in self._seen_positions:
+                return move
 
-        return None
+        # Every candidate repeats a position. A repeat still beats declaring
+        # the game lost while legal useful moves remain, so offer the best.
+        candidates = current_moves or future_moves
+        return candidates[0] if candidates else None
 
     def current_legal_moves(self) -> list[HintMove]:
         """Collect all useful moves that can be made immediately."""

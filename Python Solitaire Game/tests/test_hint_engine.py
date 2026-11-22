@@ -105,5 +105,109 @@ class EquivalentDestinationTests(HintEngineTestCase):
         self.assertEqual(move.destination_index, 1)
 
 
+class RepetitionGuardTests(HintEngineTestCase):
+    """Hints avoid moves that lead back to a position already seen (D3a)."""
+
+    def two_aces_board(self) -> None:
+        """Put A♥ on the waste and A♠ alone in column 1, plus one hidden card."""
+
+        self.game.waste = [up("hearts", 1)]
+        self.game.tableau[0] = [up("spades", 1)]
+        self.game.tableau[1] = [down("clubs", 9), up("diamonds", 4)]
+
+    def test_state_changes_remember_the_position_they_leave(self) -> None:
+        """Draws and moves record the board they started from."""
+
+        self.game.stock = [down("clubs", 5)]
+        self.two_aces_board()
+        start = self.game.position_key()
+        self.game.draw_from_stock()
+        self.assertIn(start, self.game._seen_positions)
+
+        after_draw = self.game.position_key()
+        selection = self.game.selection_from_tableau(0, 0)
+        assert selection is not None
+        self.assertTrue(self.game.move_selection_to_foundation(selection, FOUNDATION_SUITS.index("spades")))
+        self.assertIn(after_draw, self.game._seen_positions)
+
+    def test_position_after_matches_the_played_move(self) -> None:
+        """Simulating a hint gives exactly the key the real move produces."""
+
+        self.game.stock = [down("hearts", 1), down("clubs", 7), down("spades", 12)]
+        self.game.tableau[0] = [down("clubs", 9), up("diamonds", 13)]
+        self.game.tableau[1] = [down("spades", 3), up("hearts", 6), up("clubs", 5)]
+        self.game.tableau[2] = [up("diamonds", 7)]
+        for move in self.game.current_legal_moves() + self.game.future_waste_moves():
+            with self.subTest(hint=move.description):
+                saved = self.game.snapshot()
+                predicted = self.game.position_after(move)
+                for _ in range(move.stock_clicks):
+                    self.game.draw_from_stock()
+                selection = (
+                    self.game.selection_from_waste()
+                    if move.source_type == "future_waste"
+                    else self.game.selection_from_hint(move)
+                )
+                assert selection is not None
+                if move.destination_type == "foundation":
+                    self.game.move_selection_to_foundation(selection, move.destination_index)
+                else:
+                    self.game.move_selection_to_tableau(selection, move.destination_index)
+                self.assertEqual(self.game.position_key(), predicted)
+                self.game.restore_snapshot(saved)
+
+    def test_hint_skips_a_move_back_to_a_seen_position(self) -> None:
+        """When the best move repeats a position, the next-best one is shown."""
+
+        self.two_aces_board()
+        best = self.game.find_best_move()
+        assert best is not None
+        self.assertEqual(best.source_type, "waste")
+        self.game._seen_positions.add(self.game.position_after(best))
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertEqual(move.source_type, "tableau")
+        self.assertEqual(move.cards[0].label(), "A\u2660")
+
+    def test_hint_falls_back_to_a_repeat_rather_than_a_loss(self) -> None:
+        """If every candidate repeats a position, the best one is still offered."""
+
+        self.two_aces_board()
+        for candidate in self.game.current_legal_moves():
+            self.game._seen_positions.add(self.game.position_after(candidate))
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertEqual(move.source_type, "waste")
+
+    def test_undo_forgets_undone_positions(self) -> None:
+        """Restoring a snapshot also restores the set of seen positions."""
+
+        self.game.stock = [down("clubs", 5), down("hearts", 8)]
+        saved = self.game.snapshot()
+        seen_before = set(self.game._seen_positions)
+        self.game.draw_from_stock()
+        self.game.draw_from_stock()
+        self.assertNotEqual(self.game._seen_positions, seen_before)
+
+        self.game.restore_snapshot(saved)
+
+        self.assertEqual(self.game._seen_positions, seen_before)
+
+    def test_new_game_starts_with_no_seen_positions(self) -> None:
+        """A fresh deal forgets every position from the previous game."""
+
+        self.game.stock = [down("clubs", 5)]
+        self.game.draw_from_stock()
+        self.assertTrue(self.game._seen_positions)
+
+        self.game.new_game()
+
+        self.assertEqual(self.game._seen_positions, set())
+
+
 if __name__ == "__main__":
     unittest.main()

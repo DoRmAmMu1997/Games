@@ -67,7 +67,9 @@ foundation is built up in a single suit, from Ace to King.
 
 - **Hint system** — suggests the strongest available move, and can look ahead
   through future stock draws (for example, "click the stock twice, then move
-  5♥ to the Hearts foundation").
+  5♥ to the Hearts foundation"). It remembers every position the deal has
+  been in and prefers moves that lead somewhere new, so following the hints
+  does not shuffle the same cards back and forth forever.
 - **Auto-solve** — once every tableau card is face up, the game finishes the
   deal for you automatically.
 - **Undo** — moves, stock draws, and waste recycles can all be taken back.
