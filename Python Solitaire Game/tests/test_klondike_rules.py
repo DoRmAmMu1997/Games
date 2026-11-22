@@ -255,6 +255,28 @@ class ScoreSavingTests(unittest.TestCase):
         self.assertEqual(self.game.high_score, 105)
 
 
+class ErrorLogTests(unittest.TestCase):
+    """A failed save is written to error.log beside the score file (D9)."""
+
+    def setUp(self) -> None:
+        """Create a game whose score file lives in a temporary folder."""
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.game = make_game(self.tmp.name)
+
+    def test_failed_save_is_logged_to_error_log(self) -> None:
+        """An OSError during the save lands in error.log instead of crashing."""
+
+        with mock.patch("solitaire.os.replace", side_effect=OSError("disk full")):
+            self.game.save_high_score()
+
+        log_path = Path(self.tmp.name) / "error.log"
+        self.assertTrue(log_path.exists())
+        self.assertIn("disk full", log_path.read_text(encoding="utf-8"))
+        self.assertFalse((Path(self.tmp.name) / "save_error.log").exists())
+
+
 class UndoTests(unittest.TestCase):
     """Snapshot/restore powers the undo stack."""
 

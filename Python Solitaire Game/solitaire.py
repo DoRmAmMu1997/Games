@@ -15,6 +15,7 @@ import sys
 import time
 import tkinter as tk
 from dataclasses import dataclass
+from pathlib import Path
 from tkinter import messagebox
 from typing import Any
 
@@ -121,15 +122,19 @@ def _resource_path(name: str) -> str:
     return os.path.join(base_dir, name)
 
 
-def _log_save_error(save_path: str, error: Exception) -> None:
-    """Record a failed save to a log file instead of letting it fail silently."""
+def _log_error(error: Exception, save_dir: Path) -> None:
+    """Write save/load failures to a small per-user error log.
+
+    Save errors should not crash the game window. If the log itself cannot be
+    written, the final ``except`` keeps that secondary failure invisible too.
+    """
+
     try:
-        log_path = os.path.join(os.path.dirname(save_path), "save_error.log")
+        save_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        with open(log_path, "a", encoding="utf-8") as log_file:
-            log_file.write(f"[{stamp}] could not save high score: {error}\n")
+        with (save_dir / "error.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"[{stamp}] {error}\n")
     except OSError:
-        # If even the log write fails there is nothing more we can safely do.
         pass
 
 
@@ -313,7 +318,7 @@ class KlondikeGame:
             os.replace(tmp_path, self.high_score_path)
         except OSError as error:
             # Saving should never crash the game; log the failure and move on.
-            _log_save_error(self.high_score_path, error)
+            _log_error(error, Path(self.high_score_path).parent)
 
     def add_score(self, points: int) -> None:
         """Add points to the current score; save only when the high score rises."""
