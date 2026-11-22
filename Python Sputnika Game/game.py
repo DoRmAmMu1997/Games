@@ -65,6 +65,8 @@ from settings import (
 )
 from ui import (
     Button,
+    danger_label_rect,
+    draw_danger_label,
     draw_game_over_overlay,
     draw_hud,
     draw_menu_overlay,
@@ -769,7 +771,7 @@ class OrbitalOrchardGame:
         # unlabelled, even if the player left a run while it was in danger.
         in_run = self.scene in {"playing", "paused", "game_over"}
         danger_ratio = fail_ratio(self.fail_timer) if in_run else 0.0
-        draw_playfield(self.canvas, self.now, danger_ratio, self.warning_active and in_run)
+        draw_playfield(self.canvas, danger_ratio)
 
         # Draw smaller bodies first so larger ones can overlap them naturally.
         for body in sorted(self.bodies, key=lambda item: item.radius):
@@ -777,8 +779,12 @@ class OrbitalOrchardGame:
 
         # The launcher (orb, aim line, and trajectory dots) goes on top of the
         # bodies, so it stays visible even when a tall stack rises behind it.
-        if self.scene in {"playing", "paused", "game_over"}:
+        if in_run:
             self._draw_spawn_indicator(camera)
+            if self.warning_active:
+                # The danger label goes on top of the stack so it stays
+                # readable, at a spot that keeps clear of the launcher.
+                self._draw_danger_label(camera)
 
         # Particles/popups sit on top of the bodies.
         self.effects.draw(self.canvas, self.assets, camera)
@@ -958,6 +964,21 @@ class OrbitalOrchardGame:
             offset = pygame.Vector2(left, top)
             pygame.draw.line(ghost, (*beam_color, alpha), start - offset, guide_end - offset, 2)
             self.canvas.blit(ghost, (left, top))
+
+    def _draw_danger_label(self, camera: pygame.Vector2) -> None:
+        """Draw the "Danger line" label where it cannot hide the launcher or aim line."""
+        radius = TIERS[self.current_tier].radius
+        launcher = self.world.spawn_point(self.spawn_x, radius) + camera
+        direction = self._launch_direction()
+        font = self.assets.small_font
+        rect = danger_label_rect(
+            font.size("Danger line"),
+            launcher,
+            radius,
+            launcher - direction * 64.0,
+            launcher + direction * 166.0,
+        )
+        draw_danger_label(self.canvas, font, rect.center)
 
     def _launch_direction(self) -> pygame.Vector2:
         """Convert the current launcher angle into a unit direction vector."""

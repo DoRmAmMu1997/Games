@@ -211,7 +211,7 @@ class MenuDangerTests(GameTestCase):
     """Leaving a run in danger leaves no danger label behind the main menu."""
 
     def test_menu_shows_a_calm_danger_line(self) -> None:
-        """In the menu the playfield gets no warning and no danger level."""
+        """In the menu the line has no danger level and no label is drawn."""
 
         game = self.game
         game.start_round()
@@ -219,12 +219,15 @@ class MenuDangerTests(GameTestCase):
         game.fail_timer = 1.5
         game.scene = "menu"
 
-        with mock.patch.object(game_module, "draw_playfield") as playfield:
+        with (
+            mock.patch.object(game_module, "draw_playfield") as playfield,
+            mock.patch.object(game_module, "draw_danger_label") as label,
+        ):
             game._draw()
 
-        _, _, danger_ratio, warning_active = playfield.call_args.args
+        _, danger_ratio = playfield.call_args.args
         self.assertEqual(danger_ratio, 0.0)
-        self.assertFalse(warning_active)
+        label.assert_not_called()
 
     def test_paused_run_still_shows_the_danger(self) -> None:
         """Behind the pause menu the run's danger is still shown."""
@@ -235,12 +238,15 @@ class MenuDangerTests(GameTestCase):
         game.fail_timer = 1.2
         game.scene = "paused"
 
-        with mock.patch.object(game_module, "draw_playfield") as playfield:
+        with (
+            mock.patch.object(game_module, "draw_playfield") as playfield,
+            mock.patch.object(game_module, "draw_danger_label") as label,
+        ):
             game._draw()
 
-        _, _, danger_ratio, warning_active = playfield.call_args.args
+        _, danger_ratio = playfield.call_args.args
         self.assertAlmostEqual(danger_ratio, 0.5)
-        self.assertTrue(warning_active)
+        label.assert_called_once()
 
 
 class MergeDeterminismTests(GameTestCase):

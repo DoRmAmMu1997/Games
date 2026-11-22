@@ -24,6 +24,7 @@ import pygame
 
 import ui
 from assets import AssetLibrary
+from physics import PhysicsWorld
 from settings import CONTAINER_RADIUS, PLAYFIELD_CENTER, SCREEN_HEIGHT, SCREEN_WIDTH, SPAWN_WEIGHTS, TIERS
 
 
@@ -74,7 +75,7 @@ class BubbleGlowTests(UiTestCase):
 
         target = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         target.fill((0, 0, 0))
-        ui.draw_playfield(target, 0.0, 0.0, False)
+        ui.draw_playfield(target, 0.0)
         cx, cy = PLAYFIELD_CENTER
         reach = CONTAINER_RADIUS + 18
         for name, point in (("left", (cx - reach, cy)), ("right", (cx + reach, cy)), ("bottom", (cx, cy + reach))):
@@ -252,6 +253,34 @@ class DangerLabelTests(UiTestCase):
         rect = ui.draw_danger_label(target, pygame.font.Font(None, 28), (200, 100))
         backing = target.get_at((rect.x + 4, rect.centery))
         self.assertLess(max(backing.r, backing.g, backing.b), 120)
+
+
+class DangerLabelPlacementTests(UiTestCase):
+    """The danger label never covers the launcher orb or its aim line."""
+
+    def test_label_avoids_the_launcher_everywhere(self) -> None:
+        """Across tiers, launcher positions and aim angles the label stays clear and inside the bubble."""
+
+        world = PhysicsWorld()
+        size = pygame.font.Font(None, 26).size("Danger line")
+        center = pygame.Vector2(PLAYFIELD_CENTER)
+        for tier in range(len(SPAWN_WEIGHTS)):
+            radius = TIERS[tier].radius
+            low, high = world.allowed_spawn_x(radius)
+            for step in range(9):
+                spawn = world.spawn_point(low + (high - low) * step / 8, radius)
+                for angle in range(-60, 61, 10):
+                    direction = pygame.Vector2(0, 1).rotate(-angle)
+                    back, front = spawn - direction * 64.0, spawn + direction * 166.0
+                    rect = ui.danger_label_rect(size, spawn, radius, back, front)
+                    with self.subTest(tier=tier, step=step, angle=angle):
+                        orb = pygame.Rect(0, 0, radius * 2, radius * 2)
+                        orb.center = (round(spawn.x), round(spawn.y))
+                        clear = rect.inflate(8, 8)
+                        self.assertFalse(clear.colliderect(orb), (rect, orb))
+                        self.assertFalse(clear.clipline(back, front), (rect, back, front))
+                        for corner in (rect.topleft, rect.topright, rect.bottomleft, rect.bottomright):
+                            self.assertLess((pygame.Vector2(corner) - center).length(), CONTAINER_RADIUS - 8)
 
 
 class MenuBackdropTests(UiTestCase):

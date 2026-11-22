@@ -34,6 +34,15 @@ INFO_PANEL = pygame.Rect(SIDEBAR_X, 588, SIDEBAR_WIDTH, 356)
 # The "Danger line" label: white text on a translucent dark pill.
 DANGER_LABEL_TEXT = WHITE
 DANGER_LABEL_BACKING = (8, 12, 26, 200)
+# The pill is this much wider/taller than its text.
+DANGER_LABEL_PAD = (18, 8)
+# Vertical gap below the danger line (and between fallback rows), how far the
+# label stays in from the bubble wall, how much room it keeps around the
+# launcher orb and aim line, and how many rows down it may move to find room.
+DANGER_LABEL_GAP = 10
+DANGER_LABEL_WALL_INSET = 26
+DANGER_LABEL_CLEARANCE = 8
+DANGER_LABEL_ROWS = 4
 
 # The main menu dims the scene behind it a little less than pause does.
 MENU_VEIL = (4, 8, 16, 120)
@@ -293,8 +302,12 @@ class Button:
         target.blit(label, label.get_rect(center=self.rect.center))
 
 
-def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, warning_active: bool) -> None:
-    """Draw the bubble container and its danger line."""
+def draw_playfield(surface: pygame.Surface, danger_ratio: float) -> None:
+    """Draw the bubble container and its danger line.
+
+    The "Danger line" label is drawn separately by `draw_danger_label`, on top
+    of the bodies and the launcher, at a spot `danger_label_rect` keeps clear.
+    """
     center = pygame.Vector2(PLAYFIELD_CENTER)
     # The outer glow rings reach 30 px past the rim, so the glow surface needs
     # that much room (plus a little spare) on every side; a smaller surface
@@ -366,7 +379,6 @@ def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, war
     half_span = math.sqrt(max(0.0, CONTAINER_RADIUS * CONTAINER_RADIUS - dy * dy)) - 18.0
     left = int(center.x - half_span)
     right = int(center.x + half_span)
-    pulse = 1.0 + math.sin(now * 9.0) * 0.2 * danger_ratio
     width = 3 + int(3 * danger_ratio)
     if danger_ratio > 0.0:
         warning_glow = pygame.Surface((right - left + 40, 40), pygame.SRCALPHA)
@@ -379,10 +391,44 @@ def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, war
         )
         surface.blit(warning_glow, (left - 20, chord_y - warning_glow.get_height() // 2))
     pygame.draw.line(surface, line_color, (left, chord_y), (right, chord_y), width)
-    if warning_active:
-        # Show a floating label only when the player is actually in danger.
-        label_center = (int(center.x), int(chord_y - 22 - pulse * 4))
-        draw_danger_label(surface, pygame.font.Font(None, 28), label_center)
+
+
+def danger_label_rect(
+    text_size: tuple[int, int],
+    launcher: pygame.Vector2,
+    launcher_radius: float,
+    aim_back: pygame.Vector2,
+    aim_front: pygame.Vector2,
+) -> pygame.Rect:
+    """Choose where the "Danger line" label goes so it never hides the launcher.
+
+    The label sits just below the danger line, tucked toward the left or right
+    end of it. The side away from the launcher is tried first; a side is used
+    only if the label keeps clear of the launcher orb and the aim line
+    (`aim_back` to `aim_front`). If neither side is clear on the first row, the
+    next row down is tried. Every spot stays well inside the bubble wall.
+    """
+    pill = pygame.Rect(0, 0, text_size[0] + DANGER_LABEL_PAD[0], text_size[1] + DANGER_LABEL_PAD[1])
+    center_x, center_y = PLAYFIELD_CENTER
+    orb = pygame.Rect(0, 0, round(launcher_radius * 2), round(launcher_radius * 2))
+    orb.center = (round(launcher.x), round(launcher.y))
+    sides = ("left", "right") if launcher.x >= center_x else ("right", "left")
+    candidate = pill
+    for row in range(DANGER_LABEL_ROWS):
+        top = FAIL_LINE_Y + DANGER_LABEL_GAP + row * (pill.h + DANGER_LABEL_GAP)
+        # Half-width of the bubble at the row's top edge (the narrower edge).
+        half_width = math.sqrt(max(0.0, CONTAINER_RADIUS**2 - (top - center_y) ** 2))
+        for side in sides:
+            candidate = pill.copy()
+            candidate.top = top
+            if side == "left":
+                candidate.left = int(center_x - half_width + DANGER_LABEL_WALL_INSET)
+            else:
+                candidate.right = int(center_x + half_width - DANGER_LABEL_WALL_INSET)
+            clearance = candidate.inflate(DANGER_LABEL_CLEARANCE * 2, DANGER_LABEL_CLEARANCE * 2)
+            if not clearance.colliderect(orb) and not clearance.clipline(aim_back, aim_front):
+                return candidate
+    return candidate
 
 
 def draw_danger_label(surface: pygame.Surface, font: pygame.font.Font, center: tuple[int, int]) -> pygame.Rect:
@@ -392,7 +438,7 @@ def draw_danger_label(surface: pygame.Surface, font: pygame.font.Font, center: t
     text was hard to read; the translucent dark backing keeps it legible.
     """
     text = font.render("Danger line", True, DANGER_LABEL_TEXT)
-    pill_rect = text.get_rect().inflate(18, 8)
+    pill_rect = text.get_rect().inflate(*DANGER_LABEL_PAD)
     pill_rect.center = center
     pill = pygame.Surface(pill_rect.size, pygame.SRCALPHA)
     pygame.draw.rect(pill, DANGER_LABEL_BACKING, pill.get_rect(), border_radius=pill_rect.h // 2)
