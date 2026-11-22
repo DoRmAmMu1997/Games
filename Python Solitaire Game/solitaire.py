@@ -29,7 +29,6 @@ FACE_DOWN_SPACING = 16
 FACE_UP_SPACING = 24
 
 # General layout values used to place piles on the canvas.
-MARGIN_X = 20
 TOP_ROW_Y = 20
 TABLEAU_Y = 180
 COLUMN_GAP = 18
@@ -46,7 +45,6 @@ CANVAS_HEIGHT = 760
 
 # Derived spacing values that are reused in several layout helpers.
 TABLEAU_STEP = CARD_WIDTH + COLUMN_GAP
-FOUNDATION_START_X = 430
 
 # Colors used by the simple felt-style interface.
 BACKGROUND_COLOR = "#0B6E4F"
@@ -99,6 +97,11 @@ FOUNDATION_SUITS = ["hearts", "diamonds", "clubs", "spades"]
 # Board structure for a standard Klondike layout.
 TABLEAU_COLUMNS = 7
 FOUNDATION_COUNT = 4
+
+# The tableau's columns plus the gaps between them. The side margin is the
+# width left over, split evenly, so the board sits centred in the window.
+BOARD_WIDTH = TABLEAU_COLUMNS * CARD_WIDTH + (TABLEAU_COLUMNS - 1) * COLUMN_GAP
+MARGIN_X = (WINDOW_WIDTH - BOARD_WIDTH) // 2
 
 
 def _user_save_dir() -> str:
@@ -2725,8 +2728,11 @@ class SolitaireApp:
         return (x, TOP_ROW_Y, x + CARD_WIDTH, TOP_ROW_Y + CARD_HEIGHT)
 
     def foundation_rect(self, foundation_index: int) -> tuple[int, int, int, int]:
-        """Return the rectangle for one foundation pile."""
-        x = FOUNDATION_START_X + foundation_index * TABLEAU_STEP
+        """Return the rectangle for one foundation pile.
+
+        The four foundations sit exactly above the last four tableau columns.
+        """
+        x = self.tableau_x(TABLEAU_COLUMNS - FOUNDATION_COUNT + foundation_index)
         return (x, TOP_ROW_Y, x + CARD_WIDTH, TOP_ROW_Y + CARD_HEIGHT)
 
     def tableau_x(self, column_index: int) -> int:

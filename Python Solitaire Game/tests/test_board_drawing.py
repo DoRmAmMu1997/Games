@@ -19,7 +19,14 @@ GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
-from solitaire import KlondikeGame, SolitaireApp
+from solitaire import (
+    CARD_WIDTH,
+    FOUNDATION_COUNT,
+    TABLEAU_COLUMNS,
+    WINDOW_WIDTH,
+    KlondikeGame,
+    SolitaireApp,
+)
 
 
 class FakeVar:
@@ -119,6 +126,27 @@ class HeaderTests(DrawingTestCase):
         }
         self.assertEqual(len(button_fonts), 1)
         self.assertEqual(header_label_fonts, button_fonts)
+
+
+class TableLayoutTests(DrawingTestCase):
+    """P2: the board is centred and the foundations line up with the columns."""
+
+    def test_board_is_centred_in_the_window(self) -> None:
+        """The gap left of column 1 equals the gap right of column 7."""
+
+        left = self.app.tableau_x(0)
+        right = WINDOW_WIDTH - (self.app.tableau_x(TABLEAU_COLUMNS - 1) + CARD_WIDTH)
+        self.assertEqual(left, right)
+        self.assertEqual(self.app.stock_rect()[0], left)
+
+    def test_foundations_sit_above_the_last_four_columns(self) -> None:
+        """Foundation N starts exactly where tableau column 4 + N starts."""
+
+        first_column = TABLEAU_COLUMNS - FOUNDATION_COUNT
+        for index in range(FOUNDATION_COUNT):
+            with self.subTest(foundation=index):
+                self.assertEqual(self.app.foundation_rect(index)[0], self.app.tableau_x(first_column + index))
+        self.assertEqual(self.app.waste_rect()[0], self.app.tableau_x(1))
 
 
 if __name__ == "__main__":
