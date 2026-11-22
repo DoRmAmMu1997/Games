@@ -198,10 +198,17 @@ class KlondikeGame:
     WIN_BONUS = 100
     TIME_BONUS_CAP = 700
 
-    def __init__(self, high_score_path: str) -> None:
-        """Create a new game model and load saved score/statistics data."""
+    def __init__(self, high_score_path: str, rng: random.Random | None = None) -> None:
+        """Create a new game model and load saved score/statistics data.
+
+        Beginner note: `rng` is the random-number generator used to shuffle.
+        The real app passes nothing and gets a fresh, unpredictable one; tests
+        and simulations pass `random.Random(seed)` so the same seed always
+        deals exactly the same cards, which makes results reproducible.
+        """
         # Remember where score/statistics JSON should be saved.
         self.high_score_path = high_score_path
+        self.rng = rng if rng is not None else random.Random()
 
         # Load any previously saved high score and win/loss counts.
         saved_data = self.load_saved_data()
@@ -255,7 +262,7 @@ class KlondikeGame:
     def create_shuffled_deck(self) -> list[Card]:
         """Create a normal 52-card deck and shuffle it in place."""
         deck = [Card(suit=suit, rank=rank) for suit in FOUNDATION_SUITS for rank in range(1, 14)]
-        random.shuffle(deck)
+        self.rng.shuffle(deck)
         return deck
 
     def load_saved_data(self) -> dict:

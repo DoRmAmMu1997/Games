@@ -7,6 +7,7 @@ rules, scoring, undo snapshots, and the hint engine's judgement.
 
 from __future__ import annotations
 
+import random
 import sys
 import tempfile
 import unittest
@@ -85,6 +86,19 @@ class DealTests(unittest.TestCase):
         self.assertEqual(len(self.game.stock), 24)
         self.assertEqual(self.game.waste, [])
         self.assertTrue(all(not card.face_up for card in self.game.stock))
+
+    def test_same_seed_deals_the_same_board(self) -> None:
+        """Two games given equally seeded RNGs deal identical tableaux and stocks."""
+
+        def deal(seed: int) -> tuple[list, list]:
+            """Deal one game from a seeded RNG and return its tableau and stock."""
+            game = KlondikeGame(str(Path(self.tmp.name) / "seeded.json"), rng=random.Random(seed))
+            tableau = [[(card.suit, card.rank) for card in column] for column in game.tableau]
+            stock = [(card.suit, card.rank) for card in game.stock]
+            return tableau, stock
+
+        self.assertEqual(deal(2026), deal(2026))
+        self.assertNotEqual(deal(2026), deal(2027))
 
 
 class MoveRuleTests(unittest.TestCase):
