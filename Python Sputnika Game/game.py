@@ -66,15 +66,19 @@ from settings import (
 from ui import Button, draw_game_over_overlay, draw_hud, draw_menu_overlay, draw_pause_overlay, draw_playfield
 
 
-def _log_save_error(error: Exception) -> None:
-    """Record a failed save to a log file instead of letting it fail silently."""
+def _log_error(error: Exception) -> None:
+    """Write save/load failures to a small per-user error log.
+
+    Save errors should not crash the game window. If the log itself cannot be
+    written, the final ``except`` keeps that secondary failure invisible too.
+    """
+
     try:
         SAVE_DATA_DIR.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        with (SAVE_DATA_DIR / "save_error.log").open("a", encoding="utf-8") as log_file:
-            log_file.write(f"[{stamp}] could not save progress: {error}\n")
+        with (SAVE_DATA_DIR / "error.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"[{stamp}] {error}\n")
     except OSError:
-        # If even the log write fails there is nothing more we can safely do.
         pass
 
 
@@ -727,7 +731,7 @@ class OrbitalOrchardGame:
             tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             os.replace(tmp_path, SAVE_DATA_PATH)
         except OSError as error:
-            _log_save_error(error)
+            _log_error(error)
 
     def _draw(self) -> None:
         """Render one complete frame to the internal canvas, then present it."""

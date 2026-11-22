@@ -245,6 +245,20 @@ class MergeSaveTests(GameTestCase):
         self.assertEqual(save.call_count, 1)
 
 
+class ErrorLogTests(GameTestCase):
+    """Save failures are written to ``error.log`` instead of crashing the game."""
+
+    def test_failed_save_is_logged_to_error_log(self) -> None:
+        """An OSError while saving appends one stamped line to ``error.log``."""
+
+        with mock.patch.object(game_module.os, "replace", side_effect=OSError("disk full")):
+            self.game._save_progress()
+
+        log = self.save_path.parent / "error.log"
+        self.assertRegex(log.read_text(encoding="utf-8"), r"^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] disk full\n$")
+        self.assertFalse((self.save_path.parent / "save_error.log").exists())
+
+
 class NoPersistTests(GameTestCase):
     """``persist=False`` reads saved progress but never writes it."""
 

@@ -39,6 +39,8 @@ python main.py
 
 The game saves your high score and lifetime stats to `%APPDATA%\Orbital Orchard\save_data.json`. This per-user location is used whether you run the script or a compiled `.exe`, so progress survives across sessions, even if you move the `.exe` elsewhere.
 
+If saving ever fails (for example, a full or read-only disk), the game keeps running and appends a time-stamped line to `%APPDATA%\Orbital Orchard\error.log` instead. A damaged or hand-edited `save_data.json` simply loads as fresh progress.
+
 ## Tests
 
 The merge rules, physics guarantees, and data tables have a headless test suite that never opens a window:
