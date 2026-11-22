@@ -169,6 +169,44 @@ class SpawnOverlayTests(GameTestCase):
                 )
 
 
+class DrawOrderTests(GameTestCase):
+    """The launcher stays visible even when a tall stack rises behind it."""
+
+    def test_launcher_is_drawn_after_the_bodies(self) -> None:
+        """The spawn indicator (launcher orb, aim line) is drawn on top of every body."""
+
+        game = self.game
+        game.start_round()
+        center = game.world.center
+        game.bodies = [
+            CelestialBody(1, 4, pygame.Vector2(center.x, SPAWN_Y + 10), pygame.Vector2(), game.now - 5.0),
+            CelestialBody(2, 2, pygame.Vector2(center.x + 60, SPAWN_Y + 40), pygame.Vector2(), game.now - 5.0),
+        ]
+        calls: list[str] = []
+        original_body_draw = CelestialBody.draw
+        original_indicator = game._draw_spawn_indicator
+
+        def record_body(body, *args, **kwargs):
+            """Note a body draw, then draw it for real."""
+
+            calls.append("body")
+            return original_body_draw(body, *args, **kwargs)
+
+        def record_indicator(*args, **kwargs):
+            """Note the launcher draw, then draw it for real."""
+
+            calls.append("launcher")
+            return original_indicator(*args, **kwargs)
+
+        with (
+            mock.patch.object(CelestialBody, "draw", record_body),
+            mock.patch.object(game, "_draw_spawn_indicator", record_indicator),
+        ):
+            game._draw()
+
+        self.assertEqual(calls, ["body", "body", "launcher"])
+
+
 class MergeDeterminismTests(GameTestCase):
     """Gameplay randomness flows through the game's own seeded generator."""
 

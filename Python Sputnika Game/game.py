@@ -767,12 +767,14 @@ class OrbitalOrchardGame:
         # Draw the playfield shell before bodies go inside it.
         draw_playfield(self.canvas, self.now, self.fail_timer / FAIL_GRACE if FAIL_GRACE else 0.0, self.warning_active)
 
-        if self.scene in {"playing", "paused", "game_over"}:
-            self._draw_spawn_indicator(camera)
-
         # Draw smaller bodies first so larger ones can overlap them naturally.
         for body in sorted(self.bodies, key=lambda item: item.radius):
             body.draw(self.canvas, self.assets, camera, self.now)
+
+        # The launcher (orb, aim line, and trajectory dots) goes on top of the
+        # bodies, so it stays visible even when a tall stack rises behind it.
+        if self.scene in {"playing", "paused", "game_over"}:
+            self._draw_spawn_indicator(camera)
 
         # Particles/popups sit on top of the bodies.
         self.effects.draw(self.canvas, self.assets, camera)
