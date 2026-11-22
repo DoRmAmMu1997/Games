@@ -294,5 +294,160 @@ class FoundationReturnTests(HintEngineTestCase):
         self.assertEqual(move.description, "Hint: Click the stock once, then move 6\u2666 to the Diamonds foundation.")
 
 
+class FindBestMoveTests(HintEngineTestCase):
+    """Ranking and loss detection through ``find_best_move`` (D10)."""
+
+    def test_empty_board_has_no_move(self) -> None:
+        """With no cards anywhere there is nothing to suggest."""
+
+        self.assertIsNone(self.game.find_best_move())
+
+    def test_foundation_play_beats_a_plain_tableau_shuffle(self) -> None:
+        """A waste card that can go home outranks a non-revealing tableau move."""
+
+        self.game.waste = [up("hearts", 1)]
+        self.game.tableau[0] = [up("spades", 13), up("hearts", 12)]
+        self.game.tableau[1] = [up("clubs", 13)]
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertEqual((move.source_type, move.destination_type), ("waste", "foundation"))
+
+    def test_stuck_board_is_a_loss(self) -> None:
+        """No legal useful move now or in the stock means the deal is lost."""
+
+        self.game.tableau[0] = [down("spades", 4), up("hearts", 9)]
+        self.game.tableau[1] = [down("clubs", 3), up("diamonds", 2)]
+        self.game.stock = [down("hearts", 8), down("clubs", 6)]
+
+        self.assertIsNone(self.game.find_best_move())
+
+    def test_moves_remember_the_position_they_leave(self) -> None:
+        """A tableau move records its starting position too."""
+
+        self.game.tableau[0] = [down("spades", 4), up("hearts", 9)]
+        self.game.tableau[1] = [up("clubs", 10)]
+        start = self.game.position_key()
+        selection = self.game.selection_from_tableau(0, 1)
+        assert selection is not None
+
+        self.assertTrue(self.game.move_selection_to_tableau(selection, 1))
+
+        self.assertIn(start, self.game._seen_positions)
+
+
+class FutureWasteTests(HintEngineTestCase):
+    """The stock look-ahead and its click counting (D10)."""
+
+    def test_counts_clicks_through_the_stock(self) -> None:
+        """A playable card three draws deep is three clicks away."""
+
+        self.game.stock = [down("hearts", 1), down("clubs", 5), down("diamonds", 9)]
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertEqual(move.stock_clicks, 3)
+        self.assertEqual(move.description, "Hint: Click the stock 3 times, then move A\u2665 to the Hearts foundation.")
+
+    def test_counts_the_recycle_click(self) -> None:
+        """A card buried in the waste needs a recycle click plus a draw."""
+
+        self.game.waste = [up("hearts", 1), up("clubs", 7)]
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertEqual(move.stock_clicks, 2)
+        self.assertEqual(move.cards[0].label(), "A\u2665")
+
+    def test_single_click_wording(self) -> None:
+        """One click is described as "once", not "1 times"."""
+
+        self.game.stock = [down("hearts", 1)]
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertTrue(move.description.startswith("Hint: Click the stock once, then"))
+
+    def test_keeps_the_cheapest_route_to_a_card(self) -> None:
+        """The same card reachable on several passes is offered at its fewest clicks."""
+
+        self.game.waste = [up("hearts", 9)]
+        self.game.stock = [down("hearts", 1), down("clubs", 5)]
+
+        moves = [move for move in self.game.future_waste_moves() if move.cards[0].rank == 1]
+
+        self.assertEqual([move.stock_clicks for move in moves], [2])
+
+    def test_skips_a_future_move_that_repeats_a_position(self) -> None:
+        """The repetition guard also applies to look-ahead moves."""
+
+        self.game.stock = [down("hearts", 1), down("spades", 1)]
+        best = self.game.find_best_move()
+        assert best is not None
+        self.assertEqual(best.cards[0].label(), "A\u2660")
+        self.game._seen_positions.add(self.game.position_after(best))
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertEqual(move.cards[0].label(), "A\u2665")
+
+
+class AutoSolveSweepTests(HintEngineTestCase):
+    """``next_auto_foundation_move`` drives the auto-finish (D10)."""
+
+    def test_waste_card_goes_first(self) -> None:
+        """The sweep tries the waste card before the tableau tops."""
+
+        self.game.waste = [up("hearts", 1)]
+        self.game.tableau[0] = [up("spades", 1)]
+
+        result = self.game.next_auto_foundation_move()
+
+        assert result is not None
+        selection, foundation_index = result
+        self.assertEqual(selection.source_type, "waste")
+        self.assertEqual(FOUNDATION_SUITS[foundation_index], "hearts")
+
+    def test_tableau_top_goes_when_the_waste_cannot(self) -> None:
+        """A tableau top that fits a foundation is found next."""
+
+        self.game.waste = [up("hearts", 5)]
+        self.game.tableau[2] = [up("spades", 1)]
+
+        result = self.game.next_auto_foundation_move()
+
+        assert result is not None
+        selection, foundation_index = result
+        self.assertEqual((selection.source_type, selection.pile_index), ("tableau", 2))
+        self.assertEqual(FOUNDATION_SUITS[foundation_index], "spades")
+
+    def test_sweep_plays_a_face_up_board_to_a_win(self) -> None:
+        """Repeating the sweep (drawing when stuck) finishes an all-face-up deal."""
+
+        for index, suit in enumerate(FOUNDATION_SUITS):
+            self.game.foundations[index] = foundation_run(suit, 10)
+        self.game.tableau[0] = [up("spades", 13), up("hearts", 12), up("clubs", 11)]
+        self.game.tableau[1] = [up("hearts", 13), up("clubs", 12), up("diamonds", 11)]
+        self.game.tableau[2] = [up("diamonds", 13), up("spades", 12)]
+        self.game.stock = [down("clubs", 13), down("diamonds", 12), down("hearts", 11), down("spades", 11)]
+
+        for _ in range(200):
+            result = self.game.next_auto_foundation_move()
+            if result is None:
+                self.game.draw_from_stock()
+                continue
+            selection, foundation_index = result
+            self.assertTrue(self.game.move_selection_to_foundation(selection, foundation_index))
+            if self.game.has_won():
+                break
+
+        self.assertTrue(self.game.has_won())
+
+
 if __name__ == "__main__":
     unittest.main()

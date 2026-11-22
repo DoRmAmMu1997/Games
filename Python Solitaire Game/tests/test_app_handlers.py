@@ -262,5 +262,64 @@ class GameOverTests(AppHandlerTestCase):
         on_finished.assert_called_once()
 
 
+class LossAndAutoSolveTests(AppHandlerTestCase):
+    """The shell's loss check and the auto-solve loop (D10)."""
+
+    def run_scheduled_callbacks(self, limit: int = 2000) -> None:
+        """Run ``root.after`` callbacks one by one until none are left."""
+
+        for _ in range(limit):
+            if not self.root.after.called:
+                return
+            callback = self.root.after.call_args[0][1]
+            self.root.after.reset_mock()
+            callback()
+        self.fail("scheduled callbacks never settled")
+
+    def test_stuck_board_ends_the_game_as_a_loss(self) -> None:
+        """check_for_loss records a loss and tells the player when no move remains."""
+
+        self.clear_board()
+        self.game.tableau[0] = [Card("spades", 4, face_up=False), Card("hearts", 9, face_up=True)]
+
+        self.app.check_for_loss()
+
+        self.assertTrue(self.game.lost)
+        self.assertEqual(self.game.losses, 1)
+        self.messagebox.showinfo.assert_called_once()
+
+    def test_playable_board_is_not_a_loss(self) -> None:
+        """check_for_loss leaves a board with a useful move alone."""
+
+        self.clear_board()
+        self.game.tableau[0] = [Card("spades", 4, face_up=False), Card("hearts", 9, face_up=True)]
+        self.game.tableau[1] = [Card("clubs", 10, face_up=True)]
+
+        self.app.check_for_loss()
+
+        self.assertFalse(self.game.lost)
+        self.messagebox.showinfo.assert_not_called()
+
+    def test_auto_solve_finishes_a_face_up_board(self) -> None:
+        """Once every card is face up, auto-solve plays the deal out to a win."""
+
+        self.clear_board()
+        suits = ["hearts", "diamonds", "clubs", "spades"]
+        for index, suit in enumerate(suits):
+            self.game.foundations[index] = [Card(suit, rank, face_up=True) for rank in range(1, 12)]
+        self.game.tableau[0] = [Card("spades", 13, face_up=True), Card("hearts", 12, face_up=True)]
+        self.game.tableau[1] = [Card("hearts", 13, face_up=True), Card("clubs", 12, face_up=True)]
+        self.game.stock = [Card("clubs", 13), Card("diamonds", 12), Card("diamonds", 13), Card("spades", 12)]
+        self.assertTrue(self.app.should_auto_solve())
+
+        self.app.begin_auto_solve()
+        self.run_scheduled_callbacks()
+
+        self.assertTrue(self.game.won)
+        self.assertEqual(self.game.wins, 1)
+        self.assertFalse(self.app.auto_solving)
+        self.messagebox.showinfo.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
