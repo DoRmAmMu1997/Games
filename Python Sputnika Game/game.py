@@ -532,6 +532,11 @@ class OrbitalOrchardGame:
 
     def _apply_merges(self, merge_events) -> None:
         """Replace merged body pairs with their upgraded result."""
+        # Remember the records so the save file is only rewritten when a merge
+        # actually moves one; ordinary merges happen constantly and would
+        # otherwise hit the disk many times a second.
+        records_before = (self.high_score, self.lifetime_best_tier)
+
         # A dictionary makes it fast to turn event IDs back into real body objects.
         by_id = {body.body_id: body for body in self.bodies}
         consumed: set[int] = set()
@@ -613,7 +618,8 @@ class OrbitalOrchardGame:
             self.bodies = [body for body in self.bodies if body.body_id not in consumed]
             self.bodies.extend(spawned)
             self._refresh_high_score()
-            self._save_progress()
+            if (self.high_score, self.lifetime_best_tier) != records_before:
+                self._save_progress()
 
     def _update_fail_state(self, dt: float) -> None:
         """Track whether the player is approaching game over."""

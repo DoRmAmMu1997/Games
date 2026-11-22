@@ -198,6 +198,53 @@ class MergeDeterminismTests(GameTestCase):
         self.assertEqual(first.seed, second.seed)
 
 
+class MergeSaveTests(GameTestCase):
+    """Merges only write the save file when a record actually moves."""
+
+    def _merge(self, tier: int) -> None:
+        """Merge two touching ``tier`` bodies in a running round."""
+
+        game = self.game
+        radius = TIERS[tier].radius
+        center = game.world.center
+        game.bodies = [
+            CelestialBody(1, tier, pygame.Vector2(center.x, center.y), pygame.Vector2(), game.now - 5.0),
+            CelestialBody(2, tier, pygame.Vector2(center.x + radius, center.y), pygame.Vector2(), game.now - 5.0),
+        ]
+        game._next_body_id = 3
+        game._apply_merges(find_merge_events(game.bodies, game.now))
+
+    def setUp(self) -> None:
+        """Start a round whose records sit well above an ordinary merge."""
+
+        super().setUp()
+        self.game.start_round()
+        self.game.high_score = 10_000
+        self.game.lifetime_best_tier = 6
+
+    def test_ordinary_merge_does_not_write(self) -> None:
+        """A merge that beats neither the high score nor the best tier saves nothing."""
+
+        with mock.patch.object(self.game, "_save_progress") as save:
+            self._merge(0)
+        self.assertEqual(save.call_count, 0)
+
+    def test_new_best_tier_writes_once(self) -> None:
+        """A merge that reaches a new best tier saves exactly once."""
+
+        with mock.patch.object(self.game, "_save_progress") as save:
+            self._merge(6)
+        self.assertEqual(save.call_count, 1)
+
+    def test_new_high_score_writes_once(self) -> None:
+        """A merge that lifts the score past the high score saves exactly once."""
+
+        self.game.score = 9_999
+        with mock.patch.object(self.game, "_save_progress") as save:
+            self._merge(0)
+        self.assertEqual(save.call_count, 1)
+
+
 class NoPersistTests(GameTestCase):
     """``persist=False`` reads saved progress but never writes it."""
 
