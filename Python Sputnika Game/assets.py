@@ -33,6 +33,21 @@ from settings import (
 )
 
 
+def _blend_onto(surface: pygame.Surface, draw) -> None:
+    """Call `draw(layer)` on a fresh transparent layer, then blend it onto `surface`.
+
+    Beginner note:
+    - `pygame.draw` on an alpha surface *replaces* pixels, alpha included. A
+      translucent highlight drawn straight onto an opaque orb therefore makes
+      that patch of the orb see-through, like punching a hole in it.
+    - Drawing on a separate layer and blitting it blends the highlight on top
+      instead, leaving the orb underneath opaque.
+    """
+    layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+    draw(layer)
+    surface.blit(layer, (0, 0))
+
+
 class SoundBank:
     """Creates and stores short procedural sounds used by the game."""
 
@@ -345,7 +360,10 @@ class AssetLibrary:
             band_radius = int(radius * (1.0 - band * 0.11))
             band_center = center - pygame.Vector2(radius * (0.08 + band * 0.05), radius * (0.10 + band * 0.05))
             band_color = (*shade(info.color, 1.04 + band * 0.035), max(18, 72 - band * 13))
-            pygame.draw.circle(surface, band_color, band_center, band_radius)
+            _blend_onto(
+                surface,
+                lambda layer, c=band_color, p=band_center, r=band_radius: pygame.draw.circle(layer, c, p, r),
+            )
 
         # A lower shadow band helps the orb read as round rather than flat.
         lower_shadow = pygame.Surface((size, size), pygame.SRCALPHA)
@@ -361,18 +379,29 @@ class AssetLibrary:
         highlight_center = center - pygame.Vector2(radius * 0.25, radius * 0.30)
         pygame.draw.circle(surface, shade(info.color, 1.11), highlight_center, int(radius * 0.68))
         soft_center = center - pygame.Vector2(radius * 0.40, radius * 0.44)
-        pygame.draw.circle(surface, (*SOFT_WHITE, 76), soft_center, int(radius * 0.35))
+        _blend_onto(
+            surface,
+            lambda layer: pygame.draw.circle(layer, (*SOFT_WHITE, 76), soft_center, int(radius * 0.35)),
+        )
         specular_center = center - pygame.Vector2(radius * 0.24, radius * 0.33)
-        pygame.draw.circle(surface, (*WHITE, 118), specular_center, max(3, int(radius * 0.09)))
+        _blend_onto(
+            surface,
+            lambda layer: pygame.draw.circle(layer, (*WHITE, 118), specular_center, max(3, int(radius * 0.09))),
+        )
         pygame.draw.circle(surface, shade(info.accent, 0.82), center, radius, width=3)
 
         # A thin rim light around the upper-left edge helps separate the body
         # from dark backgrounds and neighboring planets.
         rim_rect = pygame.Rect(0, 0, radius * 2 + 2, radius * 2 + 2)
         rim_rect.center = (center.x, center.y)
-        pygame.draw.arc(surface, (*WHITE, 160), rim_rect, math.pi * 0.95, math.pi * 1.62, 3)
+        _blend_onto(
+            surface,
+            lambda layer: pygame.draw.arc(layer, (*WHITE, 160), rim_rect, math.pi * 0.95, math.pi * 1.62, 3),
+        )
 
-        self._decorate_body(surface, center, radius, tier)
+        # Tier decorations include translucent details too, so they are drawn
+        # on their own layer and blended on top as one piece.
+        _blend_onto(surface, lambda layer: self._decorate_body(layer, center, radius, tier))
         return surface
 
     def _decorate_body(
