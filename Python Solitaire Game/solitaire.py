@@ -1562,16 +1562,22 @@ class SolitaireApp:
 
         This is a convenience shortcut: instead of selecting the card and then
         clicking the foundation pile, one double-click does both at once.
+
+        Beginner note: tkinter reports the second press of a fast double-click
+        ONLY as a double-click, never as a normal click. So every double-click
+        that does not send a card home is passed on to `on_canvas_click`;
+        otherwise that second click would silently vanish (a quick second
+        stock click would not draw, a busy board would not explain itself).
         """
-        # Ignore double-clicks while the board is busy or the game is finished.
-        if self.animation is not None or self.auto_solving:
-            return
-        if self.game.won or self.game.lost:
+        if self.animation is not None or self.auto_solving or self.game.won or self.game.lost:
+            # The normal click handler explains why nothing can happen now.
+            self.on_canvas_click(event)
             return
 
         selection = self._selection_under_point(event.x, event.y)
         # Only a single face-up card can ever move onto a foundation.
         if selection is None or len(selection.cards) != 1:
+            self.on_canvas_click(event)
             return
 
         card = selection.cards[0]
@@ -1587,6 +1593,9 @@ class SolitaireApp:
                     completion_message=f"Moved {card.label()} to the {suit_name} foundation.",
                 )
                 return
+
+        # No foundation fits, so treat the second press as an ordinary click.
+        self.on_canvas_click(event)
 
     def _selection_under_point(self, x: int, y: int) -> Selection | None:
         """Return a Selection for the card under a click, or None if there is none.
