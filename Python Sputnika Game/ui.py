@@ -31,6 +31,13 @@ SCORE_PANEL = pygame.Rect(SIDEBAR_X, 42, SIDEBAR_WIDTH, 190)
 QUEUE_PANEL = pygame.Rect(SIDEBAR_X, 252, SIDEBAR_WIDTH, 316)
 INFO_PANEL = pygame.Rect(SIDEBAR_X, 588, SIDEBAR_WIDTH, 356)
 
+# The "Danger line" label: white text on a translucent dark pill.
+DANGER_LABEL_TEXT = WHITE
+DANGER_LABEL_BACKING = (8, 12, 26, 200)
+
+# The main menu dims the scene behind it a little less than pause does.
+MENU_VEIL = (4, 8, 16, 120)
+
 # Overlay modals. Every button and text line is placed relative to these.
 MENU_MODAL = pygame.Rect(188, 236, 648, 584)
 GAME_OVER_MODAL = pygame.Rect(220, 300, 594, 460)
@@ -374,9 +381,24 @@ def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, war
     pygame.draw.line(surface, line_color, (left, chord_y), (right, chord_y), width)
     if warning_active:
         # Show a floating label only when the player is actually in danger.
-        hint = pygame.font.Font(None, 28).render("Danger line", True, WHITE)
-        hint_rect = hint.get_rect(midbottom=(int(center.x), int(chord_y - 10 - pulse * 4)))
-        surface.blit(hint, hint_rect)
+        label_center = (int(center.x), int(chord_y - 22 - pulse * 4))
+        draw_danger_label(surface, pygame.font.Font(None, 28), label_center)
+
+
+def draw_danger_label(surface: pygame.Surface, font: pygame.font.Font, center: tuple[int, int]) -> pygame.Rect:
+    """Draw the "Danger line" label on a dark pill and return the pill's rect.
+
+    The label usually floats over a crowded, colourful stack, so plain white
+    text was hard to read; the translucent dark backing keeps it legible.
+    """
+    text = font.render("Danger line", True, DANGER_LABEL_TEXT)
+    pill_rect = text.get_rect().inflate(18, 8)
+    pill_rect.center = center
+    pill = pygame.Surface(pill_rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(pill, DANGER_LABEL_BACKING, pill.get_rect(), border_radius=pill_rect.h // 2)
+    surface.blit(pill, pill_rect)
+    surface.blit(text, text.get_rect(center=center))
+    return pill_rect
 
 
 def draw_hud(surface: pygame.Surface, game, assets) -> None:
@@ -487,6 +509,12 @@ def draw_menu_overlay(
     mouse_pos: tuple[int, int],
 ) -> None:
     """Draw the main menu overlay."""
+    # Dim whatever is behind the menu (the bubble, a stack left over from a
+    # previous run, the danger line) so none of it reads as part of the menu.
+    veil = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+    veil.fill(MENU_VEIL)
+    surface.blit(veil, (0, 0))
+
     # Menus are just overlays drawn on top of the existing background.
     # The main loop decides *when* to draw them, this function decides *how*.
     draw_panel(surface, MENU_MODAL, (10, 18, 42, 230), (108, 148, 238), radius=34)

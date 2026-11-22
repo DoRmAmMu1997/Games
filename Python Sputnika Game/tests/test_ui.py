@@ -219,5 +219,54 @@ class ModalLayoutTests(UiTestCase):
                 self._check(ui.GAME_OVER_MODAL, texts, buttons)
 
 
+def _luminance(color: tuple[int, ...]) -> float:
+    """Return the WCAG relative luminance of an RGB colour."""
+
+    channels = []
+    for value in color[:3]:
+        c = value / 255.0
+        channels.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def _contrast(first: tuple[int, ...], second: tuple[int, ...]) -> float:
+    """Return the WCAG contrast ratio between two colours."""
+
+    high, low = sorted((_luminance(first), _luminance(second)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+class DangerLabelTests(UiTestCase):
+    """The danger-line label reads clearly over a busy stack."""
+
+    def test_label_colours_have_strong_contrast(self) -> None:
+        """The chosen text and backing colours contrast at least 7:1."""
+
+        self.assertGreaterEqual(_contrast(ui.DANGER_LABEL_TEXT, ui.DANGER_LABEL_BACKING), 7.0)
+
+    def test_label_sits_on_a_dark_backing(self) -> None:
+        """Over a white backdrop, the label's backing pill is dark."""
+
+        target = pygame.Surface((400, 200))
+        target.fill((255, 255, 255))
+        rect = ui.draw_danger_label(target, pygame.font.Font(None, 28), (200, 100))
+        backing = target.get_at((rect.x + 4, rect.centery))
+        self.assertLess(max(backing.r, backing.g, backing.b), 120)
+
+
+class MenuBackdropTests(UiTestCase):
+    """The main menu dims the playfield behind it."""
+
+    def test_menu_veils_the_scene(self) -> None:
+        """Pixels far outside the menu modal are darkened by a veil."""
+
+        target = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        target.fill((255, 255, 255))
+        assets = AssetLibrary()
+        ui.draw_menu_overlay(target, assets, [], 0, 0, "Spark Dust", (-1, -1))
+        corner = target.get_at((10, SCREEN_HEIGHT - 10))
+        self.assertLess(corner.r, 200)
+
+
 if __name__ == "__main__":
     unittest.main()
