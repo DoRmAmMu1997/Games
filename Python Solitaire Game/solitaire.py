@@ -1482,6 +1482,12 @@ class SolitaireApp:
             self.status_var.set("Please wait for the card animation to finish.")
             return
 
+        if self.game.won:
+            # A win is final: its bonus and win count are already saved, so
+            # Undo is refused. A loss, by contrast, can be undone below.
+            self.status_var.set("You already won. Click New Game to play again.")
+            return
+
         if not self.history:
             self.status_var.set("There is nothing to undo yet.")
             return
@@ -2013,6 +2019,11 @@ class SolitaireApp:
         frames_left = [96]
 
         def step() -> None:
+            """Move every confetti piece one frame, or finish the celebration."""
+            if not self.game.won:
+                # New Game was started mid-celebration: stop quietly so no
+                # stale "You Win!" dialog pops up over the fresh deal.
+                return
             for piece in pieces:
                 self.canvas.move(piece["item"], piece["vx"], piece["vy"])
             frames_left[0] -= 1

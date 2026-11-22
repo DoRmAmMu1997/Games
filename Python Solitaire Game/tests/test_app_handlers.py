@@ -95,6 +95,9 @@ class AppHandlerTestCase(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.app = make_app(self.tmp.name)
         self.game = self.app.game
+        # Keep a typed handle on the mock root so tests can inspect `after`.
+        self.root = mock.Mock()
+        self.app.root = self.root
 
     def clear_board(self) -> None:
         """Empty every pile so a test can craft an exact board."""
@@ -173,6 +176,90 @@ class DoubleClickTests(AppHandlerTestCase):
 
         self.assertEqual(len(self.game.foundations[0]), 1)
         self.assertIsNotNone(self.app.animation)
+
+
+class GameOverTests(AppHandlerTestCase):
+    """Undo and the win celebration once a game has ended (D7)."""
+
+    def finish_with_one_move_left(self) -> None:
+        """Craft a board one foundation move from winning and play it via the app."""
+
+        self.clear_board()
+        suits = ["hearts", "diamonds", "clubs", "spades"]
+        for index, suit in enumerate(suits):
+            self.game.foundations[index] = [Card(suit, rank, face_up=True) for rank in range(1, 14)]
+        king = self.game.foundations[3].pop()
+        self.game.tableau[0] = [king]
+        self.app.on_canvas_double_click(self.tableau_click(0, 0))
+        assert self.app.animation is not None
+        self.app.animation.frame = self.app.animation.steps
+        self.app.advance_animation()
+
+    def test_undo_is_refused_after_a_win(self) -> None:
+        """A won game stays won: Undo explains itself and changes nothing."""
+
+        self.finish_with_one_move_left()
+        self.assertTrue(self.game.won)
+        wins = self.game.wins
+        history_length = len(self.app.history)
+
+        self.app.undo_last_action()
+
+        self.assertTrue(self.game.won)
+        self.assertEqual(self.game.wins, wins)
+        self.assertEqual(len(self.app.history), history_length)
+        self.assertEqual(self.app.status_var.get(), "You already won. Click New Game to play again.")
+
+    def test_undo_is_allowed_after_a_loss(self) -> None:
+        """Undo after a loss takes the loss back and reopens the game."""
+
+        self.clear_board()
+        self.game.tableau[0] = [Card("spades", 4, face_up=False), Card("hearts", 9, face_up=True)]
+        self.game.tableau[1] = [Card("clubs", 10, face_up=True)]
+        self.game.tableau[2] = [Card("hearts", 13, face_up=False), Card("diamonds", 2, face_up=True)]
+        self.app.on_canvas_click(self.tableau_click(0, 1))
+        self.app.on_canvas_click(self.tableau_click(1, 0))
+        assert self.app.animation is not None
+        self.app.animation.frame = self.app.animation.steps
+        self.app.advance_animation()
+        self.assertTrue(self.game.lost)
+        self.assertEqual(self.game.losses, 1)
+
+        self.app.undo_last_action()
+
+        self.assertFalse(self.game.lost)
+        self.assertEqual(self.game.losses, 0)
+        self.assertEqual(self.game.tableau[0][-1].label(), "9\u2665")
+
+    def test_new_game_during_confetti_stops_the_celebration(self) -> None:
+        """Starting a new game mid-celebration cancels the stale win dialog."""
+
+        on_finished = mock.Mock()
+        self.game.won = True
+        self.app._play_win_celebration(on_finished)
+        step = self.root.after.call_args[0][1]
+        self.root.after.reset_mock()
+
+        self.game.won = False
+        step()
+
+        on_finished.assert_not_called()
+        self.root.after.assert_not_called()
+
+    def test_celebration_finishes_with_the_dialog(self) -> None:
+        """Left alone, the celebration runs its frames and then shows the dialog."""
+
+        on_finished = mock.Mock()
+        self.game.won = True
+        self.app._play_win_celebration(on_finished)
+        for _ in range(500):
+            if not self.root.after.called:
+                break
+            step = self.root.after.call_args[0][1]
+            self.root.after.reset_mock()
+            step()
+
+        on_finished.assert_called_once()
 
 
 if __name__ == "__main__":
