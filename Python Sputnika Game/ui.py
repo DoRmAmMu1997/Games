@@ -47,40 +47,65 @@ def draw_panel(
             border_radius=radius + 14,
         )
     target.blit(glow, (rect.x - 14, rect.y - 14))
+    target.blit(panel_surface(rect.size, fill, border, radius), rect.topleft)
 
+
+def panel_surface(
+    size: tuple[int, int],
+    fill: tuple[int, int, int, int],
+    border: tuple[int, int, int],
+    radius: int,
+) -> pygame.Surface:
+    """Build the rounded, glossy glass body of one panel on an alpha surface.
+
+    Beginner note:
+    - The gloss and shadow ellipses are wider than the panel, so on their own
+      they would also tint the empty corners outside the rounded shape and
+      leave square-looking patches there.
+    - They are therefore drawn on a separate layer that is multiplied by a
+      rounded-rectangle mask, which wipes out everything outside the corners.
+    """
     # Draw onto a temporary alpha surface so the caller can get soft transparency.
     # This makes the panel feel like tinted glass instead of a flat opaque box.
-    panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+    width, height = size
+    panel = pygame.Surface(size, pygame.SRCALPHA)
     panel_rect = panel.get_rect()
     pygame.draw.rect(panel, fill, panel_rect, border_radius=radius)
 
     # A glossy ellipse across the top acts like reflected light on curved glass.
-    gloss = pygame.Surface(rect.size, pygame.SRCALPHA)
+    gloss = pygame.Surface(size, pygame.SRCALPHA)
     pygame.draw.ellipse(
         gloss,
         (255, 255, 255, 26),
         pygame.Rect(
-            -int(rect.w * 0.14),
-            -int(rect.h * 0.44),
-            int(rect.w * 1.28),
-            int(rect.h * 0.88),
+            -int(width * 0.14),
+            -int(height * 0.44),
+            int(width * 1.28),
+            int(height * 0.88),
         ),
     )
-    panel.blit(gloss, (0, 0))
 
     # A darker ellipse near the bottom adds depth so the panel does not feel flat.
-    lower_shadow = pygame.Surface(rect.size, pygame.SRCALPHA)
+    lower_shadow = pygame.Surface(size, pygame.SRCALPHA)
     pygame.draw.ellipse(
         lower_shadow,
         (0, 0, 0, 34),
         pygame.Rect(
-            int(rect.w * 0.06),
-            int(rect.h * 0.68),
-            int(rect.w * 0.88),
-            int(rect.h * 0.34),
+            int(width * 0.06),
+            int(height * 0.68),
+            int(width * 0.88),
+            int(height * 0.34),
         ),
     )
-    panel.blit(lower_shadow, (0, 0))
+    gloss.blit(lower_shadow, (0, 0))
+
+    # Keep the gloss and shadow inside the rounded shape: multiplying by a
+    # white rounded rectangle leaves pixels inside untouched and zeroes the
+    # alpha of everything outside the corners.
+    mask = pygame.Surface(size, pygame.SRCALPHA)
+    pygame.draw.rect(mask, (255, 255, 255, 255), panel_rect, border_radius=radius)
+    gloss.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    panel.blit(gloss, (0, 0))
 
     # The outer border and inner highlight give the panel a layered rim.
     pygame.draw.rect(panel, (*border, 220), panel_rect, width=2, border_radius=radius)
@@ -91,7 +116,7 @@ def draw_panel(
         width=1,
         border_radius=max(8, radius - 10),
     )
-    target.blit(panel, rect.topleft)
+    return panel
 
 
 def draw_section_rule(
@@ -148,8 +173,12 @@ class Button:
         fill = (20, 34, 68, 235) if hovered else (12, 24, 50, 220)
         outline = shade(self.accent, 1.18 if hovered else 1.0)
         draw_panel(target, self.rect, fill, outline, radius=22)
-        shine_y = self.rect.y + 10
-        pygame.draw.line(target, (255, 255, 255, 42), (self.rect.x + 24, shine_y), (self.rect.right - 24, shine_y), 2)
+        # The shine bar is a faint (alpha 42) reflection. Drawing an alpha
+        # colour straight onto the opaque canvas would ignore the alpha and
+        # paint solid white, so it goes on its own small alpha strip first.
+        shine = pygame.Surface((self.rect.w - 48, 2), pygame.SRCALPHA)
+        shine.fill((255, 255, 255, 42))
+        target.blit(shine, (self.rect.x + 24, self.rect.y + 10))
         shadow = assets.ui_font.render(self.label, True, (8, 12, 24))
         target.blit(shadow, shadow.get_rect(center=(self.rect.centerx, self.rect.centery + 2)))
         label = assets.ui_font.render(self.label, True, WHITE if hovered else SOFT_WHITE)
