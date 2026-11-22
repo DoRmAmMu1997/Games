@@ -81,5 +81,45 @@ class PopupReadabilityTests(unittest.TestCase):
                 self.assertGreaterEqual(_contrast(popup.color, effects.POPUP_OUTLINE), 7.0)
 
 
+class PopupStackingTests(unittest.TestCase):
+    """Popups spawned at nearly the same spot stack instead of overlapping."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Start pygame once for the class."""
+
+        pygame.init()
+
+    def _rect(self, font: pygame.font.Font, popup: PopupText) -> pygame.Rect:
+        """Return the on-screen rect a popup's (outlined, scaled) text covers."""
+
+        width, height = font.size(popup.text)
+        rect = pygame.Rect(0, 0, round((width + 4) * popup.scale), round((height + 4) * popup.scale))
+        rect.center = (round(popup.position.x), round(popup.position.y))
+        return rect
+
+    def test_cascade_popups_do_not_overlap(self) -> None:
+        """A three-merge cascade plus its combo callout leaves every popup readable."""
+
+        font = pygame.font.Font(None, 38)
+        manager = EffectsManager()
+        for dx, dy, gain, tier in ((0, 0, 12, 3), (10, 10, 24, 4), (-6, -10, 48, 5)):
+            manager.merge(pygame.Vector2(400 + dx, 800 + dy), (200, 120, 90), gain, tier)
+            manager.combo(3, pygame.Vector2(400 + dx, 800 + dy))
+        rects = [self._rect(font, popup) for popup in manager.popups]
+        for index, first in enumerate(rects):
+            for second in rects[index + 1 :]:
+                with self.subTest(first=first, second=second):
+                    self.assertFalse(first.colliderect(second))
+
+    def test_distant_popups_stay_where_they_spawn(self) -> None:
+        """Popups far apart are not moved."""
+
+        manager = EffectsManager()
+        manager.merge(pygame.Vector2(200, 800), (200, 120, 90), 12, 3)
+        manager.merge(pygame.Vector2(600, 800), (200, 120, 90), 12, 3)
+        self.assertEqual([popup.position.y for popup in manager.popups], [790.0, 790.0])
+
+
 if __name__ == "__main__":
     unittest.main()

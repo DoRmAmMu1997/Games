@@ -13,7 +13,16 @@ from dataclasses import dataclass
 
 import pygame
 
-from settings import POPUP_FADE_SHARE, POPUP_OUTLINE, SCREEN_HEIGHT, SCREEN_WIDTH, SOFT_WHITE, WHITE
+from settings import (
+    POPUP_FADE_SHARE,
+    POPUP_LINE_HEIGHT,
+    POPUP_OUTLINE,
+    POPUP_STACK_WIDTH,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    SOFT_WHITE,
+    WHITE,
+)
 
 
 @dataclass(slots=True)
@@ -110,6 +119,31 @@ class EffectsManager:
         # Higher trauma means stronger camera shake.
         self.trauma = 0.0
 
+    def _add_popup(self, popup: PopupText) -> None:
+        """Add a popup, nudging it upward until it no longer overlaps another.
+
+        Cascades spawn several score and combo popups at almost the same spot
+        in one frame; without this they pile up into an unreadable smear.
+        Each popup is treated as a box `POPUP_LINE_HEIGHT * scale` tall; two
+        popups closer than `POPUP_STACK_WIDTH` sideways count as one column.
+
+        Beginner note:
+        - The new popup only ever moves *up*, so once it is above a popup it
+          can never collide with that one again. That guarantees the loop ends.
+        """
+        moved = True
+        while moved:
+            moved = False
+            for other in self.popups:
+                gap = (POPUP_LINE_HEIGHT * popup.scale + POPUP_LINE_HEIGHT * other.scale) / 2
+                same_column = abs(other.position.x - popup.position.x) < POPUP_STACK_WIDTH
+                if same_column and abs(other.position.y - popup.position.y) < gap:
+                    # One extra pixel keeps a real gap and guarantees progress
+                    # even when floating-point rounding lands exactly on the edge.
+                    popup.position.y = other.position.y - gap - 1.0
+                    moved = True
+        self.popups.append(popup)
+
     def add_shake(self, amount: float) -> None:
         """Increase the camera-shake amount, clamped to a safe maximum."""
         self.trauma = min(1.0, self.trauma + amount)
@@ -170,7 +204,7 @@ class EffectsManager:
         )
 
         # Floating score text rewards the player immediately.
-        self.popups.append(
+        self._add_popup(
             PopupText(
                 text=f"+{score_gain}",
                 position=pygame.Vector2(position.x, position.y - 10.0),
@@ -184,7 +218,7 @@ class EffectsManager:
 
     def announce(self, text: str, position: pygame.Vector2) -> None:
         """Spawn a larger text popup for milestones such as reaching the top tier."""
-        self.popups.append(
+        self._add_popup(
             PopupText(
                 text=text,
                 position=pygame.Vector2(position),
@@ -198,7 +232,7 @@ class EffectsManager:
 
     def combo(self, count: int, position: pygame.Vector2) -> None:
         """Spawn a small popup celebrating a chain of quick back-to-back merges."""
-        self.popups.append(
+        self._add_popup(
             PopupText(
                 text=f"Combo x{count}",
                 position=pygame.Vector2(position.x, position.y - 34.0),

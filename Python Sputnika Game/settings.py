@@ -158,6 +158,11 @@ SPAWN_WEIGHTS = [38, 28, 18, 11, 5]
 # `POPUP_OUTLINE` so they stay readable over bright orbs.
 POPUP_FADE_SHARE = 0.5
 POPUP_OUTLINE = (8, 12, 26)
+# Popups spawned on top of each other (a merge cascade) stack upward instead
+# of overlapping: each is treated as a box this tall (before its scale), and
+# popups closer than `POPUP_STACK_WIDTH` sideways share one column.
+POPUP_LINE_HEIGHT = 38
+POPUP_STACK_WIDTH = 170
 
 # Cosmetic background density.
 BACKGROUND_STAR_COUNT = 150
