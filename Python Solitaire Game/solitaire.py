@@ -1299,7 +1299,19 @@ class KlondikeGame:
 
         This prevents hints like "pull J♥ down from foundation" unless doing so
         immediately creates some concrete new opportunity on the tableau.
+
+        A stock or waste card that fits on the returned card also counts, but
+        only when that card cannot simply go up to a foundation right now:
+        otherwise the foundation play is the better move and the return is
+        just a detour.
         """
+        returned_card = move.cards[0]
+        if any(
+            self.can_move_to_tableau_cards([card], [returned_card]) and not self.card_can_move_to_any_foundation(card)
+            for card in self.stock + self.waste
+        ):
+            return True
+
         # Remember the destination column before the foundation card is added.
         destination_before = list(self.tableau[move.destination_index])
 
@@ -1354,8 +1366,15 @@ class KlondikeGame:
         tableau: list[list[Card]],
         foundations: list[list[Card]],
     ) -> bool:
-        """Check whether a follow-up move creates immediate visible progress."""
+        """Check whether a follow-up move creates immediate visible progress.
+
+        Progress means revealing a hidden card, emptying a whole column (which
+        a King can then use), or exposing a card that can go to a foundation.
+        """
         if self.move_reveals_hidden_on_board(source_index, source_card_index, tableau):
+            return True
+        if source_card_index == 0:
+            # Moving the bottom card of a column empties that column.
             return True
 
         # If the moved-away source exposes a card that can now go to foundation,

@@ -209,5 +209,90 @@ class RepetitionGuardTests(HintEngineTestCase):
         self.assertEqual(self.game._seen_positions, set())
 
 
+class FoundationReturnTests(HintEngineTestCase):
+    """When taking a card back off a foundation counts as useful (D3b)."""
+
+    def play(self, move) -> None:
+        """Play a current (non-stock) hint move on the real board."""
+
+        selection = self.game.selection_from_hint(move)
+        assert selection is not None
+        if move.destination_type == "foundation":
+            self.assertTrue(self.game.move_selection_to_foundation(selection, move.destination_index))
+        else:
+            self.assertTrue(self.game.move_selection_to_tableau(selection, move.destination_index))
+
+    def test_return_that_empties_a_column_for_a_king(self) -> None:
+        """4♠ comes back onto 5♦ so 3♥ can follow and free a column for K♣.
+
+        Foundations hold ♠A-4 and ♥A, column 1 is a lone 3♥ and K♣ sits on
+        hidden cards. The only way forward is 4♠ back down, 3♥ onto it, then
+        K♣ into the emptied column, revealing a card.
+        """
+
+        spades = FOUNDATION_SUITS.index("spades")
+        hearts = FOUNDATION_SUITS.index("hearts")
+        self.game.foundations[spades] = foundation_run("spades", 4)
+        self.game.foundations[hearts] = foundation_run("hearts", 1)
+        self.game.tableau[0] = [up("hearts", 3)]
+        self.game.tableau[1] = [down("clubs", 9), up("diamonds", 5)]
+        self.game.tableau[2] = [down("hearts", 2), down("spades", 7), up("clubs", 13)]
+        # Bystander columns whose tops neither move nor accept anything.
+        self.game.tableau[3] = [down("spades", 12), up("diamonds", 9)]
+        self.game.tableau[4] = [down("clubs", 12), up("hearts", 9)]
+        self.game.tableau[5] = [down("spades", 11), up("diamonds", 7)]
+        self.game.tableau[6] = [down("clubs", 11), up("hearts", 11)]
+
+        first = self.game.find_best_move()
+        assert first is not None, "a reachable column-emptying line was declared a loss"
+        self.assertEqual((first.source_type, first.cards[0].label(), first.destination_index),
+                         ("foundation", "4\u2660", 1))
+        self.play(first)
+
+        second = self.game.find_best_move()
+        assert second is not None
+        self.assertEqual((second.source_index, second.cards[0].label(), second.destination_index),
+                         (0, "3\u2665", 1))
+        self.play(second)
+
+        third = self.game.find_best_move()
+        assert third is not None
+        self.assertEqual((third.source_index, third.cards[0].label(), third.destination_index),
+                         (2, "K\u2663", 0))
+        hidden_before = sum(not card.face_up for column in self.game.tableau for card in column)
+        self.play(third)
+        hidden_after = sum(not card.face_up for column in self.game.tableau for card in column)
+        self.assertEqual(hidden_after, hidden_before - 1)
+
+    def test_return_that_gives_a_stuck_talon_card_a_home(self) -> None:
+        """7♣ may come back down when the waiting 6♥ cannot go anywhere else."""
+
+        clubs = FOUNDATION_SUITS.index("clubs")
+        self.game.foundations[clubs] = foundation_run("clubs", 7)
+        self.game.tableau[0] = [down("spades", 13), up("diamonds", 8)]
+        self.game.stock = [down("hearts", 6)]
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertEqual((move.source_type, move.cards[0].label(), move.destination_index),
+                         ("foundation", "7\u2663", 0))
+
+    def test_talon_card_with_a_foundation_home_does_not_justify_a_return(self) -> None:
+        """REV-SOL-1: 6♦ goes up to its foundation; 7♣ stays where it is."""
+
+        clubs = FOUNDATION_SUITS.index("clubs")
+        diamonds = FOUNDATION_SUITS.index("diamonds")
+        self.game.foundations[clubs] = foundation_run("clubs", 7)
+        self.game.foundations[diamonds] = foundation_run("diamonds", 5)
+        self.game.tableau[0] = [down("spades", 13), up("hearts", 8)]
+        self.game.stock = [down("spades", 2), down("diamonds", 6)]
+
+        move = self.game.find_best_move()
+
+        assert move is not None
+        self.assertEqual(move.description, "Hint: Click the stock once, then move 6\u2666 to the Diamonds foundation.")
+
+
 if __name__ == "__main__":
     unittest.main()
