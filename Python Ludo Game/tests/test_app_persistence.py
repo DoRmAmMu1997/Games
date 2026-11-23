@@ -174,7 +174,7 @@ class StatsRepairTests(TempSaveDirTestCase):
         """A healthy stats file loads as-is and writes nothing to error.log."""
 
         good = {"games": 4, "human_wins": 1, "ai_wins": 3, "turn_total": 400,
-                "by_player_count": {"4": 2, "5": 1, "6": 1}}
+                "by_player_count": {"4": 2, "5": 1, "6": 1}, "sound": False}
         self.write_stats(good)
 
         self.assertEqual(main.load_stats(), good)

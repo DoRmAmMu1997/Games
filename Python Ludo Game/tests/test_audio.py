@@ -8,8 +8,10 @@ under SDL's dummy audio driver.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -25,11 +27,13 @@ import pygame
 
 import audio
 import main
+import visual_theme as theme
 from audio import LIMIT, MusicPlayer, Note, SoundBank, midi, render
 from game import LudoGame, LudoRules
 from settings import (
     DICE_RESULT_AT,
     HOP_PITCH_STEPS,
+    LABEL_CONTRAST_TARGET,
     MUSIC_BARS,
     MUSIC_BEATS_PER_BAR,
     MUSIC_BPM,
@@ -718,6 +722,244 @@ class ShellMusicTests(unittest.TestCase):
         app._on_button("new_game")
         self.assertEqual(app.screen, "setup")
         music.start.assert_called_once_with(MUSIC_FADE_IN_MS)
+
+
+class SoundSettingTests(unittest.TestCase):
+    """Ctrl+M and the Sound buttons switch all sound off and on, and the choice is saved."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once so the app can open its dummy window."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after these tests."""
+
+        pygame.quit()
+
+    def setUp(self) -> None:
+        """Point the app's save folder and stats file at a fresh temp folder."""
+
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.save_dir = Path(temp.name) / "Ludo"
+        self.stats_path = self.save_dir / "stats.json"
+        for name, value in (("SAVE_DIR", self.save_dir), ("STATS_PATH", self.stats_path)):
+            patcher = mock.patch.object(main, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def write_stats(self, payload: object) -> None:
+        """Write ``payload`` as the on-disk stats JSON."""
+
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.stats_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def make_app(self, persist: bool = False) -> tuple[main.LudoApp, mock.Mock, mock.Mock]:
+        """Return an app with a mock bank and mock music player (whose mute state starts applied)."""
+
+        with mock.patch.object(main.audio, "MusicPlayer") as player_class:
+            app = main.LudoApp(persist=persist)
+        app.sounds = bank = mock.Mock()
+        return app, bank, player_class.return_value
+
+    def ctrl_m(self, app: main.LudoApp) -> None:
+        """Press Ctrl+M."""
+
+        app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_m, mod=pygame.KMOD_LCTRL, unicode="\r"))
+
+    def test_sound_is_on_without_a_saved_choice(self) -> None:
+        """A missing stats file, or one without the key, leaves sound on."""
+
+        self.assertIs(main.load_stats()["sound"], True)
+        self.write_stats({"games": 2})
+        self.assertIs(main.load_stats()["sound"], True)
+
+    def test_only_a_real_false_turns_sound_off(self) -> None:
+        """JSON false mutes; damaged values (text, numbers, null, lists) fall back to on."""
+
+        for value, expected in ((False, False), (True, True), ("off", True), (0, True), (None, True), ([], True)):
+            with self.subTest(value=value):
+                self.write_stats({"sound": value})
+                self.assertIs(main.load_stats()["sound"], expected)
+
+    def test_saved_off_starts_the_app_silent(self) -> None:
+        """A saved "sound": false mutes the effects bank and the music from the first frame."""
+
+        self.write_stats({"sound": False})
+        with mock.patch.object(main.audio, "MusicPlayer") as player_class:
+            app = main.LudoApp(persist=False)
+        self.assertTrue(app.sounds.muted)
+        player_class.return_value.set_muted.assert_called_with(True)
+
+    def test_ctrl_m_switches_sound_off_and_back_on(self) -> None:
+        """Ctrl+M mutes the bank and stops the music; again unmutes, resumes and clicks."""
+
+        app, bank, music = self.make_app()
+        music.reset_mock()
+        self.ctrl_m(app)
+        self.assertIs(app.stats["sound"], False)
+        self.assertTrue(bank.muted)
+        music.set_muted.assert_called_once_with(True)
+        bank.play.assert_not_called()
+        self.ctrl_m(app)
+        self.assertIs(app.stats["sound"], True)
+        self.assertFalse(bank.muted)
+        music.set_muted.assert_called_with(False)
+        bank.play.assert_called_once_with("click")
+
+    def test_ctrl_m_works_on_every_screen(self) -> None:
+        """Setup, a game, and the game-over screen all accept Ctrl+M."""
+
+        app, _bank, _music = self.make_app()
+        for screen in ("setup", "playing", "over"):
+            with self.subTest(screen=screen):
+                if screen == "playing":
+                    app.start_game(LudoGame([("A", True), ("B", False), ("C", False), ("D", False)],
+                                            LudoRules(total_players=4), seed=1))
+                app.screen = screen
+                before = app.stats["sound"]
+                self.ctrl_m(app)
+                self.assertIs(app.stats["sound"], not before)
+
+    def test_ctrl_m_does_not_type_into_a_name_and_plain_m_still_does(self) -> None:
+        """With a name field focused, Ctrl+M toggles sound and plain M types an m."""
+
+        app, _bank, _music = self.make_app()
+        app.active_field = 0
+        app.name_fields[0] = "Ann"
+        self.ctrl_m(app)
+        self.assertEqual(app.name_fields[0], "Ann")
+        self.assertIs(app.stats["sound"], False)
+        app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_m, mod=0, unicode="m"))
+        self.assertEqual(app.name_fields[0], "Annm")
+        self.assertIs(app.stats["sound"], False)
+
+    def test_setup_toggle_shows_and_flips_the_setting(self) -> None:
+        """The setup screen's Sound button reads On/Off and a click flips it."""
+
+        app, _bank, _music = self.make_app()
+        button = next(button for button in app.setup_buttons() if button.key == "toggle_sound")
+        self.assertEqual(button.text, "Sound: On")
+        app._handle_click(button.rect.center)
+        self.assertIs(app.stats["sound"], False)
+        button = next(button for button in app.setup_buttons() if button.key == "toggle_sound")
+        self.assertEqual(button.text, "Sound: Off")
+
+    def test_play_screen_pill_flips_the_setting(self) -> None:
+        """During a game the Sound pill beside the dice tray flips the setting too."""
+
+        app, _bank, _music = self.make_app()
+        app.start_game(LudoGame([("A", True), ("B", False), ("C", False), ("D", False)],
+                                LudoRules(total_players=4), seed=1))
+        keys = {button.key: button for button in app._buttons_for_screen()}
+        self.assertEqual(keys["toggle_sound"].text, "Sound: On")
+        app._handle_click(main.PLAY_SOUND_RECT.center)
+        self.assertIs(app.stats["sound"], False)
+        self.assertEqual(app.screen, "playing")
+
+    def test_choice_survives_a_restart(self) -> None:
+        """A persisting app saves the choice to stats.json, and the next app starts muted."""
+
+        app, _bank, _music = self.make_app(persist=True)
+        self.ctrl_m(app)
+        self.assertIs(json.loads(self.stats_path.read_text(encoding="utf-8"))["sound"], False)
+        self.assertTrue(main.LudoApp(persist=False).sounds.muted)
+        self.ctrl_m(app)
+        self.assertIs(json.loads(self.stats_path.read_text(encoding="utf-8"))["sound"], True)
+
+    def test_choice_keeps_the_lifetime_stats(self) -> None:
+        """Saving the sound choice rewrites stats.json without losing any counter."""
+
+        self.write_stats({"games": 5, "human_wins": 2, "ai_wins": 3, "turn_total": 77})
+        app, _bank, _music = self.make_app(persist=True)
+        self.ctrl_m(app)
+        saved = json.loads(self.stats_path.read_text(encoding="utf-8"))
+        self.assertEqual((saved["games"], saved["human_wins"], saved["turn_total"], saved["sound"]), (5, 2, 77, False))
+
+    def test_non_persisting_app_never_writes_the_choice(self) -> None:
+        """persist=False (the autotest) toggles in memory only."""
+
+        app, _bank, _music = self.make_app(persist=False)
+        self.ctrl_m(app)
+        self.assertIs(app.stats["sound"], False)
+        self.assertFalse(self.stats_path.exists())
+
+
+class SoundToggleLayoutTests(unittest.TestCase):
+    """The Sound buttons fit their labels and stay clear of everything around them."""
+
+    app: main.LudoApp
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame and build one app for the layout checks."""
+
+        pygame.init()
+        cls.app = main.LudoApp(persist=False)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the layout checks."""
+
+        pygame.quit()
+
+    def test_labels_fit_with_margin(self) -> None:
+        """Both labels leave at least 8 px each side in either button, in this platform's font."""
+
+        font = self.app.fonts["button"]
+        for rect in (main.SETUP_SOUND_RECT, main.PLAY_SOUND_RECT):
+            for label in ("Sound: On", "Sound: Off"):
+                with self.subTest(rect=rect, label=label):
+                    width, height = font.size(label)
+                    self.assertLessEqual(width + 16, rect.width)
+                    self.assertLessEqual(height + 4, rect.height)
+
+    def test_setup_toggle_clears_the_title_and_every_control(self) -> None:
+        """The setup Sound button overlaps no other button, name field, title or option label."""
+
+        self.app.total_players = 6
+        self.app.human_count = 6
+        buttons = self.app.setup_buttons()
+        sound = next(button.rect for button in buttons if button.key == "toggle_sound")
+        others = [(button.key, button.rect) for button in buttons if button.key != "toggle_sound"]
+        others += [(f"name {index}", main._name_rect(index)) for index in range(6)]
+        title = pygame.Rect((main.PANEL_X + 24, 42), self.app.fonts["title"].size("Setup"))
+        label = pygame.Rect((main.SETUP_CONTROL_X, main.SETUP_OPTION_LABEL_START_Y),
+                            self.app.fonts["body"].size("Total Players"))
+        others += [("Setup title", title.inflate(16, 0)), ("Total Players label", label.inflate(16, 8))]
+        for name, rect in others:
+            with self.subTest(other=name):
+                self.assertFalse(sound.colliderect(rect), f"Sound {sound} overlaps {name} {rect}")
+
+    def test_play_pill_clears_the_other_table_controls(self) -> None:
+        """The in-game Sound pill sits on the canvas, clear of the tray, Save, New, moves and log."""
+
+        pill = main.PLAY_SOUND_RECT
+        self.assertTrue(pygame.Rect(0, 0, main.SCREEN_WIDTH, main.SCREEN_HEIGHT).contains(pill))
+        others = [
+            ("dice tray", main.PLAY_DICE_TRAY_RECT),
+            ("save", main.PLAY_SAVE_RECT),
+            ("new", main.PLAY_NEW_RECT),
+            ("log", main.PLAY_LOG_RECT),
+            *((f"move {index}", main._move_button_rect(index)) for index in range(4)),
+        ]
+        for name, rect in others:
+            with self.subTest(other=name):
+                self.assertFalse(pill.inflate(8, 8).colliderect(rect), f"Sound pill overlaps {name}")
+
+    def test_pill_labels_are_readable_on_and_off(self) -> None:
+        """Both pill fills, idle or hovered, give a label colour above the contrast target."""
+
+        for on in (True, False):
+            for hovered in (False, True):
+                color = main._sound_pill_color(on, hovered)
+                fill = theme.darken(color, theme.PILL_SHADE)
+                with self.subTest(on=on, hovered=hovered):
+                    self.assertGreaterEqual(theme.contrast_ratio(theme.readable_on(fill), fill), LABEL_CONTRAST_TARGET)
+                    self.assertNotEqual(main._sound_pill_color(True, hovered), main._sound_pill_color(False, hovered))
 
 
 class MixerStartupTests(unittest.TestCase):

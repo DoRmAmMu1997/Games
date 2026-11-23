@@ -13,6 +13,11 @@ then scaled to the real window. Layout constants below are therefore in
 logical pixels, and mouse positions are converted back into logical pixels
 before they are compared with buttons.
 
+Sound: ``audio.py`` synthesises every effect and the music; this shell plays
+them for the engine's events (``event_sounds``), token hops and buttons.
+Ctrl+M, or a Sound button, switches all sound off and on; the choice is
+saved as ``"sound"`` in the stats file.
+
 Run ``python main.py`` to play. With the environment variable
 ``LUDO_AUTOTEST=1`` set, it instead plays a short hidden all-AI game and
 exits, which is used as a smoke test.
@@ -47,6 +52,7 @@ from settings import (
     AUTOTEST_FRAMES,
     AUTOTEST_SEED,
     DICE_ANIM_MS,
+    DISABLED,
     FPS,
     GOLD,
     ICON_BOARD_COLOR,
@@ -78,6 +84,7 @@ from settings import (
     SFX_RECIPES,
     SOFT,
     STATS_PATH,
+    SUCCESS,
     TOKEN_HOP_SPEED,
     WHITE,
     WINDOW_TITLE,
@@ -143,11 +150,21 @@ SETUP_ACTION_BUTTON_GAP = 6
 SETUP_ACTION_HEIGHT = 34
 SETUP_RESUME_Y = SETUP_NAME_SECTION_BOTTOM + SETUP_ACTION_GAP
 SETUP_START_Y = SETUP_RESUME_Y + SETUP_ACTION_HEIGHT + SETUP_ACTION_BUTTON_GAP
+# The setup screen's Sound toggle sits under Quit, right-aligned with it, in
+# the corner beside the "Setup" title. 136 px holds "Sound: Off" (117 px in
+# DejaVu Sans Bold, the widest font seen) with 9 px to spare each side.
+SETUP_SOUND_RECT = pygame.Rect(SCREEN_WIDTH - 168, 68, 136, 34)
 WINDOW_FIT_PADDING = 8
 PLAY_SAVE_RECT = pygame.Rect(34, 794, 136, 38)
 PLAY_PILL_HOVER_BRIGHTEN = 28  # a hovered Save/New pill lights up by this much
 PLAY_NEW_RECT = pygame.Rect(34, 842, 136, 34)
 PLAY_DICE_TRAY_RECT = pygame.Rect(214, 790, 430, 86)
+# The in-game Sound pill sits just right of the dice tray, level with Roll:
+# the free strip between the tray and the table log, below every board.
+PLAY_SOUND_RECT = pygame.Rect(PLAY_DICE_TRAY_RECT.right + 20, 818, 136, 38)
+# The pill is green while sound is on and grey while it is off.
+PLAY_SOUND_ON_COLOR = SUCCESS
+PLAY_SOUND_OFF_COLOR = DISABLED
 PLAY_ROLL_RECT = pygame.Rect(510, 818, 112, 38)
 # The tray's player banner, then the turn prompt under it. 48 px holds two
 # wrapped lines of the small font (21 px in Windows Arial, Liberation Sans and
@@ -447,15 +464,16 @@ def load_stats() -> dict:
     """Read lifetime stats, filling in defaults and repairing malformed fields.
 
     Returns a dict with ``games``, ``human_wins``, ``ai_wins``,
-    ``turn_total`` and ``by_player_count`` (games per board size, keyed by
+    ``turn_total``, ``by_player_count`` (games per board size, keyed by
     the strings "4", "5" and "6", because JSON object keys are always
-    strings).
+    strings) and ``sound`` (the player's sound on/off choice).
 
     A missing or unreadable file simply gives the all-zero defaults. Values
     read from the file are merged over the defaults, so older files that
     lack a field still work, and every counter is passed through
     ``_stat_count`` so one damaged value is reset to 0 instead of crashing
-    the game-over screen.
+    the game-over screen. ``sound`` stays on unless the file holds a real
+    JSON ``false``, so a damaged value can never silence the game.
     """
 
     defaults: dict[str, Any] = {
@@ -464,6 +482,7 @@ def load_stats() -> dict:
         "ai_wins": 0,
         "turn_total": 0,
         "by_player_count": {"4": 0, "5": 0, "6": 0},
+        "sound": True,
     }
     try:
         data = json.loads(STATS_PATH.read_text(encoding="utf-8"))
@@ -483,6 +502,7 @@ def load_stats() -> dict:
     buckets = defaults["by_player_count"]
     for key in buckets:
         buckets[key] = _stat_count(buckets[key], f"by_player_count[{key}]")
+    defaults["sound"] = defaults["sound"] is not False
     return defaults
 
 
@@ -557,7 +577,7 @@ class LudoApp:
         sounds: The ``audio.SoundBank`` of effects (silent without a mixer).
         music: The ``audio.MusicPlayer`` looping the folk tune.
         ai_timer: Milliseconds since the last AI action, used to pace AI turns.
-        stats: Lifetime stats loaded from disk.
+        stats: Lifetime stats loaded from disk, plus the ``"sound"`` setting.
     """
 
     def __init__(self, persist: bool = True) -> None:
@@ -606,6 +626,8 @@ class LudoApp:
         self.rule_three_sixes = True
 
         self.stats = load_stats()
+        # A saved "sound": false silences the bank and the music from the first frame.
+        self._apply_sound_setting()
         self.stats_recorded = False
         self.ai_timer = 0
         self.dice_anim_remaining = 0
@@ -621,6 +643,33 @@ class LudoApp:
         self.message = "Choose a table and start the race."
         self.saved_turns_taken: int | None = None
 
+    @property
+    def sound_on(self) -> bool:
+        """True unless the player has switched sound off (Ctrl+M or a Sound button)."""
+
+        return bool(self.stats.get("sound", True))
+
+    def _toggle_sound(self) -> None:
+        """Switch all sound off or back on, and remember the choice in stats.json.
+
+        Muting stops the music at once and blocks every effect; unmuting
+        resumes the music and plays a click so the player hears it worked. A
+        non-persisting app (the autotest) only changes the setting in memory.
+        """
+
+        self.stats["sound"] = not self.sound_on
+        self._apply_sound_setting()
+        if self.persist:
+            save_stats(self.stats)
+        if self.sound_on:
+            self.sounds.play("click")
+
+    def _apply_sound_setting(self) -> None:
+        """Pass the sound setting to the effects bank and the music player."""
+
+        self.sounds.muted = not self.sound_on
+        self.music.set_muted(not self.sound_on)
+
     def setup_buttons(self) -> list[ui.Button]:
         """Build fresh button objects for the setup screen.
 
@@ -630,7 +679,8 @@ class LudoApp:
 
         It contains the -/+ steppers for total and human players, the </>
         stepper for the AI profile, the four house-rule toggles, Start Game,
-        Resume Saved Game (disabled without a save) and Quit. Each button's
+        Resume Saved Game (disabled without a save), Quit and the Sound
+        toggle under it. Each button's
         ``key`` is handled by ``_on_setup_button``.
         """
 
@@ -668,6 +718,7 @@ class LudoApp:
                 enabled=has_saved_game(),
             ),
             ui.Button(pygame.Rect(SCREEN_WIDTH - 132, 24, 100, 36), "Quit", "quit"),
+            ui.Button(SETUP_SOUND_RECT, _toggle_label("Sound", self.sound_on), "toggle_sound"),
         ]
 
     def run(self, max_frames: int | None = None) -> None:
@@ -794,11 +845,16 @@ class LudoApp:
     def _handle_key(self, event: pygame.event.Event) -> None:
         """Route keyboard shortcuts for setup typing and human turns.
 
-        Escape saves and returns to setup during a game, and quits from any
-        other screen. While a setup name field has focus, keys type into it.
-        On a human turn, R rolls and 1-4 pick the matching move button.
+        Ctrl+M switches sound off and on, on every screen (even while a
+        name field has focus, so plain M still types). Escape saves and
+        returns to setup during a game, and quits from any other screen.
+        While a setup name field has focus, keys type into it. On a human
+        turn, R rolls and 1-4 pick the matching move button.
         """
 
+        if event.key == pygame.K_m and event.mod & pygame.KMOD_CTRL:
+            self._toggle_sound()
+            return
         if event.key == pygame.K_ESCAPE:
             if self.screen == "playing" and self.game:
                 self._save_game()
@@ -840,9 +896,15 @@ class LudoApp:
                 self.name_fields[index] = candidate
 
     def _on_button(self, key: str) -> None:
-        """Dispatch a clicked button key to the active screen."""
+        """Dispatch a clicked button key to the active screen.
 
-        if self.screen == "setup":
+        The Sound toggle works the same on every screen, so it is handled
+        here first.
+        """
+
+        if key == "toggle_sound":
+            self._toggle_sound()
+        elif self.screen == "setup":
             self._on_setup_button(key)
         elif self.screen == "playing":
             self._on_play_button(key)
@@ -1493,13 +1555,17 @@ class LudoApp:
     def _draw_play_button(self, button: ui.Button, mouse: tuple[int, int]) -> None:
         """Draw gameplay buttons with the new table-HUD treatment.
 
-        Save and New are drawn as rounded pills; Roll and the move buttons are
+        Save, New and Sound are drawn as rounded pills; Roll and the move buttons are
         dark cards edged in the current player's colour (Roll in gold) that
         fill with that colour while hovered.
         """
 
         hovered = button.contains(mouse)
         current_color = self.game.current_player.color if self.game is not None else GOLD
+        if button.key == "toggle_sound":
+            color = _sound_pill_color(self.sound_on, hovered)
+            theme.draw_round_icon_button(self.window, button.rect, color, button.text, self.fonts)
+            return
         if button.key in {"save_quit", "new_game"}:
             # These small controls behave like table buttons rather than a
             # rectangular sidebar menu. The key text stays short so it fits
@@ -1522,7 +1588,8 @@ class LudoApp:
         During play the buttons follow the engine state: a human waiting to
         roll gets Roll, a human choosing a move gets up to four move buttons
         ("1: Token 2 -> 14", where 14 is the token's new step count), and
-        Save and New are always present. AI turns show only Save and New.
+        Save, New and Sound are always present. AI turns show only those
+        three.
         """
 
         if self.screen == "setup":
@@ -1541,6 +1608,7 @@ class LudoApp:
                 buttons.append(ui.Button(_move_button_rect(index), label, f"move_{index}"))
         buttons.append(ui.Button(PLAY_SAVE_RECT, "Save", "save_quit"))
         buttons.append(ui.Button(PLAY_NEW_RECT, "New", "new_game"))
+        buttons.append(ui.Button(PLAY_SOUND_RECT, _toggle_label("Sound", self.sound_on), "toggle_sound"))
         return buttons
 
     def _winner_plaque(self, winner) -> tuple[pygame.Rect, str]:
@@ -1660,9 +1728,16 @@ def _name_rect(index: int) -> pygame.Rect:
 
 
 def _toggle_label(label: str, enabled: bool) -> str:
-    """Format an On/Off label for a house-rule toggle button."""
+    """Format an On/Off label for a house-rule or Sound toggle button."""
 
     return f"{label}: {'On' if enabled else 'Off'}"
+
+
+def _sound_pill_color(sound_on: bool, hovered: bool) -> tuple[int, int, int]:
+    """Return the in-game Sound pill's colour: green while on, grey while off, lighter when hovered."""
+
+    color = PLAY_SOUND_ON_COLOR if sound_on else PLAY_SOUND_OFF_COLOR
+    return theme.brighten(color, PLAY_PILL_HOVER_BRIGHTEN) if hovered else color
 
 
 def _resource_path(name: str) -> str:

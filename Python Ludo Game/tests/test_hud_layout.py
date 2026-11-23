@@ -99,6 +99,7 @@ class HudLayoutTests(unittest.TestCase):
             ("roll button", main.PLAY_ROLL_RECT),
             ("save button", main.PLAY_SAVE_RECT),
             ("new button", main.PLAY_NEW_RECT),
+            ("sound button", main.PLAY_SOUND_RECT),
         ]
         return rects
 
