@@ -71,7 +71,27 @@ TradeOffer = TypedDict("TradeOffer", {"from": int, "to": int, "give": TradeSide,
 
 
 class MonopolyGame:
-    """A full game of Monopoly: state plus every action that changes it."""
+    """A full game of Monopoly: state plus every action that changes it.
+
+    One instance holds everything about a game in progress, and its public
+    methods (`roll_dice`, `buy_property`, `auction_bid`, `build_house`,
+    `propose_trade`, `pay_debts`, ...) are the only way the UI, the AI and
+    the tests change it. Each action first checks `awaiting` and quietly
+    does nothing when it is not allowed, so a stray click can never break
+    the rules.
+
+    Key attributes:
+    - `players`: the seats, in turn order; `current` is whose turn it is.
+    - `board`: the 40 `Space` objects of the chosen theme (fixed data).
+    - `owners`, `houses`, `mortgaged`: the live property state, keyed by
+      board position (0-39). `houses` holds 0-4 houses, or 5 for a hotel.
+    - `bank_houses`, `bank_hotels`: the Bank's limited building supply.
+    - `awaiting` / `phase`: the state machine (see the module docstring).
+    - `auction`, `pending_purchase`, `pending_trade`, `debts`: the context
+      of whichever decision is open right now.
+    - `rng`: the seeded random generator behind every die and shuffle.
+    - `log`: the short event history the side panel shows.
+    """
 
     # ----------------------------------------------------------------------
     # Construction
@@ -148,6 +168,8 @@ class MonopolyGame:
     def _note(self, message: str) -> None:
         """Add a short message to the event log the UI shows the player."""
         self.log.append(message)
+        # Keep only the newest 60 lines: the panel shows far fewer, and an
+        # unbounded list would grow for the whole game.
         if len(self.log) > 60:
             self.log = self.log[-60:]
 
@@ -359,7 +381,21 @@ class MonopolyGame:
             self.mortgage(candidate, forced=True)
 
     def _bankrupt(self, player: Player, creditor: Player | None) -> None:
-        """Remove `player` from the game, handing their estate to the creditor."""
+        """Remove `player` from the game, handing their estate to the creditor.
+
+        `creditor` is the player the unpaid debt was owed to, or None when it
+        was owed to the Bank. The steps follow the standard rules:
+        - Every building goes back to the Bank's supply. A player creditor is
+          paid the half-price value those buildings would have sold for.
+        - Owed to a player: that player receives the remaining cash and every
+          title, still mortgaged where it was, and then owes the 10% transfer
+          interest on the mortgaged ones (unless they have just won).
+        - Owed to the Bank: mortgages are cleared and every title is sold to
+          the other players in one Bank auction after another.
+        - Get Out of Jail Free cards go to a solvent player creditor, or back
+          to their decks.
+        Finally the game checks whether only one player is left.
+        """
         player.bankrupt = True
         self._note(f"{player.name} has gone bankrupt!")
 
@@ -464,7 +500,8 @@ class MonopolyGame:
         """Begin the current player's turn (skipping bankrupt players)."""
         if self.phase == "game_over":
             return
-        # Skip over anyone who is out of the game.
+        # Skip over anyone who is out of the game. `guard` stops the loop
+        # after one full lap, so it can never spin forever.
         guard = 0
         while self.current_player.bankrupt and guard < len(self.players):
             self.current = (self.current + 1) % len(self.players)
@@ -494,7 +531,20 @@ class MonopolyGame:
         self._start_turn()
 
     def roll_dice(self) -> tuple[int, int]:
-        """Roll the two dice for the current player and resolve what happens."""
+        """Roll the two dice for the current player and resolve what happens.
+
+        Only allowed in "pre_roll"; otherwise the last roll is returned
+        unchanged. A jailed player's roll is handed to `_roll_in_jail`. A
+        third double in a row sends the player straight to Jail without
+        moving. Otherwise the token moves, the landing is resolved (rent,
+        tax, a card, or an offer to buy), and `_continue_after_landing`
+        decides whether the player rolls again, waits to pay a debt, or
+        moves on to "post_roll". Returns the two dice values.
+
+        Beginner note:
+        - Rolling doubles earns another roll in Monopoly, but three doubles
+          in one turn is treated as speeding and sends you to Jail.
+        """
         if self.awaiting != "pre_roll":
             return self.dice
         player = self.current_player
@@ -529,7 +579,18 @@ class MonopolyGame:
         return self.dice
 
     def _roll_in_jail(self, player: Player, total: int, is_double: bool) -> None:
-        """Resolve a dice roll made while the player is sitting in jail."""
+        """Resolve a dice roll made while the player is sitting in jail.
+
+        The three outcomes follow the standard rules:
+        - Doubles: the player leaves Jail at once and moves the rolled total,
+          but does not roll again.
+        - No doubles on the last allowed attempt (MAX_JAIL_TURNS): the fine
+          is charged, then the player moves the rolled total. If a human has
+          to raise funds for the fine first, the move waits in
+          `_pending_jail_move` until the debt is paid.
+        - Otherwise the player stays in Jail and the turn moves to
+          "post_roll".
+        """
         if is_double:
             self._note(f"{player.name} rolled doubles and leaves Jail.")
             player.in_jail = False
@@ -689,6 +750,8 @@ class MonopolyGame:
     def _step_forward(self, player: Player, steps: int) -> None:
         """Move a player `steps` spaces clockwise, paying $200 for passing GO."""
         new_position = (player.position + steps) % 40
+        # `% 40` wraps the position back to the start of the board, so a
+        # smaller new position means the token went past GO (position 0).
         if new_position < player.position:
             self.gain(player, GO_SALARY)
             self._note(f"{player.name} passes GO and collects ${GO_SALARY}.")
@@ -696,7 +759,14 @@ class MonopolyGame:
 
     def advance_to(self, player: Player, position: int,
                    rail_rent_multiplier: int = 1, utility_card_rent: bool = False) -> None:
-        """Move a player forward to a specific space (used by Chance cards)."""
+        """Move a player forward to a specific space (used by Chance cards).
+
+        `rail_rent_multiplier` and `utility_card_rent` carry the special rent
+        of the "nearest Railroad" and "nearest Utility" cards through to the
+        landing.
+        """
+        # Moving "forward" to a space at or behind the token means going the
+        # long way round, past GO, so the salary is paid.
         if position != player.position and position <= player.position:
             self.gain(player, GO_SALARY)
             self._note(f"{player.name} passes GO and collects ${GO_SALARY}.")
@@ -719,7 +789,14 @@ class MonopolyGame:
 
     def _resolve_landing(self, player: Player, rail_rent_multiplier: int = 1,
                          utility_card_rent: bool = False) -> None:
-        """Work out and apply whatever happens on the space a player landed on."""
+        """Work out and apply whatever happens on the space a player landed on.
+
+        Special spaces act at once: Go To Jail, a tax, or a Chance/Community
+        Chest card. On a title, an unowned one opens the "buy_or_auction"
+        decision, and one owned by another solvent player charges rent unless
+        it is mortgaged. The two keyword flags pass a card's special rent
+        rule on to `_rent_for`.
+        """
         if self.phase == "game_over":
             return
         space = self.board[player.position]
@@ -729,6 +806,8 @@ class MonopolyGame:
             self.go_to_jail(player)
             return
         if kind == "tax":
+            # The board data marks which tax this is; the amount itself comes
+            # from settings, so retuning a tax there takes effect here.
             amount = INCOME_TAX if space.tax >= INCOME_TAX else LUXURY_TAX
             self._note(f"{player.name} pays ${amount} {space.name}.")
             self.charge(player, amount)
@@ -769,6 +848,8 @@ class MonopolyGame:
                 # The Chance card always charges ten times a fresh dice throw.
                 dice_total = self.rng.randint(1, 6) + self.rng.randint(1, 6)
                 return 10 * dice_total
+            # Utility rent is the dice total times 4, or times 10 when the
+            # owner holds both utilities.
             multiplier = 4 if self.count_utilities(owner) == 1 else 10
             return multiplier * dice_total
         # A street.
@@ -977,6 +1058,20 @@ class MonopolyGame:
         return None
 
     def _build_blocker(self, player: Player, position: int) -> str | None:
+        """Return why `player` may not build on `position` now, or None if they may.
+
+        The checks follow the building rules in order: it must be the
+        player's normal turn, the space must be a street, the player must own
+        the whole colour group with no title in it mortgaged, the street must
+        not already have a hotel, building must stay even (no street may get
+        more than one building ahead of the rest of its group), the Bank must
+        have a house (or a hotel, for the fifth building) left, and the
+        player must have the cash.
+
+        Beginner note:
+        - A street goes up one level at a time: 1, 2, 3, 4 houses, then a
+          hotel. The hotel replaces the four houses, which go back to the Bank.
+        """
         blocker = self._managed_asset_blocker(player, position)
         if blocker:
             return blocker
@@ -1003,6 +1098,13 @@ class MonopolyGame:
         return None
 
     def _sell_blocker(self, player: Player, position: int) -> str | None:
+        """Return why `player` may not sell a building from `position`, or None.
+
+        Selling must also stay even, so only the group's most developed
+        streets may sell. Breaking a hotel normally needs four houses from
+        the Bank; that is waived for a debtor raising funds, because
+        `sell_house` then handles the shortage itself.
+        """
         blocker = self._managed_asset_blocker(player, position, raising_funds=True)
         if blocker:
             return blocker
@@ -1027,6 +1129,11 @@ class MonopolyGame:
         return self._mortgage_blocker(player, position) is None
 
     def _mortgage_blocker(self, player: Player, position: int) -> str | None:
+        """Return why `player` may not mortgage `position` now, or None if they may.
+
+        A title cannot be mortgaged twice, and a street can only be mortgaged
+        once every building in its colour group has been sold.
+        """
         blocker = self._managed_asset_blocker(player, position, raising_funds=True)
         if blocker:
             return blocker
@@ -1046,6 +1153,11 @@ class MonopolyGame:
         return self._unmortgage_blocker(player, position) is None
 
     def _unmortgage_blocker(self, player: Player, position: int) -> str | None:
+        """Return why `player` may not lift the mortgage on `position`, or None.
+
+        Lifting is only open in the player's normal turn, and needs the cash
+        for `unmortgage_cost` (the mortgage value plus 10% interest).
+        """
         blocker = self._managed_asset_blocker(player, position)
         if blocker:
             return blocker
@@ -1093,6 +1205,8 @@ class MonopolyGame:
         supply, so the Bank's house supply never goes negative and the
         even-building rule still holds.
         """
+        # A forced sale (automatic fund raising) acts for the title's owner;
+        # a clicked sale acts for whoever must act now.
         player = self.players[self.actor()] if not forced else self.owner_of(position)
         if player is None or self.owners.get(position) != player.index:
             return False
@@ -1206,7 +1320,15 @@ class MonopolyGame:
         return lines
 
     def trade_error(self, offer: TradeOffer) -> str | None:
-        """Return a readable reason an offer is illegal, or None if legal."""
+        """Return a readable reason an offer is illegal, or None if legal.
+
+        The checks, in order: the offer has every field; both players are
+        solvent and different; each side really holds the cash, jail cards
+        and titles it offers; no offered title's colour group has buildings;
+        and each receiver can still afford the 10% interest due at once on
+        any mortgaged title they receive. The UI shows the returned text, so
+        a human learns why an offer was refused.
+        """
         try:
             giver = self.players[offer["from"]]
             taker = self.players[offer["to"]]
@@ -1275,7 +1397,14 @@ class MonopolyGame:
         self.awaiting = self._awaiting_before_trade
 
     def _execute_trade(self, offer: TradeOffer) -> None:
-        """Swap the cash, properties and jail cards described by an offer."""
+        """Swap the cash, properties and jail cards described by an offer.
+
+        The offer has already been checked by `trade_is_legal`. Mortgaged
+        titles change hands still mortgaged, and each receiver pays the 10%
+        transfer interest on them straight away. Each jail card moves with
+        the name of the deck it came from, so it can be returned to the
+        right deck when used.
+        """
         giver = self.players[offer["from"]]
         taker = self.players[offer["to"]]
         give, get = offer["give"], offer["get"]
@@ -1334,7 +1463,7 @@ class MonopolyGame:
     def from_dict(cls, data: dict) -> MonopolyGame:
         """Rebuild a game from a `to_dict()` snapshot (used to resume a game).
 
-        Stored numbers are coerced to int, then the payload is validated: a
+        Most stored numbers are coerced to int, then the payload is validated: a
         save whose seats, turn state, titles, buildings or decks could not be
         resumed raises ValueError, which the loader treats as a bad save.
 

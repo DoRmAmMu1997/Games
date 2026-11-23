@@ -247,6 +247,7 @@ class TokenSlotTests(unittest.TestCase):
 def luminance(color: tuple[int, int, int]) -> float:
     """WCAG relative luminance of an sRGB colour."""
     def channel(value: int) -> float:
+        """Convert one 0-255 sRGB channel to linear light (the WCAG formula)."""
         c = value / 255
         return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
     r, g, b = (channel(v) for v in color[:3])

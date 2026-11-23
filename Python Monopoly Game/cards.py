@@ -100,6 +100,13 @@ class Deck:
     """
 
     def __init__(self, deck_name: str, master: list, rng=None, order=None):
+        """Create a deck over `master`, the full list of this deck's cards.
+
+        `deck_name` is "chance" or "chest". A new game passes the game's
+        seeded `rng`, which shuffles the order once. A resumed game passes
+        the saved `order` instead, so the pile continues exactly where it
+        stopped. With neither, the cards stay in list order (handy in tests).
+        """
         self.deck_name = deck_name
         self.master = master
         if order is not None:
@@ -136,6 +143,7 @@ def _nearest(position: int, targets: tuple) -> int:
         candidate = (position + step) % 40
         if candidate in targets:
             return candidate
+    # Only reached if the player already stands on the sole target.
     return targets[0]
 
 

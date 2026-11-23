@@ -43,6 +43,9 @@ _LABEL_BAND_GAP = 2                         # pixels between the band and the la
 # Label fonts, largest first. A name whose words do not fit at one size
 # drops to the next; only at the smallest is a word broken with a hyphen.
 _LABEL_FONTS = ("tile", "tile_mid", "tile_min")
+# Where each of the 9 edge tiles starts along a side. Rounding these running
+# totals (instead of rounding one tile width and adding it up) makes the
+# tiles fill the side exactly, with no gap or overlap at the far corner.
 _OFFSETS = [round(_EDGE_SPAN * k / 9) for k in range(10)]   # 9 edge tiles
 
 
@@ -56,7 +59,15 @@ def inner_rect() -> pygame.Rect:
 
 
 def space_rect(position: int) -> pygame.Rect:
-    """Return the screen rectangle of one of the 40 board spaces."""
+    """Return the screen rectangle of one of the 40 board spaces.
+
+    Positions count clockwise from GO in the bottom-right corner: along the
+    bottom edge to Jail (10, bottom-left), up the left edge to Free Parking
+    (20, top-left), along the top to Go To Jail (30, top-right), then down
+    the right edge back towards GO. The four corners are big squares; each
+    edge between them holds nine narrower tiles, whose depth (the side
+    facing out of the board) equals the corner size.
+    """
     if position == 0:
         return pygame.Rect(_RIGHT - _C, _BOTTOM - _C, _C, _C)
     if position == 10:
@@ -108,9 +119,27 @@ def token_center(position: int, slot: int) -> tuple[int, int]:
 
 
 class BoardRenderer:
-    """Draws the board. Builds the static layer once, then reuses it."""
+    """Draws the board. Builds the static layer once, then reuses it.
+
+    Drawing 40 tiles with their wrapped, rotated labels every frame would be
+    slow, and those never change during a game. So `build_base` draws them
+    once into the cached surface `_base`. Each frame `draw` copies that
+    picture to the screen, then adds what does change: ownership borders,
+    mortgage shading, highlight rings, buildings and tokens.
+
+    Beginner note:
+    - A pygame `Surface` is an image in memory. Drawing onto one off-screen
+      and then "blitting" (copying) it to the window is a standard way to
+      avoid redoing expensive drawing.
+    """
 
     def __init__(self, board: list):
+        """Remember the themed `board` (40 spaces); the cache is built later.
+
+        The cached surface needs fonts, which only exist after pygame has
+        started, so `build_base` is called separately (or by the first
+        `draw`).
+        """
         self.board = board
         self._base: pygame.Surface | None = None
 
@@ -121,7 +150,8 @@ class BoardRenderer:
         """Render the unchanging board image into a cached surface."""
         surface = pygame.Surface((BOARD_SIZE, BOARD_SIZE))
         surface.fill(BOARD_FACE)
-        # The empty middle of the board.
+        # The empty middle of the board. (It uses the same colour as the
+        # fill above, so this changes no pixels; it just names the region.)
         inner = pygame.Rect(_OX + _C - BOARD_MARGIN, _OY + _C - BOARD_MARGIN,
                             BOARD_SIZE - 2 * _C, BOARD_SIZE - 2 * _C)
         pygame.draw.rect(surface, BOARD_FACE, inner)
@@ -183,6 +213,8 @@ class BoardRenderer:
         for i, line in enumerate(lines):
             glyph = font.render(line, True, INK)
             text.blit(glyph, glyph.get_rect(midtop=(width // 2, i * pitch)))
+        # pygame rotates anticlockwise for positive angles: -90 turns the
+        # left edge's text clockwise, +90 turns the right edge's the other way.
         if edge == "left":
             text = pygame.transform.rotate(text, -90)
         elif edge == "right":
@@ -222,6 +254,9 @@ class BoardRenderer:
             rect = space_rect(position)
             pygame.draw.rect(target, TOKEN_COLORS[owner_index], rect, 4)
             if position in game.mortgaged:
+                # A dark, semi-transparent sheet over the tile. SRCALPHA gives
+                # the surface an alpha channel, and alpha 120 of 255 lets about
+                # half of the tile show through.
                 veil = pygame.Surface(rect.size, pygame.SRCALPHA)
                 veil.fill((20, 20, 20, 120))
                 target.blit(veil, rect.topleft)

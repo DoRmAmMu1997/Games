@@ -63,7 +63,17 @@ BUTTON_LABEL_MARGIN = 8
 
 
 class Button:
-    """A clickable rectangle with a label and a string `key` identifying it."""
+    """A clickable rectangle with a label and a string `key` identifying it.
+
+    Buttons are cheap throwaway objects: `main.py` rebuilds the whole list
+    from the engine's state every frame, then uses the same list both to
+    draw and to test clicks. A click is matched by `hit`, and the button's
+    `key` (for example "roll" or "buy") names the action to run.
+
+    Attributes: `rect` (screen area), `label` (the text shown), `key`,
+    `enabled` (a disabled button is drawn greyed out and ignores clicks)
+    and `color` (the fill colour).
+    """
 
     def __init__(
         self,
@@ -73,6 +83,10 @@ class Button:
         enabled: bool = True,
         color: tuple[int, int, int] | None = None,
     ) -> None:
+        """Create a button; `rect` may be a pygame.Rect or an (x, y, w, h) tuple.
+
+        `color` defaults to the ordinary BUTTON_FILL from settings.
+        """
         self.rect = pygame.Rect(rect)
         self.label = label
         self.key = key            # e.g. "roll", "buy", "end_turn"
@@ -84,6 +98,7 @@ class Button:
         hovered = self.enabled and self.rect.collidepoint(mouse)
         fill = self.color if self.enabled else (44, 52, 48)
         if hovered:
+            # Lighten each channel, capped at 255 (the brightest value).
             fill = (min(255, fill[0] + 28), min(255, fill[1] + 28), min(255, fill[2] + 28))
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
         pygame.draw.rect(surface, INK, self.rect, 2, border_radius=8)
@@ -170,7 +185,14 @@ def setup_name_field_rect(i: int) -> pygame.Rect:
 
 def draw_setup(surface, fonts, human_count, theme_key, buttons, mouse,
                stats, name_fields, active_field, ai_profile_key) -> None:
-    """Draw the new-game setup screen."""
+    """Draw the new-game setup screen.
+
+    The left column holds the three steppers (number of humans, board
+    theme, AI difficulty); the right-hand panel shows lifetime stats and a
+    name box per human. `buttons` comes from `setup_buttons`, `mouse` is the
+    cursor position for hover effects, `name_fields` holds the typed names,
+    and `active_field` is the index of the focused name box (or None).
+    """
     surface.fill(BG)
     _text(surface, fonts, "title", "MONOPOLY", (SCREEN_WIDTH // 2, 110),
           GOLD, center=True)
@@ -206,12 +228,17 @@ def _draw_setup_value(surface, fonts, value: str, y: int) -> None:
 
 def _draw_setup_info_panel(surface, fonts, stats, human_count,
                            name_fields, active_field) -> None:
-    """Draw the right-hand panel: lifetime stats on top, name boxes below."""
+    """Draw the right-hand panel: lifetime stats on top, name boxes below.
+
+    Only the first `human_count` name boxes are drawn. The focused box
+    (`active_field`) gets a gold border and a text cursor after its last
+    letter; the typing itself is handled by `main.py`.
+    """
     panel = pygame.Rect(470, 205, 720, 410)
     pygame.draw.rect(surface, PANEL_CARD, panel, border_radius=10)
     pygame.draw.rect(surface, INK, panel, 1, border_radius=10)
 
-    # Lifetime stats -- already loaded from stats.json, just never shown before.
+    # Lifetime stats, loaded from stats.json by main.py.
     _text(surface, fonts, "med", "Lifetime Stats",
           (panel.x + 26, panel.y + 16), GOLD)
     games = stats.get("games", 0)
@@ -270,7 +297,14 @@ def player_disc_center(rect: pygame.Rect) -> tuple[int, int]:
 
 
 def _draw_player_card(surface, fonts, game, player, rect, is_current) -> None:
-    """Draw one player's summary card in the side panel."""
+    """Draw one player's summary card in the side panel.
+
+    The card shows the token colour, name, cash, an "AI"/"You" tag, a jail
+    marker, one small swatch per title owned (struck through when it is
+    mortgaged) and a count of complete colour groups. The current player's
+    card is lighter with a highlighted border. A bankrupt player's card
+    shows only the name and "BANKRUPT".
+    """
     bg = PANEL_CARD if not is_current else PANEL_CARD_CURRENT
     pygame.draw.rect(surface, bg, rect, border_radius=8)
     border = HIGHLIGHT if is_current else INK
@@ -454,7 +488,15 @@ def draw_center_card(surface, fonts, game) -> None:
 
 
 def property_detail_lines(game, position: int) -> list[str]:
-    """Return compact deed-style detail lines for one board position."""
+    """Return compact deed-style detail lines for one board position.
+
+    The first line is always the space's name. A non-ownable space adds
+    only its kind (for example "Free Parking"). A title adds its owner,
+    mortgage state and rent table: for a street the rent at each building
+    level, whether its group is complete, and the house cost; for a railroad
+    or utility how many the owner holds and how rent grows with them. The
+    hover card and the asset manager both draw these lines.
+    """
     space = game.board[position]
     lines = [space.name]
     owner = game.owner_of(position)
@@ -491,6 +533,8 @@ def property_detail_lines(game, position: int) -> list[str]:
 def draw_property_detail(surface, fonts, game, position: int) -> None:
     """Draw a deed-style hover card in the lower board centre."""
     lines = property_detail_lines(game, position)
+    # Centred horizontally on the board and 190 px below its centre, so the
+    # card sits in the lower half of the board's empty middle.
     panel = pygame.Rect(0, 0, 380, 176)
     panel.center = (20 + (SCREEN_HEIGHT - 40) // 2,
                     20 + (SCREEN_HEIGHT - 40) // 2 + 190)
@@ -910,7 +954,16 @@ def trade_header_plan(fonts: dict, game, trade) -> list:
 
 
 def draw_trade(surface, fonts, game, trade, buttons, mouse) -> None:
-    """Draw the trade-building dialog."""
+    """Draw the trade-building dialog.
+
+    Every rectangle comes from `trade_layout`, the same source `main.py`
+    uses for clicks. The dialog shows the header, two tick-box lists of
+    titles ("You give" on the left, "You receive" on the right), scroll
+    arrows where a list is longer than the dialog, the cash and jail-card
+    steppers with their labels, and a notes box. The notes list the
+    mortgage interest the trade would cost, then (in red) the engine's
+    reason if the offer is not legal yet.
+    """
     _dim(surface)
     layout = trade_layout(game, trade)
     panel = layout["panel"]
@@ -1136,7 +1189,13 @@ def draw_game_over(surface, fonts, game, buttons, mouse) -> None:
 
 
 def _dim(surface) -> None:
-    """Darken the whole screen behind a modal dialog."""
+    """Darken the whole screen behind a modal dialog.
+
+    Beginner note:
+    - The veil is a black surface with an alpha (transparency) channel.
+      Alpha 150 of 255 means it is about 60% opaque, so the board still
+      shows through, dimmed, and the dialog drawn on top stands out.
+    """
     veil = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
     veil.fill((0, 0, 0, 150))
     surface.blit(veil, (0, 0))

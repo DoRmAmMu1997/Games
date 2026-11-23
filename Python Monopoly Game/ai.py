@@ -57,7 +57,22 @@ UTILITY_SINGLE_MULT = 0.95
 
 @dataclass(frozen=True)
 class AIProfile:
-    """Tunable decision knobs for one explainable AI difficulty."""
+    """Tunable decision knobs for one explainable AI difficulty.
+
+    The setup screen's "AI Difficulty" picks one of `AI_PROFILES`, and every
+    AI seat in that game shares it. The knobs (cash amounts in dollars):
+    - `key`: the profile's name, as shown on the setup screen.
+    - `cash_cushion`: cash kept back when buying a street, lifting a
+      mortgage, or adding cash to a trade offer.
+    - `build_reserve`: cash that must remain after paying for a building.
+    - `trade_accept_margin`: how much value a trade must gain this AI
+      before it accepts.
+    - `value_scale`: multiplies every title valuation (above 1.0 means the
+      AI is willing to pay more).
+    - `auction_reserve`: cash never bid away in an auction.
+    - `blocker_bonus`: extra value placed on a title that would otherwise
+      complete a monopoly for an opponent.
+    """
 
     key: str
     cash_cushion: int
@@ -229,6 +244,7 @@ def _handle_jail(game: MonopolyGame, player: Player) -> None:
         game.use_jail_card()
         return
     # Early in the game getting out fast is worth $50 (there is land to buy).
+    # There are 28 titles, so fewer than 14 claimed means half are unsold.
     properties_claimed = len(game.owners)
     if properties_claimed < 14 and player.cash > JAIL_FINE + 150:
         game.pay_jail_fine()
@@ -302,6 +318,8 @@ def _best_unmortgage(game: MonopolyGame, player: Player) -> int | None:
     Only done when comfortably rich; properties inside a monopoly come first
     because they are the ones that earn rent.
     """
+    # Lifting costs 110% of the mortgage value, so the AI only considers it
+    # once it is clearly cash-rich ($700 is a rule of thumb, not a rule).
     if player.cash < 700:
         return None
     mortgaged = [pos for pos in game.properties_of(player) if pos in game.mortgaged]
@@ -362,6 +380,8 @@ def _do_auction(game: MonopolyGame, player: Player) -> None:
     position = auction["position"]
     high = auction["high_bid"]
     ceiling = _auction_ceiling(game, player, position)
+    # Bids rise by 5% of the list price, at least $10 (the same step as a
+    # human's Bid button in main.py).
     step = max(10, game.board[position].price // 20)
     bid = high + step
     if bid <= ceiling and bid <= player.cash:
@@ -421,7 +441,15 @@ def _missing_one(game: MonopolyGame, player: Player, group: str) -> int | None:
 
 
 def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int) -> TradeOffer | None:
-    """Build an offer to win `wanted` that both `player` and `partner` accept."""
+    """Build an offer to win `wanted` that both `player` and `partner` accept.
+
+    `wanted` is the one title `player` is missing from a colour group. The
+    offer asks for it, adds a sweetener title when `player` holds one that
+    completes a monopoly for `partner`, then adds the smallest extra cash
+    and jail cards the partner would accept (judged by `evaluate_offer`, the
+    same test the partner's AI uses). Returns None when no such offer exists,
+    or when the cheapest acceptable one would leave `player` worse off.
+    """
     give: TradeSide = {"props": [], "cash": 0, "jail": 0}
     get: TradeSide = {"props": [wanted], "cash": 0, "jail": 0}
     # The best sweetener is a property that completes a monopoly for the
@@ -457,14 +485,17 @@ def _make_offer(game: MonopolyGame, player: Player, partner: Player, wanted: int
 
 def _property_completing_for(game: MonopolyGame, giver: Player, partner: Player,
                              avoid_group: str | None = None) -> int | None:
-    """Return a house-free property `giver` owns that completes a monopoly for
-    `partner`, or None. Such a property is safe to give away -- the giver holds
-    only that single space of the group.
+    """Return a title `giver` can hand over that completes a monopoly for `partner`.
+
+    The title must be free of buildings and unmortgaged, or None is
+    returned. Such a title is safe to give away: the partner already owns
+    every other space of its group, so the giver holds only this one.
 
     `avoid_group` is the colour group the AI is itself trying to complete in
     this trade; a sweetener must never come from it, otherwise the AI gives
     away a tile of the very group it is bargaining for (for a two-property
-    group that is a pointless 1-for-1 swap)."""
+    group that is a pointless 1-for-1 swap).
+    """
     for group, members in board_data.COLOR_GROUPS.items():
         if group == avoid_group:
             continue
@@ -502,6 +533,8 @@ def _trade_swing(game: MonopolyGame, evaluator: Player, offer: TradeOffer) -> in
         opponent = game.players[offer["to"]]
 
     swing = _bundle_value(game, incoming) - _bundle_value(game, outgoing)
+    # Completing our own monopoly counts double the title's price; handing
+    # the opponent one costs its price once.
     for pos in incoming["props"]:
         # The evaluator gains `incoming` but gives away `outgoing` -- a tile
         # being traded away must not still count toward a monopoly.

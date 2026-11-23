@@ -5,8 +5,10 @@ screen to show, turns clicks into engine actions for human players, and steps
 the AI on a timer so a person can watch its moves.
 
 A headless self-test runs when the MONOPOLY_AUTOTEST environment variable is
-set: a full four-AI game is played in a hidden window for a few hundred
-frames, which exercises the engine, the AI and all the drawing code at once.
+set: a seeded four-AI game is played for up to 4000 frames with no AI delay
+(use the SDL dummy video driver to keep the window hidden), which exercises
+the engine, the AI and all the drawing code at once. It never writes the
+player's save or stats.
 """
 
 from __future__ import annotations
@@ -145,7 +147,24 @@ def _clear_saved_game() -> None:
 # The application
 # --------------------------------------------------------------------------
 class MonopolyApp:
-    """Owns the window and run loop and routes input to the game engine."""
+    """Owns the window and run loop and routes input to the game engine.
+
+    The app is the "thin shell" around `MonopolyGame`: it never applies a
+    rule itself. Each frame it reads input, advances animations and the AI,
+    rebuilds the buttons from the engine's state, and draws.
+
+    Key attributes:
+    - `screen`: which screen is showing ("setup", "playing" or "over").
+    - `game` / `renderer`: the engine and board renderer (None on setup).
+    - `mode`: the in-game interaction mode ("normal", "build", "sell",
+      "mortgage", "assets" or "trade"); the engine's `awaiting` says what
+      the rules need, `mode` only says which dialog a human has open.
+    - `trade`, `asset_position`, `message`: the open dialog's draft offer,
+      the selected title, and the prompt line's last notice.
+    - `token_px`, `token_route`, `dice_show`, ...: animation state, which
+      only eases pixels toward what the engine already decided.
+    - `persist`: False in the self-test, so nothing is written to disk.
+    """
 
     def __init__(self, persist: bool = True) -> None:
         """Open the window and set up the setup screen.
@@ -261,7 +280,17 @@ class MonopolyApp:
     # Main loop
     # ------------------------------------------------------------------
     def run(self, max_frames: int | None = None) -> None:
-        """Run the game until the window is closed (or a frame limit is hit)."""
+        """Run the game until the window is closed (or a frame limit is hit).
+
+        `max_frames` is only given by the self-test; it also tells `_update`
+        to run the AI without pauses.
+
+        Beginner note:
+        - This is the classic game loop. Every pass handles all waiting input
+          events, updates the state, draws a whole new frame, and shows it
+          with `display.flip()`. `clock.tick(FPS)` sleeps just long enough
+          to hold the loop at FPS frames per second.
+        """
         frames = 0
         autotest = max_frames is not None
         while self.running:
@@ -296,7 +325,14 @@ class MonopolyApp:
                 break
 
     def _update(self, autotest: bool) -> None:
-        """Advance the game: animate visuals, then step the AI if it is its turn."""
+        """Advance the game: animate visuals, then step the AI if it is its turn.
+
+        In order, once per frame: switch to the end screen when the game is
+        over; autosave when the turn passes; move each token along its queue
+        of waypoints; run the dice shuffle; then, if an AI must act, call
+        `ai.take_action` once its delay has passed. `autotest` skips the
+        delay and the wait for animations.
+        """
         if self.screen != "playing" or self.game is None:
             return
         game = self.game
@@ -312,7 +348,7 @@ class MonopolyApp:
             if self.persist and not self._spectating():
                 save_game(game)
 
-        elapsed = self.clock.get_time()
+        elapsed = self.clock.get_time()     # milliseconds since the last frame
 
         # Token hopping: after a roll a token visits every space it passes,
         # like a physical token counting out the dice. Jumps that are not a
@@ -330,6 +366,7 @@ class MonopolyApp:
             idx = player.index
             if player.position != self.token_pos.get(idx):
                 old = self.token_pos.get(idx, player.position)
+                # Spaces travelled clockwise; `% 40` handles passing GO.
                 forward = (player.position - old) % 40
                 if 1 <= forward <= 12:
                     # A dice roll moves at most 12 spaces, so walk them all.
@@ -350,12 +387,14 @@ class MonopolyApp:
             while route and remaining > 0:
                 head = route[0]
                 dx, dy = head[0] - current[0], head[1] - current[1]
-                length = (dx * dx + dy * dy) ** 0.5
+                length = (dx * dx + dy * dy) ** 0.5     # straight-line distance
                 if length <= remaining:
                     current = head
                     route.pop(0)
                     remaining -= length
                 else:
+                    # Not reached this frame: step `remaining` pixels toward
+                    # the waypoint (dx / length is the unit direction).
                     current = (current[0] + dx / length * remaining,
                                current[1] + dy / length * remaining)
                     remaining = 0
@@ -512,7 +551,13 @@ class MonopolyApp:
         self._on_trade_button(key)
 
     def _on_setup_button(self, key: str) -> bool:
-        """Handle setup-screen controls; True if `key` belonged here."""
+        """Handle setup-screen controls; True if `key` belonged here.
+
+        The steppers wrap around their option lists (humans are clamped to
+        1-4 instead). Start asks for confirmation first when a saved game
+        exists, because starting a new game will overwrite it at the next
+        autosave. Resume loads the save, if it is still valid.
+        """
         if key == "humans_down":
             self.human_count = max(1, self.human_count - 1)
         elif key == "humans_up":
@@ -545,7 +590,14 @@ class MonopolyApp:
         return True
 
     def _on_turn_button(self, key: str) -> bool:
-        """Handle in-turn actions and auctions; True if `key` belonged here."""
+        """Handle in-turn actions and auctions; True if `key` belonged here.
+
+        Most keys call one engine action directly (roll, buy, bid, pay, ...).
+        "build", "sell" and "mortgage" only switch the board-click mode; the
+        engine is called when a space is then clicked. The rest leave the
+        game: "save_quit" saves and returns to setup, and "concede" (offered
+        once every human is bankrupt) records the result and does the same.
+        """
         game = self._require_game()
         if key in ("roll", "jail_pay", "jail_card", "buy", "auction_decline", "end_turn",
                    "bid", "pass", "pay_debts", "declare_bankruptcy"):
@@ -580,6 +632,7 @@ class MonopolyApp:
         elif key == "bid":
             auction = game.auction
             assert auction is not None, "bid button only exists during an auction"
+            # The same step as the AI's bids: 5% of list price, at least $10.
             step = max(10, game.board[auction["position"]].price // 20)
             game.auction_bid(auction["high_bid"] + step)
         elif key == "pass":
@@ -624,7 +677,13 @@ class MonopolyApp:
         return True
 
     def _on_trade_button(self, key: str) -> bool:
-        """Handle the trade dialog; True if `key` belonged here."""
+        """Handle the trade dialog; True if `key` belonged here.
+
+        The steppers change the draft offer in `self.trade` ($50 per cash
+        step, one card per jail step). Propose hands the draft to the engine
+        and shows the engine's reason if it is refused. Accept and Reject
+        answer an incoming offer made to a human.
+        """
         game = self._require_game()
         if key == "trade":
             self._open_trade()
@@ -854,7 +913,14 @@ class MonopolyApp:
             self._draw_playing(mouse)
 
     def _draw_playing(self, mouse: tuple[int, int]) -> None:
-        """Draw the board, side panel, action bar and any open dialog."""
+        """Draw the board, side panel, action bar and any open dialog.
+
+        The order matters, because later drawing covers earlier drawing:
+        the board and tokens, then the side panel, the last card, the dice
+        and the hover card, then the action bar, and finally at most one
+        modal dialog (auction, asset manager, trade builder or incoming
+        trade offer) over everything.
+        """
         game = self._require_game()
         renderer = self.renderer
         assert renderer is not None, "renderer exists whenever a game does"
@@ -1044,8 +1110,13 @@ class MonopolyApp:
         return buttons
 
     def _asset_dialog_buttons(self, actor) -> list:
-        """Asset-manager buttons: every title row selects a deed; the action
-        buttons use engine-provided availability and blocker reasons."""
+        """Build the asset-manager buttons for `actor`.
+
+        Every owned title gets a row button that selects it (the selected row
+        is tinted). The Build, Sell, Mortgage and Lift Mortgage buttons are
+        enabled from the engine's `asset_actions_for`, so they always match
+        what the rules allow. A Close button sits at the top right.
+        """
         game = self._require_game()
         layout = ui.asset_layout(game, actor)
         buttons = []
@@ -1096,7 +1167,14 @@ class MonopolyApp:
         ]
 
     def _action_bar_buttons(self, actor) -> list:
-        """The normal action bar for pre-roll, buy-or-auction, and post-roll."""
+        """The normal action bar for pre-roll, buy-or-auction, post-roll and raising funds.
+
+        The buttons depend on the engine state: rolling (with the jail
+        choices instead of building while in Jail), Buy or Auction after
+        landing on an unowned title, End Turn plus building and trading
+        after the roll, and Pay / Assets / Declare Bankruptcy while a debt
+        is open. A button whose action cannot work yet is shown disabled.
+        """
         game = self._require_game()
         buttons = []
         state = game.awaiting
