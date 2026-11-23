@@ -23,12 +23,16 @@ if str(GAME_DIR) not in sys.path:
 from solitaire import (
     CARD_HEIGHT,
     CARD_WIDTH,
+    EMPTY_OUTLINE,
     FOUNDATION_COUNT,
+    HINT_COLOR,
+    PLACEHOLDER_FILL,
     TABLEAU_COLUMNS,
     TABLEAU_Y,
     TOP_ROW_Y,
     WINDOW_WIDTH,
     Card,
+    HintMove,
     KlondikeGame,
     SolitaireApp,
 )
@@ -283,6 +287,76 @@ class CardFaceTests(DrawingTestCase):
                 self.canvas.reset_mock()
                 texts = [call[2]["text"] for call in self.corner_texts(anchor)]
                 self.assertEqual(texts, ["Q\u2665"])
+
+
+def relative_luminance(colour: str) -> float:
+    """Return the WCAG relative luminance of a "#RRGGBB" colour."""
+
+    channels = [int(colour[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """Return the WCAG contrast ratio between two colours."""
+
+    lighter, darker = sorted((relative_luminance(first), relative_luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+class EmptyPileTests(DrawingTestCase):
+    """P7: empty-pile placeholders are readable and hint like cards do."""
+
+    def setUp(self) -> None:
+        """Start from an empty board so every pile draws its placeholder."""
+
+        super().setUp()
+        self.game.stock = []
+        self.game.waste = []
+        self.game.foundations = [[] for _ in range(FOUNDATION_COUNT)]
+        self.game.tableau = [[] for _ in range(TABLEAU_COLUMNS)]
+
+    def test_foundation_suit_symbols_use_the_light_placeholder_colour(self) -> None:
+        """Empty foundations print their suit in the light, high-contrast colour."""
+
+        self.app.draw_foundations()
+
+        fills = {call[2]["fill"] for call in calls_named(self.canvas, "create_text")}
+        self.assertEqual(fills, {EMPTY_OUTLINE})
+        self.assertGreaterEqual(contrast_ratio(EMPTY_OUTLINE, PLACEHOLDER_FILL), 4.5)
+
+    def test_reset_and_waste_words_are_fourteen_point(self) -> None:
+        """The words on the empty stock and waste use a 14pt font so they fit."""
+
+        self.app.draw_stock()
+        self.app.draw_waste()
+
+        sizes = {call[2]["text"]: call[2]["font"][1] for call in calls_named(self.canvas, "create_text")}
+        self.assertEqual(sizes, {"Reset": 14, "Waste": 14})
+
+    def hinted_outline(self, destination_type: str, destination_index: int) -> dict:
+        """Hint an empty pile, draw it, and return the options of its outline polygon."""
+
+        self.app.hint_move = HintMove("waste", 0, 0, [Card("spades", 13, True)], destination_type,
+                                      destination_index, 0, "Hint")
+        if destination_type == "foundation":
+            self.app.draw_foundations()
+        else:
+            self.app.draw_tableau()
+        outlines = [call[2] for call in calls_named(self.canvas, "create_polygon")
+                    if call[2].get("outline") == HINT_COLOR]
+        self.assertEqual(len(outlines), 1)
+        return outlines[0]
+
+    def test_hinted_empty_piles_get_the_solid_hint_outline(self) -> None:
+        """A hinted empty foundation or column has the same solid 4 px outline as a card."""
+
+        for destination in (("foundation", 1), ("tableau", 2)):
+            with self.subTest(destination=destination):
+                self.canvas.reset_mock()
+                options = self.hinted_outline(*destination)
+                self.assertEqual(options["width"], 4)
+                self.assertFalse(options.get("dash"))
 
 
 if __name__ == "__main__":

@@ -79,6 +79,12 @@ HIGHLIGHT_COLOR = "#FFD24D"
 # A separate colour for hint highlights so a hinted destination is never
 # confused with the yellow selection highlight on the card the player lifted.
 HINT_COLOR = "#FF8A3D"
+# Selected and hinted piles (cards and empty placeholders) share this outline.
+HIGHLIGHT_OUTLINE_WIDTH = 4
+# Empty-pile text: a single symbol ("K", a suit) is large; the words "Reset"
+# and "Waste" are smaller so they fit inside the 88 px placeholder.
+EMPTY_PILE_SYMBOL_FONT_SIZE = 20
+EMPTY_PILE_WORD_FONT_SIZE = 14
 
 # Animation timing. More steps means smoother movement.
 ANIMATION_STEPS = 18
@@ -2312,7 +2318,7 @@ class SolitaireApp:
                 font=("Arial", 10),
             )
         else:
-            self.draw_empty_pile(rect[0], rect[1], "Reset")
+            self.draw_empty_pile(rect[0], rect[1], "Reset", font_size=EMPTY_PILE_WORD_FONT_SIZE)
 
     def draw_waste(self) -> None:
         """Draw the top waste card or the empty waste placeholder."""
@@ -2328,7 +2334,7 @@ class SolitaireApp:
                 font=("Arial", 10),
             )
         else:
-            self.draw_empty_pile(rect[0], rect[1], "Waste")
+            self.draw_empty_pile(rect[0], rect[1], "Waste", font_size=EMPTY_PILE_WORD_FONT_SIZE)
 
     def draw_foundations(self) -> None:
         """Draw all four foundation piles."""
@@ -2358,7 +2364,6 @@ class SolitaireApp:
                     rect[0],
                     rect[1],
                     SUIT_SYMBOLS[suit],
-                    SUIT_COLORS[suit],
                     highlighted=hint_target,
                 )
 
@@ -2419,12 +2424,20 @@ class SolitaireApp:
         x: int,
         y: int,
         text: str = "",
-        text_color: str = EMPTY_OUTLINE,
         highlighted: bool = False,
+        font_size: int = EMPTY_PILE_SYMBOL_FONT_SIZE,
     ) -> None:
-        """Draw an outlined placeholder where an empty pile sits."""
-        outline_color = HINT_COLOR if highlighted else EMPTY_OUTLINE
-        width = 3 if highlighted else 2
+        """Draw an outlined placeholder where an empty pile sits.
+
+        A normal placeholder has a thin dashed outline. A hinted one gets the
+        same solid 4 px orange outline as a hinted card, so the player sees
+        one consistent "put it here" marker whether the pile is empty or not.
+        """
+        outline_options: dict[str, Any] = (
+            {"outline": HINT_COLOR, "width": HIGHLIGHT_OUTLINE_WIDTH}
+            if highlighted
+            else {"outline": EMPTY_OUTLINE, "width": 2, "dash": (6, 3)}
+        )
         self.rounded_rect(
             x,
             y,
@@ -2432,17 +2445,15 @@ class SolitaireApp:
             y + CARD_HEIGHT,
             10,
             fill=PLACEHOLDER_FILL,
-            outline=outline_color,
-            width=width,
-            dash=(6, 3),
+            **outline_options,
         )
         if text:
             self.canvas.create_text(
                 x + CARD_WIDTH / 2,
                 y + CARD_HEIGHT / 2,
                 text=text,
-                fill=text_color,
-                font=("Arial", 20, "bold"),
+                fill=EMPTY_OUTLINE,
+                font=("Arial", font_size, "bold"),
             )
 
     def draw_card(
@@ -2462,10 +2473,10 @@ class SolitaireApp:
         """
         if hint:
             outline_color = HINT_COLOR
-            outline_width = 4
+            outline_width = HIGHLIGHT_OUTLINE_WIDTH
         elif selected:
             outline_color = HIGHLIGHT_COLOR
-            outline_width = 4
+            outline_width = HIGHLIGHT_OUTLINE_WIDTH
         else:
             outline_color = CARD_OUTLINE
             outline_width = 2
