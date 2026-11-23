@@ -41,6 +41,8 @@ class Particle:
         """Move the particle forward and age it out."""
         self.life -= dt
         self.velocity.y += self.gravity * dt
+        # A small per-frame slowdown (air drag) so sprays ease out instead of
+        # flying at constant speed.
         self.velocity *= 0.985
         self.position += self.velocity * dt
 
@@ -103,9 +105,30 @@ def popup_alpha(popup: PopupText) -> int:
 
 
 class EffectsManager:
-    """Central place for creating, updating, and drawing temporary effects."""
+    """Central place for creating, updating, and drawing temporary effects.
+
+    The game calls the spawn helpers (`impact`, `merge`, `announce`, `combo`,
+    `reward_burst`) when something happens, then `update(dt)` and `draw()`
+    once per frame. Effects are fire-and-forget: each one counts its own
+    `life` down and is dropped once it reaches zero.
+
+    Attributes:
+        particles: Live spark dots from impacts and merges.
+        rings: Live expanding outline rings.
+        popups: Live floating texts (score gains, combos, announcements).
+        overlay: One reusable full-screen transparent surface that rings and
+            particles are drawn onto before it is blitted in a single step.
+        trauma: Screen-shake strength from 0 to 1. Spawners add to it,
+            `update()` lets it decay, and `camera_offset()` turns it into a
+            random jitter that the game adds to every world position.
+
+    Beginner note:
+    - Effects use the module-level `random` rather than the game's seeded
+      generator, because they are purely cosmetic and never change gameplay.
+    """
 
     def __init__(self) -> None:
+        """Start with no effects, no shake, and one cleared overlay surface."""
         # Separate lists keep each effect type easy to manage and debug.
         self.particles: list[Particle] = []
         self.rings: list[RingPulse] = []
@@ -174,7 +197,19 @@ class EffectsManager:
         self.add_shake(min(0.12, strength / 2600.0))
 
     def merge(self, position: pygame.Vector2, color: tuple[int, int, int], score_gain: int, target_tier: int) -> None:
-        """Create the bigger celebration effect used for successful merges."""
+        """Create the bigger celebration effect used for successful merges.
+
+        One merge spawns three things at `position`: a ring of particles flying
+        out in every direction, one expanding `RingPulse`, and a floating
+        `+score_gain` popup. All of them, plus the screen shake, grow with
+        `target_tier` so bigger merges feel weightier.
+
+        Args:
+            position: Where the merged body appears.
+            color: Tier colour used for particles and the ring.
+            score_gain: Points to show in the popup.
+            target_tier: Tier index of the newly created body.
+        """
         # Bigger tiers produce bigger bursts.
         burst_count = 16 + target_tier * 2
         for _ in range(burst_count):
@@ -301,12 +336,33 @@ class EffectsManager:
         if self.trauma <= 0.0:
             return pygame.Vector2()
 
-        # Squaring trauma makes small values subtle while big values still feel punchy.
+        # The camera offset is re-randomised every frame, which reads as a
+        # jitter. Squaring trauma makes small values subtle while big values still feel punchy.
         amount = self.trauma * self.trauma * 16.0
         return pygame.Vector2(random.uniform(-amount, amount), random.uniform(-amount, amount))
 
     def draw(self, target: pygame.Surface, assets, camera_offset: pygame.Vector2) -> None:
-        """Render all effects on top of the playfield."""
+        """Render all effects on top of the playfield.
+
+        Rings and particles are drawn first onto the shared transparent
+        `overlay`, which is then blitted once. Popups are drawn afterwards,
+        each on its own small surface with a dark outline, so they appear above
+        every spark. Every position is shifted by `camera_offset` so effects
+        shake together with the bodies.
+
+        Args:
+            target: Surface to draw on.
+            assets: The `AssetLibrary`, used for its `body_font`.
+            camera_offset: Current screen-shake offset.
+
+        Beginner note:
+        - Colours with four numbers `(r, g, b, alpha)` only blend when drawn on
+          a surface that has per-pixel alpha (`pygame.SRCALPHA`). That is why
+          rings and particles go onto the overlay instead of straight onto the
+          opaque screen.
+        - `Surface.set_alpha()` fades a whole surface at once, which is how
+          each popup fades out as one piece.
+        """
         # Clear the reusable transparent overlay surface first.
         self.overlay.fill((0, 0, 0, 0))
 
@@ -334,9 +390,9 @@ class EffectsManager:
         target.blit(self.overlay, (0, 0))
 
         for popup in self.popups:
-            # Text popups are rendered after the overlay so they stay crisp.
-            # If we drew them onto the big transparent overlay first, they would
-            # look blurrier and would be harder to read.
+            # Text popups are rendered after the overlay so they sit on top of
+            # every spark, and each one is its own surface so it can be scaled
+            # and faded as a whole without affecting anything else.
             # Each popup is built on its own alpha surface: a dark outline (the
             # text stamped at small offsets all around) with the coloured text
             # on top, so it stays readable over bright, busy orbs.

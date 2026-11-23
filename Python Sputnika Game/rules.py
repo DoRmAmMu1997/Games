@@ -104,6 +104,9 @@ def stress_level(highest_top: float, fail_timer: float, warning: bool) -> float:
     - once the line is actually crossed (`warning`), the fail countdown fills
       the remaining timer share on top.
     """
+    # `highest_top` shrinks as the stack grows (screen y points down). The
+    # ratio is 0 while the top is `STRESS_PREVIEW_RANGE` or more below the
+    # fail line, and reaches 1 when the top touches the line.
     preview_ratio = clamp(
         (FAIL_LINE_Y + STRESS_PREVIEW_RANGE - highest_top) / STRESS_PREVIEW_RANGE,
         0.0,
@@ -118,8 +121,8 @@ def sanitize_progress(data: Any) -> dict[str, int]:
     """Clean raw saved-progress data into three safe, non-negative integers.
 
     Missing fields default to zero and `best_tier` is clamped onto the tier
-    ladder. Data that cannot be cleaned (not a JSON object, or a field that is
-    not a number) raises, and the caller falls back to fresh progress.
+    ladder. Data that cannot be cleaned (not a JSON object, or a field that
+    `int()` cannot convert) raises, and the caller falls back to fresh progress.
     """
     return {
         "high_score": max(0, int(data.get("high_score", 0))),

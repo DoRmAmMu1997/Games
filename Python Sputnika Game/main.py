@@ -39,7 +39,19 @@ def _resource_path(name: str) -> Path:
 
 
 def main() -> None:
-    """Create pygame, run the game loop, and clean up on exit."""
+    """Create pygame, run the game loop, and clean up on exit.
+
+    Steps: configure the audio mixer, start pygame, set the window icon if the
+    bundled PNG is present, then either run the normal game loop or, when the
+    `ORBITAL_ORCHARD_AUTOTEST` environment variable is set, play a short
+    hidden smoke-test round and return. `pygame.quit()` runs in a `finally`
+    block so pygame is shut down on every exit path, errors included.
+
+    Beginner note:
+    - `try` / `finally` guarantees the `finally` part runs whether the `try`
+      part finishes normally, returns early (as the autotest does), or
+      raises an exception.
+    """
     # pygame has a few subsystems that care about initialization order.
     # Audio is the most sensitive one here, so we configure it first.
     # `pre_init` asks pygame to use these audio settings when the mixer starts.

@@ -29,7 +29,35 @@ def _random_phase() -> float:
 
 @dataclass(slots=True)
 class CelestialBody:
-    """One round object inside the playfield."""
+    """One round object inside the playfield.
+
+    A body is created by the launcher (a fresh drop) or by a merge (the new,
+    bigger tier), and it is removed again when it merges. The physics world
+    moves it through `position`/`velocity`; the rest of the fields only feed
+    the cartoon presentation.
+
+    Key attributes:
+        body_id: Unique, ever-increasing number. The merge code uses it to
+            tell bodies apart and to keep pair order stable.
+        tier: Index into `settings.TIERS`; it fixes the body's size, colours
+            and mood for its whole life.
+        position, velocity: Pixel position and pixels-per-second velocity.
+        created_at: Game clock time of creation; `age()` and `can_merge()`
+            are measured from it.
+        seed, hover_phase: Random per-body values that desynchronise idle
+            animation and the sideways gravity drift.
+        pulse, flash, birth_pop: Short animation amounts that decay to zero
+            in `update()` (squash, glow halo, and merge scale-in).
+        blink_cooldown, blink_time: Timers for the idle blink cycle.
+        radius, mass, inv_mass: Cached from the tier in `__post_init__`.
+
+    Beginner note:
+    - `@dataclass(slots=True)` writes `__init__` for us from the annotated
+      fields, and `slots=True` stores the fields in a fixed layout, which
+      saves memory and stops typos from silently creating new attributes.
+    - `field(default_factory=...)` runs the function once per new body, so
+      each body gets its own random value instead of sharing one.
+    """
 
     # Core identity/state.
     # These values answer "what is this body and where is it right now?"
@@ -101,6 +129,12 @@ class CelestialBody:
     def register_impact(self, now: float, strength: float) -> bool:
         """Trigger squash/flash feedback for a noticeable impact.
 
+        `strength` is the impact speed in pixels per second; it is mapped onto
+        0..1 (460 px/s or faster counts as a full-strength hit) and then sets
+        `pulse` and `flash`, never lowering a stronger effect already running.
+        A 0.055 s cooldown stops one rattling contact from re-triggering every
+        substep.
+
         Returns `True` if a new impact was accepted and `False` if it was
         ignored because another impact was registered too recently.
         """
@@ -139,7 +173,25 @@ class CelestialBody:
         camera_offset: pygame.Vector2,
         now: float,
     ) -> None:
-        """Draw the orb art plus its animated face."""
+        """Draw the orb art plus its animated face.
+
+        Drawing happens in layers, back to front: a soft drop shadow, an
+        optional flash halo, the pre-rendered orb sprite from `assets`, and
+        finally the face (eyes, brows, mouth, cheeks) drawn live on top.
+
+        Args:
+            target: Surface to draw on (normally the game's world surface).
+            assets: The `AssetLibrary` that caches each tier's orb sprite.
+            camera_offset: Screen-shake offset added to every position.
+            now: Game clock time, used for idle bobbing and breathing.
+
+        Beginner note:
+        - The sprite is cached at its natural size, so any squash or pop is
+          done by rescaling a copy each frame rather than re-rendering it.
+        - Shadows and halos are drawn on small temporary surfaces created
+          with `pygame.SRCALPHA` (a per-pixel alpha channel). That lets them
+          be partly transparent when blitted onto the scene.
+        """
         # The body art itself comes from `assets.py`.
         # This function mainly decides *where* to draw it and *which extra face
         # animation state* should appear on top of it.
@@ -147,6 +199,7 @@ class CelestialBody:
         breathe = 0.0
         # Bodies that are almost resting gently float and "breathe" so a
         # settled stack still feels alive instead of completely frozen.
+        # 2500 is a squared speed: "slower than 50 px/s".
         if self.velocity.length_squared() < 2500.0:
             bob = math.sin(now * 1.4 + self.hover_phase) * 1.35
             breathe = math.sin(now * 1.1 + self.hover_phase) * 0.018
@@ -206,7 +259,32 @@ class CelestialBody:
         radius: float,
         now: float,
     ) -> None:
-        """Draw simple cartoon eyes, mouth, and cheeks on top of the orb."""
+        """Draw simple cartoon eyes, mouth, and cheeks on top of the orb.
+
+        Every measurement is a fraction of `radius`, so one recipe scales from
+        the smallest tier to the largest. The face first asks
+        `_expression_state()` for the current mood flags, then draws:
+
+        - eyes: closed lines while blinking, otherwise white ellipses with
+          pupils that glance in the direction of travel;
+        - brows (via `_draw_brows`), tilted per expression;
+        - a mouth: a dynamic expression (startled, worried, delighted) wins;
+          otherwise the tier's fixed `mood` picks the shape;
+        - translucent cheeks, plus a sweat drop when the body is worried.
+
+        Args:
+            target: Surface to draw on.
+            center: Pixel centre of the drawn orb (already shaken and bobbed).
+            radius: Drawn radius after scaling, so the face squashes with it.
+            now: Game clock time, used for idle gaze and the wiggling mouth.
+
+        Beginner note:
+        - `pygame.draw.arc` angles are in radians and run counter-clockwise
+          *as seen on screen*, starting from the right-hand side. So an arc
+          from `0` to `pi` is the upper half of its rectangle (an arch, like
+          the letter n), and an arc from `pi` to `tau` is the lower half
+          (a cup, like the letter u).
+        """
         info = self.info
         cx, cy = center
 

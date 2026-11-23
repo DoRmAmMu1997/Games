@@ -24,7 +24,17 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class MergeEvent:
-    """A lightweight description of one merge to apply after physics."""
+    """A lightweight description of one merge to apply after physics.
+
+    Attributes:
+        first_id, second_id: `body_id`s of the two bodies being consumed.
+        source_tier: Tier of the two consumed bodies.
+        target_tier: Tier of the body that replaces them (`source_tier + 1`).
+        position: Where the new body appears (mass-weighted centre).
+        velocity: Starting velocity of the new body (damped combined velocity).
+        score_gain: Base points before the combo multiplier; it is the
+            score value of `target_tier`.
+    """
 
     # We store ids instead of whole objects so the event stays simple and easy
     # to sort/apply later.
@@ -49,6 +59,20 @@ def find_merge_events(bodies, now: float) -> list[MergeEvent]:
     The function deliberately returns data instead of mutating bodies directly.
     That separation keeps the merge search simple and lets `game.py` decide
     how to replace old bodies with the new merged one.
+
+    A pair qualifies when both bodies share a tier below the top one, both are
+    older than `MERGE_ARM_TIME`, and their centres are no further apart than
+    the sum of their radii plus `MERGE_CONTACT_SLOP`. When one body could
+    merge with several partners, candidates are ranked (highest tier first,
+    then the tightest overlap, then the lowest relative speed) and each body
+    is used by at most one event.
+
+    Args:
+        bodies: The live `CelestialBody` list (read only).
+        now: Current game clock time, for the merge arming delay.
+
+    Returns:
+        The chosen merges, in ranking order.
     """
     # `candidates` stores extra sort information before we decide which merges
     # actually win this frame. Each tuple contains:

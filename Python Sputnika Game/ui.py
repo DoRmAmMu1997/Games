@@ -219,7 +219,15 @@ def preview_scale(orb: pygame.Surface, slot_radius: float, max_scale: float) -> 
 
 @dataclass(slots=True)
 class PreviewSlot:
-    """Where and how big one drop-queue preview orb is drawn."""
+    """Where and how big one drop-queue preview orb is drawn.
+
+    Attributes:
+        tier: Which tier's sprite to show.
+        center: Canvas position of the orb and its backplate.
+        scale: Sprite scale from `preview_scale()`.
+        alpha: Sprite opacity (the "next" orb is slightly faded).
+        backplate_radius, backplate_color: Size and tint of the halo behind it.
+    """
 
     tier: int
     center: tuple[int, int]
@@ -278,7 +286,18 @@ def control_rows(assets, info_rect: pygame.Rect) -> list[tuple[pygame.Surface, p
 
 @dataclass(slots=True)
 class Button:
-    """Simple clickable UI button with hover styling."""
+    """Simple clickable UI button with hover styling.
+
+    A `Button` only knows its rectangle, label and accent colour. It never acts
+    on a click itself: `game.py` asks `contains()` whether a click landed on it
+    and decides what to do. The overlay `place_*_buttons` helpers move and
+    resize the rectangle so it sits inside its modal.
+
+    Attributes:
+        rect: Position and size in canvas coordinates (also the click area).
+        label: Text drawn in the middle of the button.
+        accent: Border colour; it brightens a little while hovered.
+    """
 
     # `rect` stores both the button's size and screen position.
     rect: pygame.Rect
@@ -376,7 +395,9 @@ def draw_playfield(surface: pygame.Surface, danger_ratio: float) -> None:
     surface.blit(bubble, bubble.get_rect(center=(int(center.x), int(center.y))))
 
     # The fail line is actually a chord across the circle, so we compute its span
-    # from the circle equation instead of guessing a fixed width.
+    # from the circle equation instead of guessing a fixed width: at vertical
+    # offset `dy` from the centre, the circle is `sqrt(R^2 - dy^2)` wide on
+    # each side. The line stops 18 px short of the wall at both ends.
     # The danger line colour walks a calm -> yellow -> orange -> red gradient so
     # rising risk is obvious well before the line actually turns red.
     line_color = danger_gradient(danger_ratio)
@@ -454,7 +475,21 @@ def draw_danger_label(surface: pygame.Surface, font: pygame.font.Font, center: t
 
 
 def draw_hud(surface: pygame.Surface, game, assets) -> None:
-    """Draw the sidebar HUD with score, queue, controls, and warning meter."""
+    """Draw the sidebar HUD with score, queue, controls, and warning meter.
+
+    The sidebar is three panels, top to bottom:
+
+    - Score: the live score, the high score and the number of bodies.
+    - Drop Queue: the current and next bodies, laid out by `queue_layout`.
+    - Controls and progress: the key reference, the best body reached this
+      run (green once the top tier is reached), and the "Container stress"
+      bar filled from `game.container_stress`.
+
+    Args:
+        surface: The canvas to draw on.
+        game: The running `OrbitalOrchardGame`; only read, never changed.
+        assets: The `AssetLibrary` with fonts and orb sprites.
+    """
     # These panels divide the sidebar into clear chunks of information.
     score_rect = SCORE_PANEL
     queue_rect = QUEUE_PANEL
@@ -560,7 +595,18 @@ def draw_menu_overlay(
     best_tier_name: str,
     mouse_pos: tuple[int, int],
 ) -> None:
-    """Draw the main menu overlay."""
+    """Draw the main menu overlay.
+
+    A translucent veil dims the scene behind, then the menu modal is drawn
+    with the title, a short how-to-play, the lifetime stats, and the buttons.
+
+    Args:
+        surface: The canvas to draw on.
+        assets: The `AssetLibrary` with fonts.
+        buttons: Menu buttons owned by the game (placed inside the modal here).
+        high_score, games_played, best_tier_name: Lifetime stats to show.
+        mouse_pos: Canvas mouse position, for hover highlighting.
+    """
     # Dim whatever is behind the menu (the bubble, a stack left over from a
     # previous run, the danger line) so none of it reads as part of the menu.
     veil = pygame.Surface(surface.get_size(), pygame.SRCALPHA)

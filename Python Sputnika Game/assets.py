@@ -49,9 +49,22 @@ def _blend_onto(surface: pygame.Surface, draw) -> None:
 
 
 class SoundBank:
-    """Creates and stores short procedural sounds used by the game."""
+    """Creates and stores short procedural sounds used by the game.
+
+    Every sound is synthesised from sine waves when the bank is created, so
+    the game ships without any audio files. Sounds are looked up by name
+    (`"drop"`, `"merge"`, `"big_merge"`, `"button"`, `"game_over"`,
+    `"record"`, `"warning"`) through `play()`.
+
+    Attributes:
+        enabled: False when the mixer is unavailable or a tone failed to
+            build. Then `play()` silently does nothing, so a machine without
+            audio still runs the game.
+        sounds: Name to `pygame.mixer.Sound` lookup.
+    """
 
     def __init__(self) -> None:
+        """Build every named tone, or disable sound if the mixer is unavailable."""
         # If the mixer failed to initialize, the game still runs silently.
         self.enabled = pygame.mixer.get_init() is not None
         self.sounds: dict[str, pygame.mixer.Sound] = {}
@@ -85,7 +98,31 @@ class SoundBank:
         sound.play()
 
     def _make_tone(self, frequencies: list[float], duration: float, volume: float) -> pygame.mixer.Sound:
-        """Synthesize a short waveform directly into a pygame Sound object."""
+        """Synthesize a short waveform directly into a pygame Sound object.
+
+        The tone is the sum of one sine wave per entry in `frequencies`, with
+        the n-th wave played at `1/n` loudness. An envelope shapes the volume
+        over time: a fast linear fade-in over the first 6% of samples (to avoid
+        a click) and then an exponential decay.
+
+        Args:
+            frequencies: Pitches in hertz to layer together.
+            duration: Length of the sound in seconds.
+            volume: Overall loudness from 0 to 1 before clipping.
+
+        Returns:
+            A ready-to-play `pygame.mixer.Sound`.
+
+        Raises:
+            pygame.error: If the mixer is not initialised.
+
+        Beginner note:
+        - Digital audio is a long list of numbers ("samples"), each one the
+          speaker position at a moment in time. At a sample rate of 44100,
+          one second is 44100 numbers per channel.
+        - The mixer here uses signed 16-bit samples, so a wave in -1..1 is
+          scaled to -32767..32767. Values outside -1..1 are clipped first.
+        """
         mixer_state = pygame.mixer.get_init()
         if mixer_state is None:
             raise pygame.error("Mixer unavailable")
@@ -118,9 +155,32 @@ class SoundBank:
 
 
 class AssetLibrary:
-    """Caches procedural surfaces and exposes shared fonts and sounds."""
+    """Caches procedural surfaces and exposes shared fonts and sounds.
+
+    The game creates one `AssetLibrary` after pygame starts and passes it to
+    everything that draws. Expensive images (the background gradient, the
+    vignette, each tier's orb) are drawn once and reused every frame.
+
+    Attributes:
+        body_cache: Tier index to finished orb sprite, filled lazily by
+            `get_body_surface()`.
+        background: Full-screen gradient, nebulae and distant planets.
+        stars, sparkles: Fixed-seed tuples describing the twinkling points
+            that `draw_background()` animates each frame.
+        vignette: Full-screen overlay that darkens the corners.
+        sounds: The game's `SoundBank`.
+        title_font ... tiny_font: pygame's built-in font at several sizes.
+
+    Beginner note:
+    - A pygame `Surface` is an off-screen image you can draw on. Drawing a
+      complex picture once onto a surface and then `blit`-ing (copying) it
+      each frame is far cheaper than redrawing all its shapes every frame.
+    - This class needs `pygame.init()` (for fonts and the mixer) to have run
+      before it is constructed.
+    """
 
     def __init__(self) -> None:
+        """Pre-build the background layers, sounds and fonts; orbs are built on demand."""
         # `body_cache` avoids redrawing every tier from scratch each frame.
         # Caching is important here because these body surfaces contain several
         # layered drawing operations and would be wasteful to rebuild constantly.
@@ -150,7 +210,21 @@ class AssetLibrary:
         return self.body_cache[tier]
 
     def draw_background(self, target: pygame.Surface, now: float, drift: pygame.Vector2 | None = None) -> None:
-        """Draw the static background plus twinkling moving stars."""
+        """Draw the static background plus twinkling moving stars.
+
+        Layers, back to front: the pre-built `background`, the small stars,
+        the larger sparkles, then the `vignette`. Stars and sparkles twinkle
+        by a sine wave of `now`, each with its own speed and phase.
+
+        Args:
+            target: Surface to draw on (normally the whole screen).
+            now: Animation clock in seconds.
+            drift: Optional offset that follows the mouse (the game passes
+                a small fraction of the cursor's distance from the playfield
+                centre). Stars shift by it scaled by their `depth`, which gives
+                a cheap parallax; positions wrap with `%` so stars that leave
+                one edge come back on the other.
+        """
         target.blit(self.background, (0, 0))
         drift = drift or pygame.Vector2()
         for x, y, size, speed, phase, depth in self.stars:
@@ -209,7 +283,20 @@ class AssetLibrary:
         scale: float = 1.0,
         alpha: int = 255,
     ) -> None:
-        """Draw a floating preview version of a tier icon."""
+        """Draw a floating preview version of a tier icon.
+
+        Used for the launcher orb and the sidebar's current/next previews. The cached
+        sprite is copied before changing its alpha so the shared cache entry is
+        never modified.
+
+        Args:
+            target: Surface to draw on.
+            tier: Which tier's sprite to show.
+            center: Where the sprite's centre goes, before the idle bob.
+            now: Animation clock; drives a small vertical bob.
+            scale: Size multiplier (1.0 is the in-game size).
+            alpha: Opacity from 0 (invisible) to 255 (solid).
+        """
         orb = self.get_body_surface(tier)
         if alpha != 255:
             orb = orb.copy()
@@ -227,7 +314,19 @@ class AssetLibrary:
         target.blit(orb, rect)
 
     def _build_background(self) -> pygame.Surface:
-        """Create the large static nebula background once."""
+        """Create the large static nebula background once.
+
+        The result is an opaque full-screen surface made of three layers:
+        a top-to-bottom colour gradient (`BG_TOP` to `BG_BOTTOM`), a few
+        soft nebula blobs, and four large dim "distant planets". The blobs
+        and planets are drawn on a transparent `cloud` layer first and then
+        blended onto the gradient in one blit.
+
+        Beginner note:
+        - `lerp_color(a, b, t)` mixes two colours: `t=0` gives `a`, `t=1`
+          gives `b`, values between give a blend. Doing that per row makes
+          a smooth gradient.
+        """
         surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         for y in range(SCREEN_HEIGHT):
             # Draw a vertical gradient one scan line at a time.
@@ -319,7 +418,30 @@ class AssetLibrary:
         return overlay
 
     def _build_body_surface(self, tier: int) -> pygame.Surface:
-        """Draw the full orb artwork for one tier onto a transparent surface."""
+        """Draw the full orb artwork for one tier onto a transparent surface.
+
+        The sprite is `2 * radius + 58` pixels square so glows, rays and
+        decorations can poke past the sphere without being clipped. Layers are
+        drawn back to front:
+
+        1. a soft outer glow of stacked circles;
+        2. light rays for the star-like icons (flare, sun, nova, crown);
+        3. a dark offset "shadow" disc and the main coloured disc;
+        4. lighter shading bands toward the upper-left (the light source);
+        5. a darker lower band so the orb reads as round;
+        6. highlight, soft shine and a small specular dot, then the outline;
+        7. a thin rim-light arc on the upper-left edge;
+        8. the tier's own decoration from `_decorate_body()`.
+
+        Translucent layers go through `_blend_onto()` so they blend on top
+        instead of punching see-through holes in the opaque orb.
+
+        Args:
+            tier: Index into `TIERS`.
+
+        Returns:
+            A new per-pixel-alpha surface; `get_body_surface()` caches it.
+        """
         info = TIERS[tier]
         radius = info.radius
 
@@ -329,6 +451,9 @@ class AssetLibrary:
         surface = pygame.Surface((size, size), pygame.SRCALPHA)
 
         # Outer glow makes higher-tier bodies feel more magical and valuable.
+        # These circles are drawn straight onto the surface, so each smaller
+        # circle *replaces* the pixels of the larger one under it; the drawn
+        # glow therefore ends up as rings whose alpha grows toward the outside.
         glow_alpha = 28 if tier >= 7 else 18
         for ring in range(5, 0, -1):
             pygame.draw.circle(
@@ -411,7 +536,21 @@ class AssetLibrary:
         radius: int,
         tier: int,
     ) -> None:
-        """Add tier-specific visual details on top of the basic sphere."""
+        """Add tier-specific visual details on top of the basic sphere.
+
+        `TIERS[tier].icon` picks one recipe: specks for dust, craters for
+        rocky tiers, wave arcs for oceans, landmass blobs for continents, an
+        elliptical ring for gas giants, spiral arcs for storms, flare spots,
+        concentric sun rings, a nova diamond, or a crown star. Any icon not
+        listed gets no decoration.
+
+        Args:
+            surface: Transparent layer to draw on (blended onto the orb later).
+            center: Centre of the orb on that layer.
+            radius: Orb radius in pixels; every detail is sized from it.
+            tier: Index into `TIERS`. Random details use a fixed per-tier seed
+                so a tier always looks the same.
+        """
         info = TIERS[tier]
         accent = shade(info.accent, 1.0)
         dark = shade(info.accent, 0.78)

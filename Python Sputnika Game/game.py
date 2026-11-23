@@ -95,7 +95,44 @@ def _log_error(error: Exception) -> None:
 
 
 class OrbitalOrchardGame:
-    """Top-level game object that keeps all subsystems working together."""
+    """Top-level game object that keeps all subsystems working together.
+
+    One instance owns everything for the lifetime of the window: the pygame
+    window and fixed-size canvas, the `AssetLibrary`, `EffectsManager` and
+    `PhysicsWorld`, the list of live bodies, the launcher, scoring, and the
+    saved lifetime records. `run()` drives it frame by frame.
+
+    Key attributes:
+        scene: The screen state machine, one of `"menu"`, `"playing"`,
+            `"paused"` or `"game_over"`. Input, updating and drawing all
+            branch on it. Transitions: menu -> playing (Start/Enter);
+            playing <-> paused (Esc/P or the Pause button); playing ->
+            game_over (fail timer full, or the body cap hit); any in-run
+            scene -> menu (M or Main Menu) or -> playing again (R/Restart).
+        now: Game clock in seconds. It does not advance while paused.
+        bodies: Every `CelestialBody` currently in the bubble.
+        spawn_x, launch_angle: Launcher column and aim (degrees from straight
+            down, clamped to +/- `MAX_LAUNCH_ANGLE`).
+        current_tier/current_seed, next_tier/next_seed: The two-slot drop
+            queue shown in the HUD.
+        drop_timer: Seconds left on the launch cooldown.
+        fail_timer: How long the stack has stayed over the fail line; the
+            run ends once it reaches `FAIL_GRACE`.
+        container_stress: 0..1 value for the HUD danger meter.
+        score, high_score, games_played, lifetime_best_tier: Run score and
+            the saved lifetime records.
+        random: The game's own `random.Random`. Anything that changes
+            gameplay (queue tiers, body seeds) draws from it so seeded runs
+            replay exactly; purely cosmetic randomness uses the global
+            `random` module.
+        persist: When False, progress is loaded but never saved.
+
+    Beginner note:
+    - The game always draws onto a fixed 1024x1280 `canvas` and only scales
+      it to the real window in `_present()`. Every coordinate in the game
+      logic is therefore a canvas coordinate; mouse positions are converted
+      with `_window_to_canvas()` before use.
+    """
 
     def __init__(self, persist: bool = True) -> None:
         """Build the window, subsystems, and starting state.
@@ -221,7 +258,22 @@ class OrbitalOrchardGame:
         return TIERS[self.lifetime_best_tier].name
 
     def run(self, max_frames: int | None = None) -> None:
-        """Run the main loop until the player quits or a test frame limit is reached."""
+        """Run the main loop until the player quits or a test frame limit is reached.
+
+        Each pass of the loop is one frame: measure elapsed time, handle
+        input, update the game, and draw. `dt` is capped at 0.025 s so a long
+        stall (dragging the window, a debugger pause) cannot launch bodies
+        through each other with one huge physics step.
+
+        Args:
+            max_frames: Stop after this many frames. Tests and the autotest
+                smoke run use it; normal play passes `None` (no limit).
+
+        Beginner note:
+        - This is the classic *game loop*. Nothing happens "by itself" in a
+          game: every animation and physics step advances only because this
+          loop calls the update code again, about 60 times a second.
+        """
         frames = 0
         while self.running:
             # `clock.tick(FPS)` waits just enough to target 60 FPS and returns the
@@ -247,7 +299,22 @@ class OrbitalOrchardGame:
                 break
 
     def _handle_events(self) -> None:
-        """Process every pending pygame event for the current frame."""
+        """Process every pending pygame event for the current frame.
+
+        Events handled here: window close (stop the loop), window resize
+        (recompute the letterbox), key presses (`_handle_keydown`), the mouse
+        wheel (fine angle steps while playing), right-button drag (aim by
+        pointing), and left clicks (buttons first, otherwise launch). Held
+        keys for continuous movement are read separately in
+        `_update_spawn_aim()`, because events only report the moment a key
+        goes down.
+
+        Beginner note:
+        - `pygame.event.get()` empties the event queue. If a game stops
+          calling it, the operating system decides the window is frozen.
+        - Mouse event positions are in *window* pixels, so they go through
+          `_window_to_canvas()` before being compared with anything.
+        """
         for event in pygame.event.get():
             # pygame delivers many event types through one queue, so this method
             # acts like a dispatcher that sends each event to the right behavior.
@@ -309,7 +376,20 @@ class OrbitalOrchardGame:
                 self.angle_dragging = False
 
     def _handle_keydown(self, key: int) -> None:
-        """Handle one key press based on the current scene."""
+        """Handle one key press based on the current scene.
+
+        Bindings:
+        - Esc / P: toggle between playing and paused.
+        - M: back to the menu from any in-run scene.
+        - R: restart a fresh run from any in-run scene.
+        - W / Up and S / Down: one fixed angle step while playing (holding
+          the key also turns the launcher smoothly in `_update_spawn_aim`).
+        - Enter / Space: the scene's main action: start, launch, resume, or
+          play again.
+
+        Args:
+            key: The pygame key code from a `KEYDOWN` event.
+        """
         if key in (pygame.K_ESCAPE, pygame.K_p):
             # `Esc` / `P` toggles pause during gameplay.
             if self.scene == "playing":
@@ -409,7 +489,15 @@ class OrbitalOrchardGame:
         return False
 
     def start_round(self) -> None:
-        """Reset gameplay state and begin a new run."""
+        """Reset gameplay state and begin a new run.
+
+        Clears the bubble, the effects, every timer, the score, the combo
+        chain and the launcher aim; rolls a fresh current/next queue; and
+        switches the scene to `"playing"`. Lifetime records (high score, best
+        tier) are kept. The run counter `games_played` goes up by one and is
+        saved straight away, so a run counts even if the game is closed
+        mid-run.
+        """
         self.scene = "playing"
         self.bodies.clear()
 
@@ -441,7 +529,14 @@ class OrbitalOrchardGame:
         self.assets.sounds.play("button", 0.45)
 
     def drop_current_body(self) -> None:
-        """Launch the current queued body into the container."""
+        """Launch the current queued body into the container.
+
+        Does nothing unless the scene is `"playing"` and the launch cooldown
+        has run out. If the bubble already holds `MAX_BODIES` bodies the run
+        ends instead. Otherwise a new body of `current_tier` is created at the
+        legal spawn point, moving along the aim direction at `LAUNCH_SPEED`,
+        the queue moves forward one slot, and the cooldown restarts.
+        """
         # Ignore launches when not actively playing or while the cooldown is active.
         if self.scene != "playing" or self.drop_timer > 0.0:
             return
@@ -480,7 +575,20 @@ class OrbitalOrchardGame:
         self.assets.sounds.play("drop", 0.35)
 
     def _update(self, dt: float) -> None:
-        """Advance one frame of non-drawing game logic."""
+        """Advance one frame of non-drawing game logic.
+
+        While playing, the order is: aim the launcher, tick the cooldown, step
+        the physics (turning hard impacts into effects), update body
+        animations, apply merges, and finally check the fail line. The order
+        matters: merges are found on the positions physics has just produced,
+        and the fail check sees the stack after merges have removed bodies.
+
+        Outside of `"playing"` only the background parallax and the effects
+        keep moving; the simulation is frozen.
+
+        Args:
+            dt: Seconds since the previous frame (already capped by `run()`).
+        """
         # Mouse-driven background drift adds a small amount of depth. With
         # clamping on, the helper never actually returns None; the fallback
         # here just repeats its own center default for the type checker.
@@ -521,7 +629,18 @@ class OrbitalOrchardGame:
         self.effects.update(dt)
 
     def _update_spawn_aim(self, dt: float) -> None:
-        """Update launcher position and angle from mouse/keyboard input."""
+        """Update launcher position and angle from mouse/keyboard input.
+
+        The launcher column follows the mouse only while the cursor is near
+        the top of the canvas (at most 34 px below `SPAWN_Y`) and the player
+        is not right-dragging the aim. A/D or Left/Right move it at
+        `KEYBOARD_AIM_SPEED`, and W/S or Up/Down turn it at
+        `ANGLE_AIM_SPEED`, both scaled by `dt` so held keys move smoothly.
+        The column is always clamped to the span where the current body fits.
+
+        Args:
+            dt: Seconds since the previous frame.
+        """
         radius = TIERS[self.current_tier].radius
         min_x, max_x = self.world.allowed_spawn_x(radius)
 
@@ -552,7 +671,30 @@ class OrbitalOrchardGame:
             self._nudge_launch_angle(angle_direction * ANGLE_AIM_SPEED * dt)
 
     def _apply_merges(self, merge_events) -> None:
-        """Replace merged body pairs with their upgraded result."""
+        """Replace merged body pairs with their upgraded result.
+
+        For every merge event (from `merge_logic.find_merge_events`) whose two
+        bodies are both still unused this frame, the pair is removed and one
+        body of `target_tier` is created at the event's position and velocity.
+        Each merge also:
+
+        - advances the combo chain and adds the combo-boosted score;
+        - spawns merge effects, plus a combo popup from a chain of two;
+        - updates the run's and lifetime's best tier, with a bigger celebration
+          and sound for the top tier (once per run) or a new lifetime best
+          tier of 5 or above.
+
+        Bodies are removed and added only after the loop, so the list is never
+        changed while it is being walked. Progress is saved only if a record
+        actually changed.
+
+        Args:
+            merge_events: `MergeEvent`s for this frame, in priority order.
+
+        Beginner note:
+        - The `consumed` set is what stops one body from merging twice in the
+          same frame when it touches two equal partners at once.
+        """
         # Remember the records so the save file is only rewritten when a merge
         # actually moves one; ordinary merges happen constantly and would
         # otherwise hit the disk many times a second.
@@ -643,7 +785,19 @@ class OrbitalOrchardGame:
                 self._save_progress()
 
     def _update_fail_state(self, dt: float) -> None:
-        """Track whether the player is approaching game over."""
+        """Track whether the player is approaching game over.
+
+        A body counts as "over the line" when its top edge is above
+        `FAIL_LINE_Y` and it is older than `FAIL_AGE_GATE` (a body still
+        falling in from the launcher is ignored). While any body is over, the
+        fail timer fills and a warning beep repeats faster and louder as it
+        fills; otherwise the timer drains (see `rules.advance_fail_timer`).
+        The HUD stress meter is recomputed from the highest settled body and
+        the timer, and the run ends once the timer reaches `FAIL_GRACE`.
+
+        Args:
+            dt: Seconds since the previous frame.
+        """
         # Only bodies older than the fail-age gate count toward the stress
         # meter, so a body still falling from the launcher does not make the
         # meter jump on every drop.
@@ -704,8 +858,9 @@ class OrbitalOrchardGame:
         - score potential.
 
         The seed decides:
-        - the exact idle blink rhythm once spawned,
-        - the tiny orbital drift flavor used by the trajectory preview.
+        - the tiny sideways orbital drift in its gravity (which the
+          trajectory preview also uses),
+        - small face details such as its idle gaze and mouth wiggle.
 
         Storing both values in the queue means the preview arc can represent the
         actual body that will be launched next, not just a rough generic stand-in.
@@ -751,7 +906,20 @@ class OrbitalOrchardGame:
             _log_error(error)
 
     def _draw(self) -> None:
-        """Render one complete frame to the internal canvas, then present it."""
+        """Render one complete frame to the internal canvas, then present it.
+
+        Layers, back to front: background, playfield shell and fail line,
+        bodies (smallest first), launcher and danger label (in a run only),
+        effects, HUD and in-run buttons, then the full-screen overlay for the
+        menu, pause or game-over scene. Finally `_present()` scales the canvas
+        into the window.
+
+        Beginner note:
+        - pygame has no layers or z-order: whatever is drawn last ends up on
+          top. Getting the order of calls right *is* the layering.
+        - The same camera-shake offset is passed to bodies, launcher and
+          effects so they all shake together, while the HUD stays still.
+        """
         # IMPORTANT: drawing order matters.
         # Background should be behind everything,
         # bodies should appear inside the playfield,
@@ -833,7 +1001,20 @@ class OrbitalOrchardGame:
         self._present()
 
     def _draw_spawn_indicator(self, camera: pygame.Vector2) -> None:
-        """Draw the launcher preview line, arrow, angle label, and current orb."""
+        """Draw the launcher preview line, arrow, angle label, and current orb.
+
+        Everything starts from the same legal spawn point the real body will
+        use. Back to front: the dotted trajectory preview, a soft halo, the
+        cooldown arc (while recharging), the aim line with fading guides and an
+        arrow head, the angle readout, and finally the orb that will launch,
+        dimmed while the cooldown runs.
+
+        Side effect: `spawn_x` is clamped to the span where the current body
+        fits, because the queue may have just switched to a bigger body.
+
+        Args:
+            camera: Screen-shake offset added to every drawn point.
+        """
         min_x, max_x = self.world.allowed_spawn_x(TIERS[self.current_tier].radius)
         self.spawn_x = clamp(self.spawn_x, min_x, max_x)
 

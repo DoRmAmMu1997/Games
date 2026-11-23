@@ -53,7 +53,20 @@ EPSILON = 1e-6
 
 @dataclass(slots=True)
 class CollisionEvent:
-    """Information about one impactful contact that the rest of the game can react to."""
+    """Information about one impactful contact that the rest of the game can react to.
+
+    The physics solver creates these only for contacts faster than
+    `IMPACT_EVENT_SPEED`, so gentle resting contacts never spam effects.
+
+    Attributes:
+        body_a: The body that was hit (for wall hits, the only body involved).
+        body_b: The other body, or `None` when `body_a` hit the bubble wall.
+        point: Approximate contact point in screen pixels, on `body_a`'s rim.
+        normal: Unit vector of the contact direction (from `body_a` toward
+            `body_b`, or outward toward the wall).
+        impact_speed: Closing speed along `normal` in pixels per second;
+            the game scales squash, sparks and shake by it.
+    """
 
     # `body_b` is optional because wall hits have only one real body involved.
     body_a: CelestialBody
@@ -64,9 +77,28 @@ class CollisionEvent:
 
 
 class PhysicsWorld:
-    """Owns world-level physics settings and collision helpers."""
+    """Owns world-level physics settings and collision helpers.
+
+    The game keeps one `PhysicsWorld` and calls `step()` once per frame with
+    the live list of bodies. The world itself stores no bodies; it only knows
+    the container shape and its own clock, and it mutates the positions and
+    velocities of whatever bodies it is handed.
+
+    Attributes:
+        center: Centre of the circular container, in screen pixels.
+        radius: Radius of the container (`CONTAINER_RADIUS`).
+        time: Simulated seconds since the world was created. It drives the
+            slow sine wave in the sideways "orbital" drift.
+
+    Beginner note:
+    - Every body must stay inside the circle of radius `radius - body.radius`
+      around `center` (minus a small margin). Several helpers below share
+      that "legal circle" idea: `keep_inside`, `spawn_point`,
+      `preview_trajectory` and `_solve_boundaries`.
+    """
 
     def __init__(self) -> None:
+        """Create the world around the fixed playfield centre with its clock at zero."""
         # Store the circular container once so every body can measure against it.
         # Converting the center to a `Vector2` makes later vector math simpler.
         self.center = pygame.Vector2(PLAYFIELD_CENTER)
@@ -105,7 +137,8 @@ class PhysicsWorld:
             # settle instead of trembling forever.
             #
             # The threshold is intentionally small; we only want to calm bodies
-            # that are basically at rest, not visibly moving ones.
+            # that are basically at rest, not visibly moving ones. The value
+            # 4.0 is a squared speed, so it means "slower than 2 px/s".
             if body.velocity.length_squared() < 4.0:
                 body.velocity *= 0.985
 
@@ -292,7 +325,29 @@ class PhysicsWorld:
         return acceleration
 
     def _solve_boundaries(self, bodies: list[CelestialBody], emit_events: bool) -> list[CollisionEvent]:
-        """Resolve collisions between bodies and the circular wall."""
+        """Resolve collisions between bodies and the circular wall.
+
+        Any body whose centre has drifted past the legal circle
+        (`radius - body.radius - 2`) is moved straight back onto it along the
+        line from the container centre. If it was still moving outward, the
+        outward part of its velocity is reflected (scaled by `WALL_BOUNCE`)
+        and its sliding along the wall is damped by `WALL_FRICTION`.
+
+        Args:
+            bodies: Every live body; positions and velocities are mutated.
+            emit_events: When true, hard wall hits are reported as
+                `CollisionEvent`s with `body_b=None`.
+
+        Returns:
+            The wall impact events from this pass (possibly empty).
+
+        Beginner note:
+        - A velocity can be split into a part along the wall's `normal`
+          (pointing outward) and a part along the `tangent` (sliding along
+          the wall). `velocity.dot(normal)` measures the first part. Subtracting
+          `(1 + bounce) * outward_speed * normal` cancels the outward motion
+          and then adds back a smaller inward bounce.
+        """
         events: list[CollisionEvent] = []
         for body in bodies:
             offset = body.position - self.center
@@ -376,7 +431,33 @@ class PhysicsWorld:
         pairs: list[tuple[int, int]],
         emit_events: bool,
     ) -> list[CollisionEvent]:
-        """Resolve body-vs-body overlaps and collision impulses for the candidate `pairs`."""
+        """Resolve body-vs-body overlaps and collision impulses for the candidate `pairs`.
+
+        For every candidate pair that actually overlaps, this does two things:
+
+        1. Position correction: push the two circles apart along the line
+           between their centres, sharing the push by inverse mass so the
+           lighter body moves further.
+        2. Velocity impulse: if the bodies are still moving toward each other,
+           apply an equal-and-opposite bounce (`RESTITUTION`) plus a little
+           sideways friction (`FRICTION`).
+
+        Args:
+            bodies: Every live body; positions and velocities are mutated.
+            pairs: Index pairs from `_broad_phase_pairs`, lower index first.
+            emit_events: When true, hard contacts become `CollisionEvent`s.
+
+        Returns:
+            The body-vs-body impact events from this pass (possibly empty).
+
+        Beginner note:
+        - `inv_mass` is `1 / mass`. Working with inverse mass makes the
+          "share the push" rule a simple multiplication, and an infinitely
+          heavy object would just have `inv_mass == 0`.
+        - An *impulse* is an instant change of momentum. Dividing it by the
+          summed inverse masses and multiplying back per body is the standard
+          formula that conserves momentum between the two bodies.
+        """
         events: list[CollisionEvent] = []
         for index, other_index in pairs:
             # Each candidate pair appears only once, lower index first.
