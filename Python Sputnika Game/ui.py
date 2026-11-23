@@ -575,7 +575,7 @@ def menu_texts(
         (assets.small_font, "Drop, bounce, and merge celestial cuties into a Quasar Crown.", SOFT_WHITE, 228),
         (assets.ui_font, "Stack bodies inside the bubble.", WHITE, 286),
         (assets.ui_font, "Touch two matching tiers to evolve them.", WHITE, 332),
-        (assets.ui_font, "Keep old bodies under the red danger line.", WHITE, 378),
+        (assets.ui_font, "Keep old bodies under the danger line.", WHITE, 378),
         (assets.small_font, f"Local high score: {high_score:,}", GLOW, 424),
         (assets.tiny_font, f"Games played: {games_played:,}    Best body: {best_tier_name}", SOFT_WHITE, 458),
     ]

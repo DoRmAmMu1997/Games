@@ -12,6 +12,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
@@ -310,6 +311,33 @@ class MenuBackdropTests(UiTestCase):
         ui.draw_menu_overlay(target, assets, [], 0, 0, "Spark Dust", (-1, -1))
         corner = target.get_at((10, SCREEN_HEIGHT - 10))
         self.assertLess(corner.r, 200)
+
+    def test_menu_does_not_promise_a_red_danger_line(self) -> None:
+        """The menu tip names no colour for the danger line.
+
+        The line starts calm (blue-white) and only walks through yellow and
+        orange to red as danger rises, so calling it "the red danger line"
+        would point new players at a line they cannot see yet.
+        """
+
+        rendered: list[str] = []
+        assets = AssetLibrary()
+        for name in ("title_font", "ui_font", "small_font", "tiny_font"):
+            font = getattr(assets, name)
+
+            def render(text: str, *args: object, _font: pygame.font.Font = font) -> pygame.Surface:
+                """Record each menu line's text, then render it with the real font."""
+
+                rendered.append(text)
+                return _font.render(text, *args)  # type: ignore[arg-type]
+
+            setattr(assets, name, mock.Mock(render=render))
+        ui.menu_texts(assets, 0, 0, "Spark Dust")
+        tips = [text for text in rendered if "danger line" in text]
+        self.assertEqual(len(tips), 1, rendered)
+        self.assertNotIn("red", tips[0].lower())
+        start = ui.danger_gradient(0.0)
+        self.assertFalse(start[0] > 200 and start[1] < 120 and start[2] < 120, start)
 
 
 if __name__ == "__main__":
