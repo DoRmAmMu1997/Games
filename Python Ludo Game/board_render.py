@@ -1,4 +1,20 @@
-"""Procedural drawing of the themed Ludo boards and tokens."""
+"""Procedural drawing of the themed Ludo boards and tokens.
+
+Everything on the board is drawn from shapes (rectangles, polygons, circles),
+so there are no image files. The module has three layers:
+
+- Geometry: ``DisplayLayout`` and the ``_square_display_layout`` /
+  ``_radial_display_layout`` builders turn the engine's track *indices* into
+  screen pixels. The 4-player board is the classic 15x15 cross; the 5- and
+  6-player boards are radial "stars" with one arm per seat.
+- Drawing: ``BoardRenderer`` paints the board, yards, track, home lanes,
+  highlights and pawns for one frame.
+- Hit-testing: ``BoardRenderer.token_pins`` and ``move_at_pos`` work out
+  where each pawn is drawn and which pawn a click selects.
+
+Beginner note: pygame's y axis points *down* the screen, so an angle that
+increases turns clockwise on screen (the opposite of school maths).
+"""
 
 from __future__ import annotations
 
@@ -26,6 +42,10 @@ from settings import (
 Point = tuple[float, float]
 Color = tuple[int, int, int]
 TokenKey = tuple[int, int]
+# Geometry of the classic 15x15 square board: each grid cell is SQUARE_CELL
+# pixels and the board's top-left corner sits at (SQUARE_LEFT, SQUARE_TOP).
+# RADIAL_CENTER is the hub of the 5- and 6-player boards; it sits 40 px higher
+# than settings.BOARD_CENTER so the bottom yard and banner clear the HUD.
 GRID_CELLS = 15
 SQUARE_CELL = 42
 SQUARE_LEFT = 135
@@ -112,7 +132,12 @@ RADIAL_SPECS: dict[int, RadialSpec] = {
 
 @dataclass(frozen=True)
 class DisplayCell:
-    """One visible board cell with a center point and rotated corners."""
+    """One visible board cell with a center point and rotated corners.
+
+    Radial-board cells are squares turned to follow their arm, so they are
+    stored as four corner points (drawn as a polygon) rather than a
+    ``pygame.Rect``, which can only be axis-aligned.
+    """
 
     center: Point
     corners: tuple[Point, Point, Point, Point]
@@ -127,6 +152,21 @@ class DisplayLayout:
     and compact radial boards for five and six players. ``track_positions``
     is index-aligned with the engine's track, so its ordering alone decides
     the on-screen movement direction (clockwise).
+
+    Key attributes:
+        track_positions: Centre pixel of every shared track cell, indexed
+            exactly like the engine's track.
+        home_lanes: Per seat, the centre pixels of its home-lane cells, from
+            the entrance to the finish.
+        yard_positions: Per seat, the four parking spots used by yard tokens.
+        center, radius, cell_size: Overall board centre and size.
+
+    The remaining fields are only filled in for the radial boards:
+    ``track_cells``/``home_lane_cells`` (rotated cell outlines),
+    ``yard_frames`` (yard triangles), ``silhouette`` (the outline of the
+    cream board slab), ``hub_polygon`` (the centre finish area) and
+    ``banner_anchors`` (where each name banner is centred). The square board
+    leaves them empty and draws from grid rectangles instead.
     """
 
     total_players: int
@@ -158,7 +198,12 @@ class BoardRenderer:
     """
 
     def __init__(self, layout) -> None:
-        """Store the immutable layout and choose one shared cell size."""
+        """Store the engine layout and build the matching on-screen layout.
+
+        ``layout`` is the engine's ``board.BoardLayout``. ``cell_radius`` is
+        the half-size of the plain square cells drawn only when a display
+        layout has no rotated cell outlines.
+        """
 
         self.layout = layout
         self.display = _display_layout_for(layout)
@@ -172,7 +217,20 @@ class BoardRenderer:
         legal_moves: list[Move] | None = None,
         animated_positions: dict[tuple[int, int], tuple[float, float]] | None = None,
     ) -> None:
-        """Draw the complete board for the current animation frame."""
+        """Draw the complete board for the current animation frame.
+
+        Args:
+            surface: The pygame surface (usually the window) to paint on.
+            game: The ``LudoGame`` whose tokens and names are shown.
+            fonts: The shell's font table, used for banners and pawn numbers.
+            legal_moves: Moves to highlight: a white ring on each movable pawn
+                and a gold ring on its landing cell.
+            animated_positions: In-flight pixels for pawns still hopping.
+
+        Beginner note: pygame paints like layers of paper, so later calls
+        cover earlier ones. The order below (table, yards, track, lanes,
+        centre, highlights, pawns) keeps pawns on top of everything else.
+        """
 
         legal_moves = legal_moves or []
         animated_positions = animated_positions or {}
@@ -216,6 +274,8 @@ class BoardRenderer:
                 key = (player_index, token_index)
                 base = self.position_for(player_index, token.steps, token_index)
                 bases[key] = base
+                # Group pawns by their rounded cell centre, so pawns on the
+                # same cell (whatever their step counts) share one fan.
                 cells.setdefault((round(base[0]), round(base[1])), []).append(key)
 
         # A pair fans out side by side with its nearest occupied neighbour cell
@@ -399,7 +459,18 @@ class BoardRenderer:
         self._draw_banners(surface, game, fonts)
 
     def _draw_radial_yards(self, surface: pygame.Surface) -> None:
-        """Draw the triangular yard wedges between the radial board arms."""
+        """Draw the triangular yard wedges between the radial board arms.
+
+        Each seat's yard is drawn in three layers: the coloured triangle from
+        ``DisplayLayout.yard_frames`` with a drop shadow and dark border, a
+        smaller white triangle inside it, and finally the four round parking
+        spots from ``yard_positions``.
+
+        Beginner note: the white triangle is the coloured one scaled down
+        toward its centroid (the average of its three corners). Moving every
+        corner 62% of the way from the centroid gives a same-shaped triangle
+        that is 62% as large and stays centred in the wedge.
+        """
 
         for player_index, positions in enumerate(self.display.yard_positions):
             color = self.display.seat_colors[player_index]
@@ -530,6 +601,8 @@ class BoardRenderer:
         shadow = [(x + 0, y + 6) for x, y in (_ipoint(point) for point in hub)]
         theme.draw_shadow_polygon(surface, shadow)
         for seat in range(self.layout.total_players):
+            # Wedge ``seat`` spans hub corners ``seat - 1`` and ``seat``; for
+            # seat 0, Python's ``hub[-1]`` wraps around to the last corner.
             wedge = [
                 center,
                 _ipoint(hub[seat - 1]),
@@ -623,7 +696,12 @@ SQUARE_HOME_LANE: tuple[tuple[int, int], ...] = (
 
 
 def _rotate_cell_cw(cell: tuple[int, int], quarter_turns: int) -> tuple[int, int]:
-    """Rotate a 15x15 grid cell clockwise by 90-degree steps around the center."""
+    """Rotate a 15x15 grid cell clockwise by 90-degree steps around the center.
+
+    Beginner note: one clockwise quarter turn on a y-down grid maps
+    ``(col, row)`` to ``(14 - row, col)``. For example the bottom-left area
+    (small col, large row) moves to the top-left (small col, small row).
+    """
 
     col, row = cell
     for _ in range(quarter_turns % 4):
@@ -632,7 +710,14 @@ def _rotate_cell_cw(cell: tuple[int, int], quarter_turns: int) -> tuple[int, int
 
 
 def _square_display_layout(layout) -> DisplayLayout:
-    """Build classic 15-by-15 Ludo coordinates for the four-player board."""
+    """Build classic 15-by-15 Ludo coordinates for the four-player board.
+
+    The 52-cell track is seat 0's 13-cell quarter (``SQUARE_QUARTER_TRACK``)
+    followed by the same quarter rotated once, twice and three times, so
+    track index ``13 * seat`` is each seat's start square, matching the
+    engine's ``start_indices``. Home lanes are rotated the same way and the
+    board centre is grid cell (7, 7).
+    """
 
     track_cells = [
         _rotate_cell_cw(cell, seat)
@@ -868,13 +953,26 @@ def _radial_banner_anchor(center: Point, yard_angle: float, spec: RadialSpec) ->
 
 
 def _convex_hull(points: list[Point]) -> list[Point]:
-    """Return the convex hull of ``points`` using the monotone chain scan."""
+    """Return the convex hull of ``points`` using the monotone chain scan.
 
+    Beginner note: the convex hull is the outline a rubber band would make
+    if stretched around every point. Andrew's monotone chain sorts the points
+    left to right, then builds the lower edge and the upper edge, dropping
+    any point that would make the outline bend inward. The radial boards use
+    it to outline the cream slab behind all the cells and yards.
+    """
     unique = sorted(set(points))
     if len(unique) <= 2:
         return unique
 
     def cross(o: Point, a: Point, b: Point) -> float:
+        """Return the 2-D cross product of ``o->a`` and ``o->b``.
+
+        It is positive when ``o, a, b`` turn counter-clockwise (in maths
+        orientation), negative for a clockwise turn, and zero when the three
+        points are in a line. The hull scan pops points that do not make a
+        positive turn.
+        """
         return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 
     lower: list[Point] = []

@@ -1,4 +1,22 @@
-"""Program entry point, Pygame window, persistence, input, and AI driver."""
+"""Program entry point, Pygame window, persistence, input, and AI driver.
+
+This is the "shell" around the rules engine. ``LudoApp`` opens the window,
+turns mouse clicks and key presses into calls on ``LudoGame``, paces the
+computer players, animates pawns hopping between cells, and saves the game
+and lifetime stats under ``%APPDATA%\\Ludo``. It never decides a rule itself.
+
+The app has three screens, held in ``LudoApp.screen``: ``"setup"`` (choose
+players and house rules), ``"playing"`` and ``"over"`` (final ranking).
+
+Beginner note: everything is drawn onto a fixed 1280x900 "logical" canvas and
+then scaled to the real window. Layout constants below are therefore in
+logical pixels, and mouse positions are converted back into logical pixels
+before they are compared with buttons.
+
+Run ``python main.py`` to play. With the environment variable
+``LUDO_AUTOTEST=1`` set, it instead plays a short hidden all-AI game and
+exits, which is used as a smoke test.
+"""
 
 from __future__ import annotations
 
@@ -60,6 +78,9 @@ from settings import (
     seat_name,
 )
 
+# ---------------------------------------------------------------------------
+# Screen layout, in logical pixels. Setup screen controls first.
+# ---------------------------------------------------------------------------
 SETUP_CONTROL_X = PANEL_X + 24
 SETUP_CONTROL_WIDTH = 246
 SETUP_OPTION_LABEL_START_Y = 112
@@ -173,7 +194,13 @@ PREVIEW_SIZE = 216
 
 @dataclass(frozen=True)
 class SetupOptionRow:
-    """One setup option row with shared label, value, and button geometry."""
+    """One setup option row with shared label, value, and button geometry.
+
+    Each top setup row (Total Players, Human Players, AI Profile) has a label
+    line at ``label_y`` and, below it at ``control_y``, a left button, the
+    current value centred at ``value_center``, and a right button. Building
+    all three rows from one helper keeps them aligned.
+    """
 
     label_y: int
     control_y: int
@@ -183,7 +210,11 @@ class SetupOptionRow:
 
 
 def _setup_option_row(index: int) -> SetupOptionRow:
-    """Return aligned geometry for one top setup option row."""
+    """Return aligned geometry for one top setup option row.
+
+    ``index`` 0, 1 and 2 are the Total Players, Human Players and AI Profile
+    rows; each row sits ``SETUP_OPTION_STEP`` pixels below the previous one.
+    """
 
     label_y = SETUP_OPTION_LABEL_START_Y + index * SETUP_OPTION_STEP
     control_y = label_y + SETUP_OPTION_CONTROL_OFFSET_Y
@@ -232,7 +263,11 @@ def _fit_window_size(
 
 
 def _logical_to_window_point(pos: tuple[int, int], window_size: tuple[int, int]) -> tuple[int, int]:
-    """Map a logical 1280x900 point into the scaled OS window."""
+    """Map a logical 1280x900 point into the scaled OS window.
+
+    This is the inverse of ``_window_to_logical_point``; tests use it to
+    click a logical position on a scaled window.
+    """
 
     width, height = max(1, window_size[0]), max(1, window_size[1])
     return (
@@ -242,7 +277,12 @@ def _logical_to_window_point(pos: tuple[int, int], window_size: tuple[int, int])
 
 
 def _window_to_logical_point(pos: tuple[int, int], window_size: tuple[int, int]) -> tuple[int, int]:
-    """Map a scaled OS-window point back into logical game coordinates."""
+    """Map a scaled OS-window point back into logical game coordinates.
+
+    For example, on a window drawn at half size a click at (100, 50) becomes
+    logical (200, 100). The result is clamped onto the canvas, so a click on
+    the very edge of the window can never land outside it.
+    """
 
     width, height = max(1, window_size[0]), max(1, window_size[1])
     logical_x = int(pos[0] * SCREEN_WIDTH / width)
@@ -254,7 +294,12 @@ def _window_to_logical_point(pos: tuple[int, int], window_size: tuple[int, int])
 
 
 def _desktop_work_area_size() -> tuple[int, int]:
-    """Return usable desktop size, preferring Windows' taskbar-aware value."""
+    """Return usable desktop size, preferring Windows' taskbar-aware value.
+
+    On Windows, ``SystemParametersInfoW(SPI_GETWORKAREA = 0x0030)`` reports the
+    desktop minus the taskbar. Everywhere else, or if that call fails, the
+    full screen size from pygame is used.
+    """
 
     if sys.platform == "win32":
         try:
@@ -272,7 +317,14 @@ def _desktop_work_area_size() -> tuple[int, int]:
 
 
 def _window_chrome_size() -> tuple[int, int]:
-    """Estimate non-client window chrome so the outer window stays visible."""
+    """Estimate non-client window chrome so the outer window stays visible.
+
+    Beginner note: "chrome" is the title bar and borders the operating
+    system adds around the area pygame draws in. On Windows the sizes come
+    from ``GetSystemMetrics``: 32/33 are the resizable frame width/height,
+    92 is the extra padded border, and 4 is the caption (title bar) height.
+    Other platforms report no chrome.
+    """
 
     if sys.platform == "win32":
         try:
@@ -339,7 +391,19 @@ def _stat_count(value: Any, field: str) -> int:
 
 
 def load_stats() -> dict:
-    """Read lifetime stats, filling in defaults and repairing malformed fields."""
+    """Read lifetime stats, filling in defaults and repairing malformed fields.
+
+    Returns a dict with ``games``, ``human_wins``, ``ai_wins``,
+    ``turn_total`` and ``by_player_count`` (games per board size, keyed by
+    the strings "4", "5" and "6", because JSON object keys are always
+    strings).
+
+    A missing or unreadable file simply gives the all-zero defaults. Values
+    read from the file are merged over the defaults, so older files that
+    lack a field still work, and every counter is passed through
+    ``_stat_count`` so one damaged value is reset to 0 instead of crashing
+    the game-over screen.
+    """
 
     defaults: dict[str, Any] = {
         "games": 0,
@@ -370,7 +434,11 @@ def load_stats() -> dict:
 
 
 def save_stats(stats: dict) -> None:
-    """Persist lifetime stats under ``%APPDATA%``."""
+    """Persist lifetime stats under ``%APPDATA%``.
+
+    The write goes through ``_atomic_write``, so a failure is logged rather
+    than raised.
+    """
 
     _atomic_write(STATS_PATH, stats)
 
@@ -382,7 +450,12 @@ def save_game(game: LudoGame) -> None:
 
 
 def load_saved_game() -> LudoGame | None:
-    """Load the saved game, returning ``None`` if there is no usable save."""
+    """Load the saved game, returning ``None`` if there is no usable save.
+
+    A missing file and every kind of damaged file (bad JSON, wrong types,
+    impossible values rejected by ``LudoGame.from_dict``) all return
+    ``None``, so the setup screen just stays put instead of crashing.
+    """
 
     try:
         return LudoGame.from_dict(json.loads(SAVEGAME_PATH.read_text(encoding="utf-8")))
@@ -414,6 +487,22 @@ class LudoApp:
     ``LudoGame`` owns the rules. ``LudoApp`` owns everything a player sees or
     clicks: setup controls, keyboard shortcuts, drawing order, save/load calls,
     and the paced AI loop.
+
+    Key attributes:
+        screen: ``"setup"``, ``"playing"`` or ``"over"``; decides what is
+            drawn and which buttons exist.
+        game / renderer: The active ``LudoGame`` and its ``BoardRenderer``,
+            or ``None`` before the first game starts.
+        window: The fixed-size logical canvas everything is drawn on;
+            ``screen_surface`` is the real (possibly smaller) OS window.
+        visible_moves: The human player's legal moves for the current roll,
+            shared by highlights, move buttons, number keys and clicks.
+        total_players, human_count, ai_profile_index, rule_*: The setup
+            screen's current choices.
+        token_pixels / token_steps / token_waypoints: Pawn animation state
+            (see ``_update_token_pixels``).
+        ai_timer: Milliseconds since the last AI action, used to pace AI turns.
+        stats: Lifetime stats loaded from disk.
     """
 
     def __init__(self, persist: bool = True) -> None:
@@ -429,6 +518,8 @@ class LudoApp:
         self.screen_surface = pygame.display.set_mode(self.window_size)
         pygame.display.set_caption(WINDOW_TITLE)
         pygame.display.set_icon(_load_icon())
+        # The logical canvas. ``convert()`` stores it in the window's pixel
+        # format, which makes copying it to the screen each frame faster.
         self.window = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT)).convert()
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
@@ -467,7 +558,17 @@ class LudoApp:
         self.saved_turns_taken: int | None = None
 
     def setup_buttons(self) -> list[ui.Button]:
-        """Build fresh button objects for the setup screen."""
+        """Build fresh button objects for the setup screen.
+
+        The list is rebuilt every frame instead of being stored, so toggle
+        labels ("Blockades: On") and the Resume button's enabled state always
+        reflect the current choices and whether a save file exists.
+
+        It contains the -/+ steppers for total and human players, the </>
+        stepper for the AI profile, the four house-rule toggles, Start Game,
+        Resume Saved Game (disabled without a save) and Quit. Each button's
+        ``key`` is handled by ``_on_setup_button``.
+        """
 
         total_row = _setup_option_row(0)
         human_row = _setup_option_row(1)
@@ -506,7 +607,17 @@ class LudoApp:
         ]
 
     def run(self, max_frames: int | None = None) -> None:
-        """Run the event loop until the app quits or a test frame limit hits."""
+        """Run the event loop until the app quits or a test frame limit hits.
+
+        Beginner note: a game loop repeats the same four steps about ``FPS``
+        times a second: handle input events, update the state (timers, AI,
+        animation), draw the next picture off-screen, then ``flip`` it onto
+        the display. ``clock.tick(FPS)`` sleeps just long enough to keep that
+        pace and remembers how long the frame took.
+
+        ``max_frames`` is set only by the autotest. It also switches on
+        autotest mode, in which the AI acts every frame without its delay.
+        """
 
         frames = 0
         autotest = max_frames is not None
@@ -531,7 +642,11 @@ class LudoApp:
                 break
 
     def _present(self) -> None:
-        """Scale the logical canvas onto the actual OS window."""
+        """Scale the logical canvas onto the actual OS window.
+
+        When the window is full size the canvas is copied as-is; otherwise
+        ``smoothscale`` shrinks it with filtering so text stays readable.
+        """
 
         if self.window_size == (SCREEN_WIDTH, SCREEN_HEIGHT):
             self.screen_surface.blit(self.window, (0, 0))
@@ -549,7 +664,13 @@ class LudoApp:
         return _window_to_logical_point(pos, self.window_size)
 
     def start_game(self, game: LudoGame) -> None:
-        """Switch from setup into a playable game."""
+        """Switch from setup into a playable game.
+
+        Used both for new games and for resumed saves. It builds the matching
+        renderer, clears all animation and AI timers (so pawns snap to their
+        cells on the first frame), and remembers the current turn count so
+        the next autosave fires only after a turn really ends.
+        """
 
         self.game = game
         self.renderer = BoardRenderer(game.layout)
@@ -565,7 +686,17 @@ class LudoApp:
         self.message = "Roll a 6 to bring a token out."
 
     def _handle_click(self, pos: tuple[int, int]) -> None:
-        """Route one left-click to name fields, tokens, or buttons."""
+        """Route one left-click to name fields, tokens, or buttons.
+
+        ``pos`` is already in logical canvas coordinates. The checks run in
+        priority order and the first match wins:
+
+        1. On the setup screen, a click in a human name field focuses it for
+           typing; a click anywhere else removes that focus.
+        2. Any enabled button under the click runs its action.
+        3. During a human player's move choice, a click near a highlighted
+           pawn applies that pawn's move (``BoardRenderer.move_at_pos``).
+        """
 
         if self.screen == "setup":
             for index in range(self.human_count):
@@ -595,7 +726,12 @@ class LudoApp:
                 self._apply_move(move)
 
     def _handle_key(self, event: pygame.event.Event) -> None:
-        """Route keyboard shortcuts for setup typing and human turns."""
+        """Route keyboard shortcuts for setup typing and human turns.
+
+        Escape saves and returns to setup during a game, and quits from any
+        other screen. While a setup name field has focus, keys type into it.
+        On a human turn, R rolls and 1-4 pick the matching move button.
+        """
 
         if event.key == pygame.K_ESCAPE:
             if self.screen == "playing" and self.game:
@@ -616,7 +752,12 @@ class LudoApp:
                     self._apply_move(self.visible_moves[index])
 
     def _type_name(self, event: pygame.event.Event) -> None:
-        """Edit the active setup-screen name field."""
+        """Edit the active setup-screen name field.
+
+        Backspace deletes a character, Enter or Tab moves focus to the next
+        human's field (wrapping around), and any printable character is
+        added if the name would still fit inside its field.
+        """
 
         index = self.active_field
         if index is None:
@@ -646,7 +787,16 @@ class LudoApp:
                 self.running = False
 
     def _on_setup_button(self, key: str) -> None:
-        """Handle all setup-screen controls."""
+        """Handle all setup-screen controls.
+
+        Steppers are clamped rather than wrapped: total players stays within
+        ``MIN_PLAYERS``..``MAX_PLAYERS`` and human players within 1..total.
+        Lowering the total also lowers the human count if needed, so there
+        are never more humans than seats. The AI profile selector does wrap
+        around its list. Toggles flip one house rule. ``"resume"`` loads the
+        save (staying on setup if it is unusable) and ``"start"`` builds a
+        new game from the current choices.
+        """
 
         if key == "total_players_prev":
             self.total_players = max(MIN_PLAYERS, self.total_players - 1)
@@ -680,7 +830,12 @@ class LudoApp:
             self.running = False
 
     def _on_play_button(self, key: str) -> None:
-        """Handle buttons shown during an active game."""
+        """Handle buttons shown during an active game.
+
+        ``"move_<n>"`` keys carry the index into ``visible_moves`` after the
+        underscore. Save saves and returns to setup; New returns to setup
+        without saving (the last autosave stays on disk).
+        """
 
         if self.game is None:
             return
@@ -697,7 +852,13 @@ class LudoApp:
             self.screen = "setup"
 
     def _start_new_game(self) -> None:
-        """Create a new rules engine from the setup-screen choices."""
+        """Create a new rules engine from the setup-screen choices.
+
+        The first ``human_count`` seats are humans (a blank name falls back to
+        "Player N"); the rest are AI seats named after their colour. The new
+        game is saved straight away so it can be resumed even before the
+        first turn ends.
+        """
 
         rules = LudoRules(
             total_players=self.total_players,
@@ -722,7 +883,12 @@ class LudoApp:
         self._save_game()
 
     def _roll_for_human(self) -> None:
-        """Roll for the current human player and handle no-move rolls."""
+        """Roll for the current human player and handle no-move rolls.
+
+        Starts the short dice animation. If the roll leaves no legal move,
+        the engine is told at once (``note_no_move``) so the turn passes (or a
+        6 grants another roll) without the player having to click anything.
+        """
 
         if self.game is None or self.game.awaiting != "pre_roll":
             return
@@ -736,7 +902,11 @@ class LudoApp:
         self._save_if_turn_completed()
 
     def _apply_move(self, move) -> None:
-        """Apply a selected move and surface the result message."""
+        """Apply a selected move and surface the result message.
+
+        ``move`` must come from the engine's current legal moves (the visible
+        move list), otherwise ``LudoGame.apply_move`` raises ``ValueError``.
+        """
 
         if self.game is None:
             return
@@ -761,7 +931,18 @@ class LudoApp:
             self.visible_moves = self.game.legal_moves(self.game.last_roll)
 
     def _update(self, autotest: bool) -> None:
-        """Advance animations, game-over bookkeeping, and AI turns."""
+        """Advance animations, game-over bookkeeping, and AI turns.
+
+        Called once per frame. In order it: counts down the dice animation,
+        moves pawns along their hop paths, switches to the game-over screen
+        (recording stats once) when the engine says the game ended, and, if
+        an AI seat is to play, waits ``AI_TURN_DELAY_MS`` between AI actions
+        so humans can follow them. One AI action is a roll plus, when
+        possible, the chosen move. ``autotest`` skips the delay.
+
+        ``clock.get_time()`` is the length of the last frame in
+        milliseconds, so timers count real time whatever the frame rate.
+        """
 
         elapsed = self.clock.get_time()
         if self.dice_anim_remaining > 0:
@@ -788,7 +969,13 @@ class LudoApp:
         self._save_if_turn_completed()
 
     def _perform_ai_step(self) -> None:
-        """Let the current AI player roll or choose one move."""
+        """Let the current AI player roll or choose one move.
+
+        When the AI is waiting to roll, it rolls and then, in the same call,
+        picks a move with ``ai.choose_move`` (or reports that no move
+        exists). When it is already waiting for a move, only the move is
+        made.
+        """
 
         if self.game is None:
             return
@@ -837,7 +1024,22 @@ class LudoApp:
         return [self._token_position(player_index, new_steps, token_index)]
 
     def _update_token_pixels(self, elapsed_ms: int) -> None:
-        """Advance drawn token positions along their pending waypoints."""
+        """Advance drawn token positions along their pending waypoints.
+
+        The engine moves tokens instantly; this method only eases the drawn
+        pixels toward the engine's truth. For every token it:
+
+        1. Snaps the token straight onto its cell the first time it is seen.
+        2. Notices when the engine's step count changed since last frame and
+           queues the cells to hop through (``_token_waypoints``).
+        3. Moves the pixel along that queue by ``TOKEN_HOP_SPEED`` pixels per
+           second, using the time ``elapsed_ms`` since the last frame.
+        4. With nothing queued, glides any leftover gap to the token's cell.
+
+        Beginner note: moving a fixed *distance budget* per frame (speed
+        times elapsed time) rather than a fixed number of pixels keeps the
+        animation the same speed on fast and slow computers.
+        """
 
         if self.game is None:
             return
@@ -874,6 +1076,8 @@ class LudoApp:
                         queue.pop(0)
                         remaining -= length
                     else:
+                        # Not enough budget left to reach the next cell: move
+                        # part of the way along the unit vector (dx, dy) / length.
                         current = (current[0] + dx / length * remaining, current[1] + dy / length * remaining)
                         remaining = 0
                 if not queue and current != target and remaining > 0:
@@ -889,7 +1093,13 @@ class LudoApp:
                 self.token_pixels[key] = current
 
     def _save_if_turn_completed(self) -> None:
-        """Autosave after completed turns, not after every animation frame."""
+        """Autosave after completed turns, not after every animation frame.
+
+        ``turns_taken`` only grows when the turn passes to another player, so
+        comparing it with the value at the last save writes at most once per
+        turn. Finished games are not saved; their save file is deleted by
+        ``_record_finished_game_once`` instead.
+        """
 
         if self.game is None or self.game.phase == "game_over":
             return
@@ -904,7 +1114,13 @@ class LudoApp:
             save_game(self.game)
 
     def _record_finished_game_once(self) -> None:
-        """Add the finished game to lifetime stats exactly once."""
+        """Add the finished game to lifetime stats exactly once.
+
+        Counts the game, a human or AI win, the turns taken and the board
+        size, then (when persisting) writes the stats and deletes the save,
+        since a finished game cannot be resumed. ``stats_recorded`` guards
+        against counting the same game twice.
+        """
 
         if self.stats_recorded or self.game is None or self.game.winner is None:
             return
@@ -937,7 +1153,16 @@ class LudoApp:
             self._draw_game_over()
 
     def _draw_setup(self) -> None:
-        """Draw the setup screen, including preview boards and controls."""
+        """Draw the setup screen, including preview boards and controls.
+
+        The left side shows the "LUDO" title, the intro text on a
+        see-through plate, and the three board previews with the current
+        choice outlined in gold. The right-hand panel shows the option rows
+        with their values, the "Advanced Rules" and "Human Names" headers,
+        one name field per human (the focused one outlined in its seat
+        colour), and finally all setup buttons, drawn last so they sit on
+        top. The button list is rebuilt here so it matches what is drawn.
+        """
 
         self.buttons = self.setup_buttons()
         mouse = self._logical_mouse_pos()
@@ -999,7 +1224,12 @@ class LudoApp:
         ui.draw_text(self.window, self.fonts["header"], value, row.value_center, WHITE, center=True)
 
     def _board_preview(self, total_players: int) -> pygame.Surface:
-        """Return a cached true-to-life thumbnail of one board shape."""
+        """Return a cached true-to-life thumbnail of one board shape.
+
+        Beginner note: ``subsurface`` is a window onto part of a surface that
+        shares its pixels; ``copy()`` makes it an independent image before it
+        is scaled down to ``PREVIEW_SIZE``.
+        """
 
         cached = self.preview_cache.get(total_players)
         if cached is None:
@@ -1052,13 +1282,22 @@ class LudoApp:
             self._draw_play_button(button, mouse)
 
     def _draw_world_hud(self) -> None:
-        """Draw compact gameplay controls over the wallpaper, not in a sidebar."""
+        """Draw compact gameplay controls over the wallpaper, not in a sidebar.
+
+        This covers the dice tray at the bottom (die, current player's
+        banner, and a one-line prompt), the player roster on the right, and
+        the "Table Log" card with the newest four engine messages, each
+        coloured by ``ui.status_color`` and shortened to fit. While the dice
+        animation runs, the die shows a changing face instead of the roll.
+        """
 
         if self.game is None:
             return
         current = self.game.current_player
         die_value = self.game.last_roll
         if self.dice_anim_remaining > 0:
+            # Change face every 70 ms while the roll animation runs; this is
+            # cosmetic only, the real roll is already in ``last_roll``.
             die_value = ((pygame.time.get_ticks() // 70) % 6) + 1
 
         # A single lower tray carries the current player and die, similar to a
@@ -1098,7 +1337,13 @@ class LudoApp:
         return "Roll the die."
 
     def _draw_player_roster(self) -> None:
-        """Draw compact floating player chips instead of a heavy sidebar."""
+        """Draw compact floating player chips instead of a heavy sidebar.
+
+        One chip per seat, in turn order, with a colour dot, the name, a
+        "Human" or AI-profile tag, and a line with tokens home and captures.
+        The current player's chip is outlined in their colour. Names are
+        ellipsized by rendered width, so long names never overlap the tag.
+        """
 
         if self.game is None:
             return
@@ -1130,7 +1375,12 @@ class LudoApp:
             ui.draw_text(self.window, tiny, stats, (text_x, stats_y), SOFT)
 
     def _draw_play_button(self, button: ui.Button, mouse: tuple[int, int]) -> None:
-        """Draw gameplay buttons with the new table-HUD treatment."""
+        """Draw gameplay buttons with the new table-HUD treatment.
+
+        Save and New are drawn as rounded pills; Roll and the move buttons are
+        dark cards edged in the current player's colour (Roll in gold) that
+        fill with that colour while hovered.
+        """
 
         hovered = button.contains(mouse)
         current_color = self.game.current_player.color if self.game is not None else GOLD
@@ -1151,7 +1401,13 @@ class LudoApp:
         ui.draw_text(self.window, self.fonts["button"], button.text, button.rect.center, text_color, center=True)
 
     def _buttons_for_screen(self) -> list[ui.Button]:
-        """Return the buttons that are valid on the current screen."""
+        """Return the buttons that are valid on the current screen.
+
+        During play the buttons follow the engine state: a human waiting to
+        roll gets Roll, a human choosing a move gets up to four move buttons
+        ("1: Token 2 -> 14", where 14 is the token's new step count), and
+        Save and New are always present. AI turns show only Save and New.
+        """
 
         if self.screen == "setup":
             return self.setup_buttons()
@@ -1189,7 +1445,15 @@ class LudoApp:
         return plaque, text
 
     def _draw_game_over(self) -> None:
-        """Draw final rankings and lifetime stats."""
+        """Draw final rankings and lifetime stats.
+
+        Shows "Game Over" with the winner's name on a plaque in their seat
+        colour, the "Final Ranking" card (from ``game.ranking``, with tokens
+        home and captures per player), the "Lifetime Stats" card (games,
+        human and AI wins, average turns per game, and games per board
+        size), and the New Game and Quit buttons. If no game exists it falls
+        back to the setup screen.
+        """
 
         if self.game is None:
             self.screen = "setup"
@@ -1224,6 +1488,7 @@ class LudoApp:
         theme.draw_shadowed_rect(self.window, stats, theme.HUD_DARK, border=PANEL_EDGE, radius=14)
         title_pos = (stats.x + OVER_CARD_PADDING, stats.y + OVER_CARD_PADDING)
         ui.draw_text(self.window, self.fonts["header"], "Lifetime Stats", title_pos, WHITE)
+        # ``max(1, ...)`` avoids dividing by zero when no game is recorded.
         games = max(1, int(self.stats.get("games", 0)))
         average_turns = int(self.stats.get("turn_total", 0)) / games
         by_count = {**{"4": 0, "5": 0, "6": 0}, **self.stats.get("by_player_count", {})}
@@ -1321,7 +1586,11 @@ def _make_icon() -> pygame.Surface:
 
 
 def main() -> None:
-    """Initialize pygame, run the app, and always shut pygame down."""
+    """Initialize pygame, run the app, and always shut pygame down.
+
+    The ``try``/``finally`` makes sure ``pygame.quit()`` runs even if the app
+    raises, so the window is always closed cleanly.
+    """
 
     pygame.init()
     try:

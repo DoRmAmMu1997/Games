@@ -1,4 +1,11 @@
-"""Seeded all-AI Ludo simulations for tuning heuristic profiles."""
+"""Seeded all-AI Ludo simulations for tuning heuristic profiles.
+
+Run it from this folder, for example ``python simulation.py --games 20
+--players 6 --profile defensive``. Every seat is a computer player, nothing is
+drawn, and each game is seeded, so the same command always prints the same
+results. That makes it easy to see whether a change to ``ai.AI_PROFILES`` or
+to the rules actually helps.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +28,16 @@ def run_ai_game(
 
     ``rules`` overrides the classic defaults (and then decides the player
     count); without it the game uses ``LudoRules(total_players)``.
+
+    The loop follows the engine's turn state machine exactly as the window
+    does: roll while ``awaiting`` is ``"pre_roll"``, then let the AI pick a
+    move (or report that none exists). ``max_actions`` is a safety cap so a
+    bug can never loop forever; ``"completed"`` in the result says whether
+    the game really ended.
+
+    Returns:
+        A dict with ``completed``, ``actions``, ``turns``, ``rolls``,
+        ``winner``, total ``captures`` and the final ``ranking``.
     """
 
     if rules is None:
@@ -31,8 +48,10 @@ def run_ai_game(
     while game.phase != "game_over" and actions < max_actions:
         actions += 1
         if game.awaiting == "pre_roll":
+            # Rolling with the game's own seeded RNG keeps runs reproducible.
             forfeited = game.record_roll(game.rng.randint(1, 6))
             if forfeited:
+                # A third 6 already passed the turn; start the next action.
                 continue
         if game.awaiting == "choose_move" and game.last_roll is not None:
             move = ai.choose_move(game, profile_key, game.last_roll)
@@ -82,7 +101,18 @@ def rules_from_args(args: argparse.Namespace) -> LudoRules:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Parse command-line options and print aggregate AI results."""
+    """Parse command-line options and print aggregate AI results.
+
+    Args:
+        argv: Command-line arguments without the program name. ``None`` means
+            "use ``sys.argv``", which is what a normal run does; tests pass a
+            list instead.
+
+    Plays ``--games`` games with seeds ``--seed``, ``--seed + 1``, and so on,
+    prints one line of metrics per game, then prints the number of completed
+    games, the average turns and captures per game, and how often each seat
+    won.
+    """
 
     args = build_parser().parse_args(argv)
     rules = rules_from_args(args)

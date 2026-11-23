@@ -1,4 +1,11 @@
-"""Small data models shared by the Ludo engine, AI, and UI."""
+"""Small data models shared by the Ludo engine, AI, and UI.
+
+Beginner note: a ``@dataclass`` writes the boring parts of a class for you
+(``__init__``, ``__repr__`` and ``==``) from the annotated fields. A
+``frozen=True`` dataclass cannot be changed after creation and can be used in
+sets or compared safely, which is why ``Move`` is frozen: the engine checks
+``move in legal_moves`` by value.
+"""
 
 from __future__ import annotations
 
@@ -59,6 +66,9 @@ class PlayerState:
     name: str
     is_human: bool
     color: tuple[int, int, int]
+    # ``default_factory`` builds a fresh list for every player. Dataclasses
+    # reject a plain ``= [...]`` default, because that one list would be
+    # shared by every player.
     tokens: list[TokenState] = field(
         default_factory=lambda: [TokenState() for _ in range(TOKENS_PER_PLAYER)]
     )
@@ -72,7 +82,11 @@ class PlayerState:
         return sum(1 for token in self.tokens if token.steps == finish_steps)
 
     def progress_score(self, finish_steps: int) -> int:
-        """Return a simple total-progress score for ranking unfinished players."""
+        """Return a simple total-progress score for ranking unfinished players.
+
+        Each token contributes its steps, clamped to ``0 .. finish_steps``, so
+        a yard token (``-1``) adds nothing rather than subtracting.
+        """
 
         return sum(max(0, min(token.steps, finish_steps)) for token in self.tokens)
 
@@ -111,6 +125,11 @@ class Move:
     ``from_steps`` and ``to_steps`` are relative to the moving player's own
     start square. ``landing_index`` is the shared board index, or ``None`` when
     the move lands in the private home lane.
+
+    ``enters_board`` is True for a 6 that brings a token out of the yard
+    (``from_steps`` -1, ``to_steps`` 0), and ``reaches_home`` is True when
+    ``to_steps`` is the finish step. Only ``LudoGame.legal_moves`` should
+    create moves; ``apply_move`` rejects any move not in that list.
     """
 
     player_index: int
@@ -129,6 +148,11 @@ class MoveResult:
 
     The UI uses this to decide what to announce and whether a player earned a
     bonus turn. Tests also inspect it so rule regressions are easy to spot.
+
+    ``captured`` lists the ``(player_index, token_index)`` of every token sent
+    back to its yard, ``capture`` is simply ``bool(captured)``, ``home`` is
+    True when the moved token finished, and ``message`` is the log line the
+    move produced.
     """
 
     move: Move

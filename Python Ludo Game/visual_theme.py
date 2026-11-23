@@ -36,6 +36,9 @@ GLOW_MAX_ALPHA = 55
 GLOW_FADE = 0.45
 GLOW_STEP = 2
 
+# Module-level caches: building the wallpaper or a shadow layer is slow
+# compared with copying (blitting) a finished one, and both are redrawn every
+# frame, so each is built once and reused.
 _WALLPAPER_CACHE: dict[tuple[int, int], pygame.Surface] = {}
 _SHADOW_CACHE: dict[tuple, pygame.Surface] = {}
 
@@ -87,7 +90,11 @@ def readable_on(fill: tuple[int, int, int]) -> tuple[int, int, int]:
 
 
 def draw_ludo_wallpaper(surface: pygame.Surface) -> None:
-    """Fill ``surface`` with a blue patterned Ludo-game background."""
+    """Fill ``surface`` with a blue patterned Ludo-game background.
+
+    The wallpaper is built once per window size and then simply copied onto
+    the surface each frame.
+    """
 
     size = surface.get_size()
     cached = _WALLPAPER_CACHE.get(size)
@@ -160,6 +167,9 @@ def draw_translucent_rect(
     see ``draw_shadow_rect`` for why the shape goes through a layer.
     """
 
+    # The layer depends only on the shape, not on where it is drawn, so one
+    # cached layer serves every rectangle of this size. Only a newly created
+    # (blank) layer needs the shape painted onto it.
     key = ("rect", rect.size, radius, color)
     fresh = key not in _SHADOW_CACHE
     layer = _shadow_layer(key, rect.size)
@@ -175,6 +185,8 @@ def draw_shadow_polygon(
 ) -> None:
     """Blend a translucent polygon shadow onto ``surface`` (see ``draw_shadow_rect``)."""
 
+    # Shift the points so the polygon's bounding box starts at (0, 0) on the
+    # layer; the layer is then blitted back at (left, top).
     left = min(x for x, _ in points)
     top = min(y for _, y in points)
     local = tuple((x - left, y - top) for x, y in points)
@@ -203,7 +215,13 @@ def draw_shadow_ellipse(
 
 
 def _shadow_layer(key: tuple, size: tuple[int, int]) -> pygame.Surface:
-    """Return the cached transparent layer for ``key``, creating a blank one if needed."""
+    """Return the cached transparent layer for ``key``, creating a blank one if needed.
+
+    Beginner note: ``pygame.SRCALPHA`` gives the surface a per-pixel alpha
+    channel, so it starts fully transparent and keeps the alpha of whatever
+    is drawn on it; blitting it then blends with what is underneath. When the
+    cache reaches ``SHADOW_CACHE_LIMIT`` it is simply emptied and refilled.
+    """
 
     layer = _SHADOW_CACHE.get(key)
     if layer is None:
@@ -222,7 +240,12 @@ def draw_star(
     *,
     fill: tuple[int, int, int] = WHITE,
 ) -> None:
-    """Draw a safe-square star with a white fill and dark outline."""
+    """Draw a safe-square star with a white fill and dark outline.
+
+    The five-pointed star is a 10-corner polygon that alternates between the
+    full ``radius`` (the points) and 45% of it (the inner notches), stepping
+    36 degrees (``pi / 5``) per corner and starting straight up.
+    """
 
     points: list[tuple[int, int]] = []
     cx, cy = center
@@ -242,7 +265,12 @@ def draw_arrow(
     *,
     length: int = 24,
 ) -> None:
-    """Draw a small direction arrow on a start lane."""
+    """Draw a small direction arrow on a start lane.
+
+    ``angle`` is the direction to point in, in radians on the y-down screen.
+    The shaft runs through ``center``; the two barbs sit 9 px back from the
+    tip and 7 px to either side (``angle +/- pi / 2`` is sideways).
+    """
 
     cx, cy = center
     tip = (cx + math.cos(angle) * length / 2, cy + math.sin(angle) * length / 2)
@@ -287,7 +315,14 @@ def draw_token_pin(
     label: str | None = None,
     fonts: dict[str, pygame.font.Font] | None = None,
 ) -> None:
-    """Draw one glossy pawn shaped like a map pin."""
+    """Draw one glossy pawn shaped like a map pin.
+
+    Layers, back to front: an oval shadow, a darker downward pointer, a white
+    rim, a darker ring, the main coloured head (raised 2 px), a small pale
+    highlight toward the top-left that gives the gloss, a dark outline, and
+    finally the optional ``label`` (the pawn number) in whichever of black
+    or white reads best on ``color``.
+    """
 
     cx, cy = int(center[0]), int(center[1])
     draw_shadow_ellipse(surface, pygame.Rect(cx - radius, cy + radius // 2, radius * 2, radius))
@@ -367,11 +402,15 @@ def _build_wallpaper(size: tuple[int, int]) -> pygame.Surface:
 
     width, height = size
     wallpaper = pygame.Surface(size)
+    # Vertical gradient: one horizontal line per pixel row, blended from the
+    # light blue at the top toward the deep blue at the bottom.
     for y in range(height):
         amount = y / max(1, height - 1)
         color = _blend(WALLPAPER_BLUE, WALLPAPER_DEEP, amount * 0.88)
         pygame.draw.line(wallpaper, color, (0, y), (width, y))
 
+    # Faint mini-boards tiled in a checkerboard of two tints; the ranges start
+    # off-screen so partial stamps also fill the edges.
     overlay = pygame.Surface(size, pygame.SRCALPHA)
     for x in range(-180, width + 220, 240):
         for y in range(-130, height + 180, 190):
@@ -416,7 +455,12 @@ def _draw_faint_board_stamp(surface: pygame.Surface, pos: tuple[int, int], color
 
 
 def _draw_pips(surface: pygame.Surface, rect: pygame.Rect, value: int) -> None:
-    """Draw standard die pips inside ``rect``."""
+    """Draw standard die pips inside ``rect``.
+
+    Each pip is listed as a (column, row) offset from the centre in quarter
+    widths, so -1, 0 and 1 are the three pip positions across the face.
+    Out-of-range values are clamped to 1..6 rather than crashing.
+    """
 
     offsets = {
         1: [(0, 0)],

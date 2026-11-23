@@ -1,4 +1,9 @@
-"""Pygame UI helpers for buttons, text labels, and log colors."""
+"""Pygame UI helpers for buttons, text labels, and log colors.
+
+These helpers know nothing about Ludo rules. ``main.py`` builds ``Button``
+objects each frame from the game state and uses the text helpers to draw
+labels that always fit their space.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +34,13 @@ class Button:
     The ``key`` is the value the app receives when the button is clicked. That
     lets drawing code stay generic while ``main.py`` decides what each button
     actually does.
+
+    Attributes:
+        rect: Where the button sits, in window pixels.
+        text: The label; "-", "+", "<" and ">" are drawn as shapes instead.
+        key: The action name ``main.py`` receives on a click.
+        enabled: Disabled buttons are drawn muted and ignore clicks.
+        accent: Fill colour while the mouse hovers over the button.
     """
 
     rect: pygame.Rect
@@ -97,7 +109,13 @@ def draw_stepper_symbol(
 
 
 def make_fonts() -> dict[str, pygame.font.Font]:
-    """Create the small set of fonts used by the whole app."""
+    """Create the small set of fonts used by the whole app.
+
+    Must be called after ``pygame.init()``. ``SysFont`` asks the operating
+    system for Arial and silently falls back to another font when it is
+    missing, which is why layout tests leave margin rather than assume exact
+    text widths.
+    """
 
     return {
         "huge": pygame.font.SysFont("arial", 58, bold=True),
@@ -189,13 +207,19 @@ def ellipsize(font: pygame.font.Font, text: str, max_width: int) -> str:
     if font.size(text)[0] <= max_width:
         return text
     ellipsis = "..."
+    # Drop one character at a time until the shortened text plus "..." fits.
     while text and font.size(text + ellipsis)[0] > max_width:
         text = text[:-1]
     return text.rstrip() + ellipsis
 
 
 def status_color(text: str) -> tuple[int, int, int]:
-    """Choose an event-log text color from a short message."""
+    """Choose an event-log text color from a short message.
+
+    This is a simple keyword match on the engine's log wording: wins and
+    tokens reaching home are green, captures and the three-sixes penalty
+    ("loses the roll") are red, and everything else is soft grey.
+    """
 
     lowered = text.lower()
     if "wins" in lowered or "home" in lowered:
