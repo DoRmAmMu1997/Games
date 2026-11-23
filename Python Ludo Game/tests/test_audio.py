@@ -24,7 +24,9 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import audio
+import main
 from audio import LIMIT, MusicPlayer, Note, SoundBank, midi, render
+from game import LudoGame, LudoRules
 from settings import DICE_RESULT_AT, HOP_PITCH_STEPS, SFX_COOLDOWNS, SFX_RECIPES
 
 RATE = 22050
@@ -378,6 +380,226 @@ class LudoRecipeTests(unittest.TestCase):
         self.assertEqual(pitches, sorted(pitches))
         self.assertEqual(len(set(pitches)), HOP_PITCH_STEPS)
         self.assertGreaterEqual(HOP_PITCH_STEPS, 6, "a 6 hops six cells")
+
+
+def make_app_with_game(human_seats: int = 1) -> tuple[main.LudoApp, LudoGame, mock.Mock]:
+    """Return a non-persisting app playing a seeded 4-seat game, with a mock sound bank.
+
+    The first ``human_seats`` seats are human. The mock replaces the real
+    bank, so tests can read exactly which sounds were asked for.
+    """
+
+    app = main.LudoApp(persist=False)
+    players = [(f"P{seat + 1}", seat < human_seats) for seat in range(4)]
+    game = LudoGame(players, LudoRules(total_players=4), seed=3)
+    app.start_game(game)
+    app.sounds = mock.Mock()
+    return app, game, app.sounds
+
+
+def played(bank: mock.Mock) -> list[tuple[str, int]]:
+    """Return ``(name, pitch_step)`` for every ``play`` call on a mock bank, in order."""
+
+    return [(call.args[0], call.kwargs.get("pitch_step", 0)) for call in bank.play.call_args_list]
+
+
+class EventSoundMapTests(unittest.TestCase):
+    """``main.event_sounds`` turns one frame's engine events into effect names."""
+
+    def test_each_event_kind_has_its_sound(self) -> None:
+        """Every sounding kind maps to its effect; the roll carries the die face."""
+
+        cases = {
+            "roll": ("dice", 4),
+            "rolled_six": ("six", 0),
+            "three_sixes": ("three_sixes", 0),
+            "leave_yard": ("leave_yard", 0),
+            "capture": ("capture", 0),
+            "home": ("home", 0),
+            "bonus_turn": ("bonus", 0),
+            "no_move": ("no_move", 0),
+            "turn_change": ("turn", 0),
+        }
+        for kind, sound in cases.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(main.event_sounds([kind], 4, human_to_play=True), [sound])
+
+    def test_moves_and_wins_have_no_effect_of_their_own(self) -> None:
+        """A move sounds through its hops, a win through the game-over jingle."""
+
+        self.assertEqual(main.event_sounds(["move", "game_won"], 3, human_to_play=True), [])
+
+    def test_every_event_kind_is_known_to_the_map(self) -> None:
+        """Each engine kind either has a sound or is one of the two silent kinds."""
+
+        from game import EVENT_KINDS
+
+        self.assertEqual(set(main.EVENT_SOUNDS) | {"move", "game_won"}, set(EVENT_KINDS))
+        for name in main.EVENT_SOUNDS.values():
+            with self.subTest(name=name):
+                self.assertIn(name, SFX_RECIPES)
+
+    def test_third_six_replaces_the_six_sparkle(self) -> None:
+        """A forfeited third 6 groans instead of sparkling."""
+
+        kinds = ["roll", "rolled_six", "three_sixes", "turn_change"]
+        self.assertEqual(
+            main.event_sounds(kinds, 6, human_to_play=True), [("dice", 6), ("three_sixes", 0), ("turn", 0)]
+        )
+
+    def test_bonus_after_a_six_is_not_announced_twice(self) -> None:
+        """A 6 already sparkled when it was rolled, so its bonus roll stays quiet."""
+
+        self.assertEqual(main.event_sounds(["leave_yard", "bonus_turn"], 6, human_to_play=True), [("leave_yard", 0)])
+        self.assertEqual(main.event_sounds(["capture", "bonus_turn"], 3, human_to_play=True),
+                         [("capture", 0), ("bonus", 0)])
+
+    def test_turn_knock_only_calls_a_human(self) -> None:
+        """The turn knock tells a human it is their go; AI-to-AI changes stay quiet."""
+
+        self.assertEqual(main.event_sounds(["turn_change"], 2, human_to_play=False), [])
+
+
+class ShellSoundTests(unittest.TestCase):
+    """The window plays the engine's events, token hops and button clicks."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once so the app can open its dummy window."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after these tests."""
+
+        pygame.quit()
+
+    def test_app_builds_its_bank_from_the_ludo_recipes(self) -> None:
+        """The real app's bank is a SoundBank with every recipe (when a mixer is running)."""
+
+        app = main.LudoApp(persist=False)
+        self.assertIsInstance(app.sounds, SoundBank)
+        if app.sounds.enabled:
+            self.assertEqual(set(app.sounds.sounds), set(SFX_RECIPES))
+
+    def test_update_plays_this_frame_s_events_once(self) -> None:
+        """A human's 6 plays the dice for face 6 and the sparkle, and the queue is emptied."""
+
+        app, game, bank = make_app_with_game()
+        game.record_roll(6)
+        app._update(autotest=False)
+        self.assertEqual(played(bank), [("dice", 6), ("six", 0)])
+        self.assertEqual(game.events, [])
+        app._update(autotest=False)
+        self.assertEqual(len(played(bank)), 2)
+
+    def test_human_roll_button_rattles_the_dice(self) -> None:
+        """Clicking Roll plays the click, then the dice for the rolled face on the next update."""
+
+        app, game, bank = make_app_with_game()
+        app._handle_click(main.PLAY_ROLL_RECT.center)
+        app._update(autotest=False)
+        names = [name for name, _ in played(bank)]
+        self.assertEqual(names[0], "click")
+        self.assertIn(("dice", game.last_roll), played(bank))
+
+    def test_ai_turns_are_heard_too(self) -> None:
+        """An AI roll goes through the engine, so the next frame plays its dice."""
+
+        app, _game, bank = make_app_with_game(human_seats=0)
+        app._update(autotest=True)
+        app._update(autotest=True)
+        self.assertIn("dice", [name for name, _ in played(bank)])
+
+    def test_finished_game_plays_its_last_events_before_the_jingle(self) -> None:
+        """The winning move's home sound still plays as the game ends."""
+
+        app, game, bank = make_app_with_game()
+        for token in game.players[0].tokens[1:]:
+            token.steps = game.layout.finish_steps
+        game.players[0].tokens[0].steps = game.layout.finish_steps - 2
+        game.record_roll(2)
+        game.apply_move(game.legal_moves(2)[0])
+        app._update(autotest=False)
+        self.assertIn(("home", 0), played(bank))
+
+    def hop_sounds(self, bank: mock.Mock) -> list[tuple[str, int]]:
+        """Return only the hop sounds asked of a mock bank."""
+
+        return [sound for sound in played(bank) if sound[0] == "hop"]
+
+    def test_each_hop_climbs_in_pitch(self) -> None:
+        """A 4-cell move taps four rising hops as the token reaches each cell."""
+
+        app, game, bank = make_app_with_game()
+        game.players[0].tokens[0].steps = 0
+        app._update_token_pixels(0)
+        game.record_roll(4)
+        game.apply_move(next(move for move in game.legal_moves(4) if move.token_index == 0))
+        for _ in range(4):
+            app._update_token_pixels(1000)
+        self.assertEqual(self.hop_sounds(bank), [("hop", 0), ("hop", 1), ("hop", 2), ("hop", 3)])
+
+    def test_hops_wait_for_the_token_to_reach_each_cell(self) -> None:
+        """A tiny frame that reaches no cell taps no hop yet."""
+
+        app, game, bank = make_app_with_game()
+        game.players[0].tokens[0].steps = 0
+        app._update_token_pixels(0)
+        game.record_roll(3)
+        game.apply_move(next(move for move in game.legal_moves(3) if move.token_index == 0))
+        app._update_token_pixels(1)
+        self.assertEqual(self.hop_sounds(bank), [])
+
+    def test_slides_into_and_out_of_the_yard_do_not_hop(self) -> None:
+        """Leaving the yard and being captured are single slides with their own sounds."""
+
+        app, game, bank = make_app_with_game()
+        app._update_token_pixels(0)
+        game.record_roll(6)
+        game.apply_move(game.legal_moves(6)[0])
+        app._update_token_pixels(5000)
+        game.players[0].tokens[0].steps = -1
+        app._update_token_pixels(5000)
+        self.assertEqual(self.hop_sounds(bank), [])
+
+    def test_every_button_clicks(self) -> None:
+        """A setup button press plays the click."""
+
+        app = main.LudoApp(persist=False)
+        app.sounds = mock.Mock()
+        buttons = {button.key: button for button in app.setup_buttons()}
+        app._handle_click(buttons["toggle_blockades"].rect.center)
+        self.assertEqual(played(app.sounds), [("click", 0)])
+
+    def test_clicks_off_any_button_are_silent(self) -> None:
+        """A click on empty wallpaper plays nothing."""
+
+        app = main.LudoApp(persist=False)
+        app.sounds = mock.Mock()
+        app._handle_click((5, 5))
+        app.sounds.play.assert_not_called()
+
+
+class MixerStartupTests(unittest.TestCase):
+    """``main.main`` asks for the mixer format before pygame starts, and reserves music after."""
+
+    def test_mixer_is_set_up_around_pygame_init(self) -> None:
+        """Order: init_mixer, pygame.init, reserve_channels, then the app runs."""
+
+        order = mock.Mock()
+        with (
+            mock.patch.object(main.audio, "init_mixer", order.init_mixer),
+            mock.patch.object(main.pygame, "init", order.init),
+            mock.patch.object(main.audio, "reserve_channels", order.reserve_channels),
+            mock.patch.object(main, "LudoApp", order.LudoApp),
+            mock.patch.object(main.pygame, "quit", order.quit),
+            mock.patch.dict(os.environ, {"LUDO_AUTOTEST": ""}),
+        ):
+            main.main()
+        names = [name for name, _args, _kwargs in order.mock_calls]
+        self.assertEqual(names[:4], ["init_mixer", "init", "reserve_channels", "LudoApp"])
 
 
 class MusicPlayerTests(unittest.TestCase):

@@ -35,6 +35,7 @@ from typing import Any
 import pygame
 
 import ai
+import audio
 import ui
 import visual_theme as theme
 from board import BoardLayout
@@ -69,6 +70,8 @@ from settings import (
     SAVEGAME_PATH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SFX_COOLDOWNS,
+    SFX_RECIPES,
     SOFT,
     STATS_PATH,
     TOKEN_HOP_SPEED,
@@ -190,6 +193,51 @@ OVER_PLAQUE_PADDING = (28, 8)  # space around the text: horizontal, vertical
 OVER_PLAQUE_MAX_WIDTH = 620
 PREVIEW_CENTERS = ((200, 470), (450, 470), (700, 470))
 PREVIEW_SIZE = 216
+
+# Which effect (a name in settings.SFX_RECIPES) each engine event plays; see
+# game.EVENT_KINDS. "move" has no entry because a moving token sounds cell by
+# cell through its hops, and "game_won" is answered by the game-over jingle.
+EVENT_SOUNDS = {
+    "roll": "dice",
+    "rolled_six": "six",
+    "three_sixes": "three_sixes",
+    "leave_yard": "leave_yard",
+    "capture": "capture",
+    "home": "home",
+    "bonus_turn": "bonus",
+    "no_move": "no_move",
+    "turn_change": "turn",
+}
+
+
+def event_sounds(kinds: list[str], last_roll: int | None, human_to_play: bool) -> list[tuple[str, int]]:
+    """Return the ``(effect name, pitch step)`` to play for one frame's engine events.
+
+    Args:
+        kinds: The events drained from the engine this frame, oldest first.
+        last_roll: The engine's current die value; the dice sound uses it as
+            its pitch step, so each face lands on its own note.
+        human_to_play: Whether a human seat is to play now.
+
+    A few events stay quiet so one moment never sounds twice: a forfeited
+    third 6 groans instead of sparkling, a bonus roll earned by a 6 was
+    already announced by the six sparkle, and the turn knock only plays when
+    it calls a human to the table (AI-to-AI changes are heard as the next
+    roll).
+    """
+
+    sounds: list[tuple[str, int]] = []
+    for kind in kinds:
+        name = EVENT_SOUNDS.get(kind)
+        if (
+            name is None
+            or (kind == "rolled_six" and "three_sixes" in kinds)
+            or (kind == "bonus_turn" and last_roll == 6)
+            or (kind == "turn_change" and not human_to_play)
+        ):
+            continue
+        sounds.append((name, (last_roll or 0) if kind == "roll" else 0))
+    return sounds
 
 
 @dataclass(frozen=True)
@@ -499,8 +547,9 @@ class LudoApp:
             shared by highlights, move buttons, number keys and clicks.
         total_players, human_count, ai_profile_index, rule_*: The setup
             screen's current choices.
-        token_pixels / token_steps / token_waypoints: Pawn animation state
-            (see ``_update_token_pixels``).
+        token_pixels / token_steps / token_waypoints / token_hops: Pawn
+            animation state (see ``_update_token_pixels``).
+        sounds: The ``audio.SoundBank`` of effects (silent without a mixer).
         ai_timer: Milliseconds since the last AI action, used to pace AI turns.
         stats: Lifetime stats loaded from disk.
     """
@@ -524,6 +573,8 @@ class LudoApp:
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
         self.running = True
+        # Every effect is synthesised once here from the recipes in settings.
+        self.sounds = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
 
         self.screen = "setup"
         self.game: LudoGame | None = None
@@ -553,6 +604,9 @@ class LudoApp:
         self.token_pixels: dict[tuple[int, int], tuple[float, float]] = {}
         self.token_steps: dict[tuple[int, int], int] = {}
         self.token_waypoints: dict[tuple[int, int], list[tuple[float, float]]] = {}
+        # Per token, the pitch step of its next hop sound, or None while it
+        # is sliding (to or from the yard) rather than hopping.
+        self.token_hops: dict[tuple[int, int], int | None] = {}
         self.preview_cache: dict[int, pygame.Surface] = {}
         self.message = "Choose a table and start the race."
         self.saved_turns_taken: int | None = None
@@ -682,6 +736,7 @@ class LudoApp:
         self.token_pixels = {}
         self.token_steps = {}
         self.token_waypoints = {}
+        self.token_hops = {}
         self.saved_turns_taken = game.turns_taken
         self.message = "Roll a 6 to bring a token out."
 
@@ -709,6 +764,7 @@ class LudoApp:
         # button, even if a token's generous hit circle reaches under it.
         for button in self._buttons_for_screen():
             if button.contains(pos):
+                self.sounds.play("click")
                 self._on_button(button.key)
                 return
 
@@ -931,10 +987,11 @@ class LudoApp:
             self.visible_moves = self.game.legal_moves(self.game.last_roll)
 
     def _update(self, autotest: bool) -> None:
-        """Advance animations, game-over bookkeeping, and AI turns.
+        """Advance animations, sounds, game-over bookkeeping, and AI turns.
 
         Called once per frame. In order it: counts down the dice animation,
-        moves pawns along their hop paths, switches to the game-over screen
+        moves pawns along their hop paths, plays the sounds for everything
+        the engine reported since the last frame, switches to the game-over screen
         (recording stats once) when the engine says the game ended, and, if
         an AI seat is to play, waits ``AI_TURN_DELAY_MS`` between AI actions
         so humans can follow them. One AI action is a roll plus, when
@@ -948,6 +1005,8 @@ class LudoApp:
         if self.dice_anim_remaining > 0:
             self.dice_anim_remaining = max(0, self.dice_anim_remaining - elapsed)
         self._update_token_pixels(elapsed)
+        if self.game is not None:
+            self._play_event_sounds()
 
         if self.screen != "playing" or self.game is None:
             return
@@ -967,6 +1026,19 @@ class LudoApp:
         self._perform_ai_step()
         self._refresh_visible_moves()
         self._save_if_turn_completed()
+
+    def _play_event_sounds(self) -> None:
+        """Drain the engine's event queue and play each event's effect.
+
+        Draining once per frame means every event is heard exactly once,
+        whether a human click or an AI step caused it.
+        """
+
+        assert self.game is not None
+        kinds = self.game.drain_events()
+        human_to_play = self.game.current_player.is_human
+        for name, step in event_sounds(kinds, self.game.last_roll, human_to_play):
+            self.sounds.play(name, pitch_step=step)
 
     def _perform_ai_step(self) -> None:
         """Let the current AI player roll or choose one move.
@@ -1036,6 +1108,11 @@ class LudoApp:
            second, using the time ``elapsed_ms`` since the last frame.
         4. With nothing queued, glides any leftover gap to the token's cell.
 
+        Each cell reached on a forward move taps a hop sound one step higher
+        than the last, so the player hears the count. Slides into or out of
+        the yard are silent here: leaving the yard and being captured have
+        their own event sounds.
+
         Beginner note: moving a fixed *distance budget* per frame (speed
         times elapsed time) rather than a fixed number of pixels keeps the
         animation the same speed on fast and slow computers.
@@ -1056,9 +1133,11 @@ class LudoApp:
                     self.token_waypoints[key] = []
                     continue
                 if token.steps != self.token_steps.get(key):
+                    old_steps = self.token_steps.get(key, -1)
                     self.token_waypoints[key] = self._token_waypoints(
-                        player_index, token_index, self.token_steps.get(key, -1), token.steps
+                        player_index, token_index, old_steps, token.steps
                     )
+                    self.token_hops[key] = 0 if 0 <= old_steps < token.steps else None
                     self.token_steps[key] = token.steps
 
                 # Walk the waypoint queue at constant speed. One frame may
@@ -1075,6 +1154,7 @@ class LudoApp:
                         current = head
                         queue.pop(0)
                         remaining -= length
+                        self._play_hop(key)
                     else:
                         # Not enough budget left to reach the next cell: move
                         # part of the way along the unit vector (dx, dy) / length.
@@ -1091,6 +1171,14 @@ class LudoApp:
                         current[1] + dy / length * remaining,
                     )
                 self.token_pixels[key] = current
+
+    def _play_hop(self, key: tuple[int, int]) -> None:
+        """Tap the hop sound for a token that just reached a cell, one step higher each time."""
+
+        step = self.token_hops.get(key)
+        if step is not None:
+            self.sounds.play("hop", pitch_step=step)
+            self.token_hops[key] = step + 1
 
     def _save_if_turn_completed(self) -> None:
         """Autosave after completed turns, not after every animation frame.
@@ -1588,11 +1676,15 @@ def _make_icon() -> pygame.Surface:
 def main() -> None:
     """Initialize pygame, run the app, and always shut pygame down.
 
-    The ``try``/``finally`` makes sure ``pygame.quit()`` runs even if the app
-    raises, so the window is always closed cleanly.
+    The mixer format is requested before ``pygame.init()`` opens the mixer,
+    and the music channel is reserved right after. The ``try``/``finally``
+    makes sure ``pygame.quit()`` runs even if the app raises, so the window
+    is always closed cleanly.
     """
 
+    audio.init_mixer()
     pygame.init()
+    audio.reserve_channels()
     try:
         if os.environ.get("LUDO_AUTOTEST"):
             # Headless self-test: play a seeded all-AI game on the classic
