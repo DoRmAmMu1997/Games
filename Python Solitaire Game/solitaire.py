@@ -86,6 +86,14 @@ HIGHLIGHT_OUTLINE_WIDTH = 4
 EMPTY_PILE_SYMBOL_FONT_SIZE = 20
 EMPTY_PILE_WORD_FONT_SIZE = 14
 
+# The "YOU WIN!" banner plate: big enough to frame 56pt text with room to
+# spare on any font, dark so the yellow text and rim stand out.
+WIN_PLATE_WIDTH = 520
+WIN_PLATE_HEIGHT = 130
+WIN_PLATE_RADIUS = 18
+WIN_PLATE_RIM_WIDTH = 4
+WIN_PLATE_COLOR = "#06301F"
+
 # Animation timing. More steps means smoother movement.
 ANIMATION_STEPS = 18
 ANIMATION_DELAY_MS = 16
@@ -2164,10 +2172,24 @@ class SolitaireApp:
                 "vy": random.uniform(6.0, 13.0),
             })
 
-        # A bold banner across the upper third of the board.
+        # A bold banner across the upper third of the board, on a dark rounded
+        # plate with a yellow rim so it stays readable over cards and confetti.
+        banner_x = WINDOW_WIDTH / 2
+        banner_y = CANVAS_HEIGHT / 3
+        self.rounded_rect(
+            banner_x - WIN_PLATE_WIDTH / 2,
+            banner_y - WIN_PLATE_HEIGHT / 2,
+            banner_x + WIN_PLATE_WIDTH / 2,
+            banner_y + WIN_PLATE_HEIGHT / 2,
+            WIN_PLATE_RADIUS,
+            fill=WIN_PLATE_COLOR,
+            outline=HIGHLIGHT_COLOR,
+            width=WIN_PLATE_RIM_WIDTH,
+            tags="celebration",
+        )
         self.canvas.create_text(
-            WINDOW_WIDTH / 2,
-            CANVAS_HEIGHT / 3,
+            banner_x,
+            banner_y,
             text="YOU WIN!",
             fill="#FFD24D",
             font=("Arial", 56, "bold"),

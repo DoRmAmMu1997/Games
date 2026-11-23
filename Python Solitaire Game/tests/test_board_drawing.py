@@ -25,6 +25,7 @@ from solitaire import (
     CARD_WIDTH,
     EMPTY_OUTLINE,
     FOUNDATION_COUNT,
+    HIGHLIGHT_COLOR,
     HINT_COLOR,
     PLACEHOLDER_FILL,
     TABLEAU_COLUMNS,
@@ -357,6 +358,39 @@ class EmptyPileTests(DrawingTestCase):
                 options = self.hinted_outline(*destination)
                 self.assertEqual(options["width"], 4)
                 self.assertFalse(options.get("dash"))
+
+
+class WinBannerTests(DrawingTestCase):
+    """P8: the "YOU WIN!" banner sits on a dark rounded plate with a yellow rim."""
+
+    def test_banner_text_sits_on_a_plate(self) -> None:
+        """A yellow-rimmed plate is drawn first and surrounds the banner text."""
+
+        self.game.won = True
+        self.app._play_win_celebration(mock.Mock())
+
+        names = [call[0] for call in self.canvas.method_calls]
+        texts = calls_named(self.canvas, "create_text")
+        self.assertEqual(len(texts), 1)
+        banner = texts[0]
+        plates = [call for call in calls_named(self.canvas, "create_polygon")
+                  if call[2].get("outline") == HIGHLIGHT_COLOR]
+        self.assertEqual(len(plates), 1)
+        plate = plates[0]
+        self.assertEqual(plate[2]["tags"], "celebration")
+        self.assertLess(contrast_ratio(plate[2]["fill"], "#000000"), 2.0)
+        self.assertLess(self.canvas.method_calls.index(plate), names.index("create_text"))
+
+        points = plate[1][0]
+        xs, ys = points[0::2], points[1::2]
+        text_x, text_y = banner[1][0], banner[1][1]
+        # "YOU WIN!" at 56pt is roughly 360 x 70 px; leave generous room.
+        self.assertGreaterEqual(min(xs), 0)
+        self.assertLessEqual(max(xs), WINDOW_WIDTH)
+        self.assertGreaterEqual(text_x - min(xs), 220)
+        self.assertGreaterEqual(max(xs) - text_x, 220)
+        self.assertGreaterEqual(text_y - min(ys), 50)
+        self.assertGreaterEqual(max(ys) - text_y, 50)
 
 
 if __name__ == "__main__":
