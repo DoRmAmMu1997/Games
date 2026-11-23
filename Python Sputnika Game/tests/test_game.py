@@ -30,11 +30,21 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import game as game_module
+from audio import MusicPlayer
 from entities import CelestialBody
 from game import OrbitalOrchardGame
 from merge_logic import find_merge_events
 from physics import PhysicsWorld
-from settings import FAIL_AGE_GATE, SPAWN_Y, TIERS
+from settings import (
+    FAIL_AGE_GATE,
+    MUSIC_CALM_CHANNEL,
+    MUSIC_CROSSFADE_MS,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_TENSE_CHANNEL,
+    SPAWN_Y,
+    TIERS,
+)
 
 
 class GameTestCase(unittest.TestCase):
@@ -505,6 +515,91 @@ class SpawnInsideCircleTests(GameTestCase):
                         game.launch_angle = angle
                         game._draw_spawn_indicator(pygame.Vector2())
                         self.assertGreater(len(captured[-1]), 5)
+
+
+class MusicTests(GameTestCase):
+    """The soundtrack follows the scene: calm, tense in danger, silent after a loss."""
+
+    def setUp(self) -> None:
+        """Swap the real players and sound bank for mocks that record calls."""
+
+        super().setUp()
+        self.calm = mock.Mock()
+        self.tense = mock.Mock()
+        self.sounds = mock.Mock()
+        self.game.music = {"calm": self.calm, "tense": self.tense}
+        self.game.assets.sounds = self.sounds
+
+    def test_game_builds_calm_and_tense_players(self) -> None:
+        """A new game owns a calm and a tense player on their reserved channels."""
+
+        music = self.make_game().music
+        self.assertIsInstance(music["calm"], MusicPlayer)
+        self.assertEqual((music["calm"].channel, music["tense"].channel), (MUSIC_CALM_CHANNEL, MUSIC_TENSE_CHANNEL))
+
+    def test_menu_plays_the_calm_track(self) -> None:
+        """The first frame on the menu fades the calm track in and updates both players."""
+
+        self.game._update(0.016)
+        self.calm.start.assert_called_once_with(MUSIC_FADE_IN_MS)
+        self.tense.start.assert_not_called()
+        self.calm.update.assert_called_once_with()
+        self.tense.update.assert_called_once_with()
+
+    def test_danger_crossfades_to_tense_and_back(self) -> None:
+        """Danger swaps calm for tense; recovering swaps back; nothing repeats meanwhile."""
+
+        game = self.game
+        game.start_round()
+        game._sync_music()
+        game.warning_active = True
+        game._sync_music()
+        game._sync_music()
+        self.calm.stop.assert_called_once_with(MUSIC_CROSSFADE_MS)
+        self.tense.start.assert_called_once_with(MUSIC_CROSSFADE_MS)
+        game.warning_active = False
+        game._sync_music()
+        self.tense.stop.assert_called_once_with(MUSIC_CROSSFADE_MS)
+        self.assertEqual(self.calm.start.call_args_list[-1], mock.call(MUSIC_CROSSFADE_MS))
+
+    def test_menu_is_calm_even_after_leaving_a_run_in_danger(self) -> None:
+        """Back on the menu the calm track plays, whatever the run's danger was."""
+
+        self.game.scene = "menu"
+        self.game.warning_active = True
+        self.game._sync_music()
+        self.calm.start.assert_called_once_with(MUSIC_FADE_IN_MS)
+
+    def test_losing_fades_the_music_and_plays_the_game_over_jingle(self) -> None:
+        """A run that sets no record fades the music out under the game-over phrase."""
+
+        game = self.game
+        game.start_round()
+        game.high_score = 10
+        game._sync_music()
+        game._trigger_game_over()
+        self.calm.stop.assert_called_once_with(MUSIC_GAME_OVER_FADE_MS)
+        self.sounds.play.assert_called_with("game_over", mock.ANY)
+
+    def test_record_run_ends_with_the_record_jingle(self) -> None:
+        """A run that beats the high score ends with the record fanfare instead."""
+
+        game = self.game
+        game.start_round()
+        game.score = game.high_score + 50
+        game._trigger_game_over()
+        self.sounds.play.assert_called_with("record", mock.ANY)
+
+    def test_play_again_brings_the_music_back(self) -> None:
+        """Starting a new run after a loss fades the calm track back in."""
+
+        game = self.game
+        game._sync_music()
+        game.start_round()
+        game._trigger_game_over()
+        game.start_round()
+        game._sync_music()
+        self.assertEqual(self.calm.start.call_args_list, [mock.call(MUSIC_FADE_IN_MS)] * 2)
 
 
 if __name__ == "__main__":

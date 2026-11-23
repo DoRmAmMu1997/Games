@@ -21,10 +21,12 @@ import math
 import os
 import random
 import time
+from functools import partial
 
 import pygame
 
 from assets import AssetLibrary
+from audio import MusicPlayer
 from effects import EffectsManager
 from entities import CelestialBody
 from merge_logic import find_merge_events
@@ -50,6 +52,13 @@ from settings import (
     MAX_BODIES,
     MAX_LAUNCH_ANGLE,
     MOUSE_WHEEL_ANGLE_STEP,
+    MUSIC_CALM_CHANNEL,
+    MUSIC_CROSSFADE_MS,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_LOOP_SECONDS,
+    MUSIC_TENSE_CHANNEL,
+    MUSIC_VOLUME,
     OVERLAY_PADDING,
     PREVIEW_GLOW_EXTRA,
     SAVE_DATA_DIR,
@@ -62,6 +71,7 @@ from settings import (
     WARNING,
     WINDOW_TITLE,
     clamp,
+    music_notes,
 )
 from ui import (
     Button,
@@ -166,6 +176,16 @@ class OrbitalOrchardGame:
         self.effects = EffectsManager()
         self.world = PhysicsWorld()
         self.random = random.Random()
+
+        # Background music: a calm loop and a tense one for danger, each
+        # rendered in its own background thread (see audio.MusicPlayer).
+        # `_music_mood` names the track currently wanted ("calm", "tense",
+        # or None for silence); `_sync_music()` keeps it in step with play.
+        self.music = {
+            mood: MusicPlayer(partial(music_notes, mood == "tense"), MUSIC_LOOP_SECONDS, MUSIC_VOLUME, channel=channel)
+            for mood, channel in (("calm", MUSIC_CALM_CHANNEL), ("tense", MUSIC_TENSE_CHANNEL))
+        }
+        self._music_mood: str | None = None
 
         # Global scene/state flags.
         # `scene` is a simple state machine:
@@ -627,6 +647,38 @@ class OrbitalOrchardGame:
         # In this game the pause scene still redraws the current frame instead of
         # freezing a screenshot, so effect state can still be stepped safely.
         self.effects.update(dt)
+        self._sync_music()
+
+    def _music_wanted(self) -> str | None:
+        """Return which music track the current moment calls for.
+
+        The tense track plays while a run (playing or paused) is over the
+        danger line, the calm one everywhere else, and nothing after a loss
+        so the game-over jingle stands alone.
+        """
+        if self.scene == "game_over":
+            return None
+        if self.scene in {"playing", "paused"} and self.warning_active:
+            return "tense"
+        return "calm"
+
+    def _sync_music(self) -> None:
+        """Crossfade to the wanted music track, then let both players update.
+
+        A change between calm and tense fades one out while the other fades
+        in; music starting from silence fades in more slowly, and a loss
+        fades the music out under the game-over jingle.
+        """
+        wanted = self._music_wanted()
+        if wanted != self._music_mood:
+            if self._music_mood is not None:
+                self.music[self._music_mood].stop(MUSIC_CROSSFADE_MS if wanted else MUSIC_GAME_OVER_FADE_MS)
+            if wanted is not None:
+                self.music[wanted].start(MUSIC_CROSSFADE_MS if self._music_mood else MUSIC_FADE_IN_MS)
+            self._music_mood = wanted
+        for player in self.music.values():
+            # Hands a finished background render to the mixer (main thread only).
+            player.update()
 
     def _update_spawn_aim(self, dt: float) -> None:
         """Update launcher position and angle from mouse/keyboard input.
@@ -841,7 +893,10 @@ class OrbitalOrchardGame:
         self.warning_active = False
         self._refresh_high_score()
         self._save_progress()
-        self.assets.sounds.play("game_over", 0.42)
+        # The music fades out and a jingle sums up the run: a fanfare for a
+        # new high score, otherwise a gentle falling phrase.
+        self._sync_music()
+        self.assets.sounds.play("record" if self.new_record else "game_over", 0.42)
 
     def _roll_spawn_tier(self) -> int:
         """Randomly choose a low-tier body for the queue based on weighted odds."""

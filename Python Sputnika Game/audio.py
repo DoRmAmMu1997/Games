@@ -1,8 +1,8 @@
-"""Procedural sound: a tiny synthesizer and a sound-effect bank.
+"""Procedural sound: a tiny synthesizer, a sound-effect bank and a music looper.
 
 Everything the game hears is generated here from numbers, so the project ships
 without a single audio file. The game describes each sound as a list of
-`Note`s (see `SFX_RECIPES` in settings.py); this module
+`Note`s (see `SFX_RECIPES` and `music_notes` in settings.py); this module
 turns those notes into sample buffers and plays them through `pygame.mixer`.
 
 The block between the "shared audio core" markers is copied word for word into
@@ -405,6 +405,119 @@ class SoundBank:
         self._last_played[name] = now
         channel.set_volume(max(0.0, min(1.0, volume)))
         channel.play(sound)
+
+
+class MusicPlayer:
+    """Renders one looping music track off the main thread and plays it.
+
+    Usage from the game shell: build it once, call `start()` when the music
+    should play, `stop()` when it should not, and `update()` once per frame.
+
+    Attributes:
+        enabled: False without a working mixer; every method is then a no-op.
+        total: Loop length in seconds (the track is rendered exactly this long).
+        volume: Channel volume, from 0 to 1.
+        channel: Which reserved mixer channel the track plays on.
+
+    Beginner note:
+    - Rendering a whole track takes a few seconds of pure Python, so by
+      default it happens in a background *thread*: the game keeps running
+      while the track is made. pygame objects are only created on the main
+      thread, in `update()`, once the samples are ready.
+    - A *daemon* thread does not keep the program alive: closing the game
+      while the track is still rendering simply ends it.
+    """
+
+    def __init__(
+        self,
+        build_notes: Callable[[], list[Note]],
+        total: float,
+        volume: float,
+        threaded: bool = True,
+        channel: int = 0,
+    ) -> None:
+        """Start rendering the track (in a daemon thread when `threaded`)."""
+        import pygame
+
+        self.total = total
+        self.volume = volume
+        self.channel = channel
+        self._sound: pygame.mixer.Sound | None = None
+        self._samples: bytes | None = None
+        self._wanted = False
+        self._playing = False
+        self._muted = False
+        self._fade_ms = 0
+        mixer_state = pygame.mixer.get_init()
+        self.enabled = mixer_state is not None
+        if mixer_state is None:
+            return
+        sample_rate, _, channels = mixer_state
+        if threaded:
+            worker = threading.Thread(target=self._render, args=(build_notes, sample_rate, channels), daemon=True)
+            worker.start()
+        else:
+            self._render(build_notes, sample_rate, channels)
+
+    def _render(self, build_notes: Callable[[], list[Note]], sample_rate: int, channels: int) -> None:
+        """Render the track's samples; runs on the worker thread when threaded."""
+        self._samples = render_bytes(build_notes(), sample_rate, channels, self.total)
+
+    @property
+    def is_ready(self) -> bool:
+        """True once the track has finished rendering."""
+        return self._sound is not None or self._samples is not None
+
+    def start(self, fade_ms: int = 0) -> None:
+        """Ask for the music to play (fading in over `fade_ms`) as soon as it is ready."""
+        self._wanted = True
+        self._fade_ms = fade_ms
+        self.update()
+
+    def stop(self, fade_ms: int = 0) -> None:
+        """Stop the music, fading out over `fade_ms` milliseconds (0 stops at once)."""
+        self._wanted = False
+        self._halt(fade_ms)
+
+    def set_muted(self, muted: bool) -> None:
+        """Silence the music at once (True), or resume it if it was wanted (False)."""
+        self._muted = muted
+        if muted:
+            self._halt(0)
+        else:
+            self.update()
+
+    def _halt(self, fade_ms: int) -> None:
+        """Stop the track's channel if this player is playing on it."""
+        if not self.enabled or not self._playing:
+            return
+        import pygame
+
+        self._playing = False
+        channel = pygame.mixer.Channel(self.channel)
+        if fade_ms > 0:
+            channel.fadeout(fade_ms)
+        else:
+            channel.stop()
+
+    def update(self) -> None:
+        """Turn finished samples into a Sound, and start it if it should play."""
+        if not self.enabled:
+            return
+        import pygame
+
+        if self._sound is None and self._samples is not None:
+            try:
+                self._sound = pygame.mixer.Sound(buffer=self._samples)
+            except pygame.error:
+                self.enabled = False
+                return
+            self._samples = None
+        if self._sound is not None and self._wanted and not self._muted and not self._playing:
+            channel = pygame.mixer.Channel(self.channel)
+            channel.set_volume(self.volume)
+            channel.play(self._sound, loops=-1, fade_ms=self._fade_ms)
+            self._playing = True
 
 
 # ---- end shared audio core ----

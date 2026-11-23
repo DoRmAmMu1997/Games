@@ -23,8 +23,8 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import audio
-from audio import LIMIT, Note, SoundBank, midi, render
-from settings import SFX_COOLDOWNS, SFX_RECIPES
+from audio import LIMIT, MusicPlayer, Note, SoundBank, midi, render
+from settings import MUSIC_LOOP_SECONDS, SFX_COOLDOWNS, SFX_RECIPES, music_notes
 
 RATE = 22050
 
@@ -318,6 +318,155 @@ class OrbitalRecipeTests(unittest.TestCase):
         for name in SFX_COOLDOWNS:
             with self.subTest(name=name):
                 self.assertIn(name, SFX_RECIPES)
+
+
+class MusicPlayerTests(unittest.TestCase):
+    """The music player renders its loop once and drives one reserved channel."""
+
+    NOTES = [Note(220.0, 0.0, 0.1, "sine", 0.2), Note(330.0, 0.05, 0.1, "triangle", 0.2)]
+
+    def setUp(self) -> None:
+        """Start the dummy mixer and capture the music channel."""
+
+        pygame.mixer.init()
+        self.addCleanup(pygame.mixer.quit)
+        self.channel = mock.Mock()
+        patcher = mock.patch.object(pygame.mixer, "Channel", return_value=self.channel)
+        self.channel_factory = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def make(self, threaded: bool = False) -> MusicPlayer:
+        """Build a short 0.25 s loop on reserved channel 1."""
+
+        return MusicPlayer(lambda: list(self.NOTES), 0.25, 0.2, threaded=threaded, channel=1)
+
+    def test_start_plays_the_loop_forever_on_its_channel(self) -> None:
+        """``start`` loops the track on its channel at its volume, with the fade-in."""
+
+        player = self.make()
+        self.assertTrue(player.is_ready)
+        player.start(300)
+        self.channel_factory.assert_called_with(1)
+        self.channel.set_volume.assert_called_once_with(0.2)
+        sound = self.channel.play.call_args.args[0]
+        self.assertEqual(self.channel.play.call_args.kwargs, {"loops": -1, "fade_ms": 300})
+        self.assertAlmostEqual(sound.get_length(), 0.25, places=3)
+        player.update()
+        self.assertEqual(self.channel.play.call_count, 1)
+
+    def test_loop_is_rendered_exactly_its_length(self) -> None:
+        """The loop buffer is ``total`` seconds long for every channel layout."""
+
+        for channels in (1, 2, 4, 6, 8):
+            with (
+                self.subTest(channels=channels),
+                mock.patch.object(pygame.mixer, "get_init", return_value=(RATE, -16, channels)),
+                mock.patch.object(pygame.mixer, "Sound") as fake_sound,
+            ):
+                self.make().update()
+                self.assertEqual(len(fake_sound.call_args.kwargs["buffer"]), round(0.25 * RATE) * channels * 2)
+
+    def test_stop_fades_or_cuts(self) -> None:
+        """``stop`` fades out over the given time, or stops at once for 0."""
+
+        player = self.make()
+        player.start()
+        player.stop(500)
+        self.channel.fadeout.assert_called_once_with(500)
+        player.start()
+        player.stop()
+        self.channel.stop.assert_called_once_with()
+        player.stop()
+        self.assertEqual(self.channel.stop.call_count, 1)
+
+    def test_mute_stops_the_music_and_unmute_resumes_it(self) -> None:
+        """Muting stops the channel at once; unmuting restarts a wanted track."""
+
+        player = self.make()
+        player.start()
+        player.set_muted(True)
+        self.channel.stop.assert_called_once_with()
+        player.update()
+        self.assertEqual(self.channel.play.call_count, 1)
+        player.set_muted(False)
+        self.assertEqual(self.channel.play.call_count, 2)
+
+    def test_muted_player_does_not_start(self) -> None:
+        """A track started while muted stays silent until unmuted."""
+
+        player = self.make()
+        player.set_muted(True)
+        player.start()
+        self.channel.play.assert_not_called()
+
+    def test_threaded_render_plays_once_ready(self) -> None:
+        """A daemon thread renders the loop; ``update`` starts it once it is done."""
+
+        with mock.patch.object(audio.threading, "Thread") as thread_class:
+            player = self.make(threaded=True)
+        kwargs = thread_class.call_args.kwargs
+        self.assertTrue(kwargs["daemon"])
+        thread_class.return_value.start.assert_called_once_with()
+        player.start()
+        self.assertFalse(player.is_ready)
+        self.channel.play.assert_not_called()
+        kwargs["target"](*kwargs["args"])
+        self.assertTrue(player.is_ready)
+        player.update()
+        self.assertEqual(self.channel.play.call_count, 1)
+
+    def test_player_is_disabled_without_a_mixer(self) -> None:
+        """No mixer: no render, no thread, and every call is a no-op."""
+
+        with (
+            mock.patch.object(pygame.mixer, "get_init", return_value=None),
+            mock.patch.object(audio.threading, "Thread") as thread_class,
+        ):
+            player = self.make(threaded=True)
+            player.start()
+            player.update()
+            player.stop(100)
+        self.assertFalse(player.enabled)
+        thread_class.assert_not_called()
+        self.channel_factory.assert_not_called()
+
+    def test_sound_build_error_disables_the_player(self) -> None:
+        """A mixer error while making the Sound disables the player quietly."""
+
+        player = self.make()
+        with mock.patch.object(pygame.mixer, "Sound", side_effect=pygame.error("broken")):
+            player.start()
+        self.assertFalse(player.enabled)
+        self.channel.play.assert_not_called()
+
+
+class OrbitalMusicTests(unittest.TestCase):
+    """The calm and tense soundtracks loop seamlessly and stay in bounds."""
+
+    def test_tracks_loop_cleanly(self) -> None:
+        """Each track renders to the loop length, starts and ends near silence, never clips."""
+
+        for tense in (False, True):
+            notes = music_notes(tense)
+            samples = render(notes, RATE, 1, total=MUSIC_LOOP_SECONDS)
+            with self.subTest(tense=tense):
+                self.assertEqual(len(samples), round(MUSIC_LOOP_SECONDS * RATE))
+                self.assertLess(abs(samples[0]), 300)
+                self.assertLess(abs(samples[-1]), 300)
+                self.assertLess(max(abs(value) for value in samples), 0.95 * 32767)
+                self.assertTrue(all(note.end <= MUSIC_LOOP_SECONDS for note in notes))
+                self.assertTrue(all(note.voice in audio.VOICES for note in notes))
+
+    def test_tracks_are_deterministic_and_distinct(self) -> None:
+        """The same mood always builds the same notes; the tense track differs."""
+
+        self.assertEqual(music_notes(False), music_notes(False))
+        self.assertNotEqual(music_notes(False), music_notes(True))
+
+    def test_tense_arpeggio_is_faster(self) -> None:
+        """The tense track packs more notes into the same loop than the calm one."""
+
+        self.assertGreater(len(music_notes(True)), len(music_notes(False)))
 
 
 if __name__ == "__main__":

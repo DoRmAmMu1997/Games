@@ -480,3 +480,96 @@ SFX_COOLDOWNS: dict[str, float] = {
     "merge": 0.03,
     "big_merge": 0.03,
 }
+
+# Music: an ambient space pad with a slow arpeggio, rendered once into a loop
+# that plays on reserved mixer channels (see `music_notes`). The tense track
+# shares the pad and bass but runs the arpeggio twice as fast over a soft
+# heartbeat; the game crossfades to it while the stack is over the danger line.
+MUSIC_LOOP_SECONDS = 16.0  # One pass through the four chords below.
+MUSIC_CHORD_SECONDS = MUSIC_LOOP_SECONDS / 4
+MUSIC_VOLUME = 0.22  # Channel volume: low, so effects sit on top of the music.
+# Channel 0 plays the calm track and channel 1 the tense one, so the two can
+# crossfade; both are reserved so effects never take them.
+MUSIC_CHANNEL_COUNT = 2
+MUSIC_CALM_CHANNEL = 0
+MUSIC_TENSE_CHANNEL = 1
+MUSIC_CROSSFADE_MS = 900  # Fade time when switching between calm and tense.
+MUSIC_FADE_IN_MS = 1200  # Fade-in when music starts from silence.
+MUSIC_GAME_OVER_FADE_MS = 700  # How quickly the music fades under the game-over jingle.
+# Am9 - Fmaj7 - Cmaj7 - G6 in A minor: (bass note, pad notes) per chord, as MIDI numbers.
+MUSIC_CHORDS = (
+    (45, (57, 60, 64, 71)),
+    (41, (53, 57, 60, 64)),
+    (48, (55, 60, 64, 71)),
+    (43, (55, 59, 62, 64)),
+)
+MUSIC_PAD_VOLUME = 0.085  # Per pad voice; four of them sound together.
+MUSIC_PAD_ATTACK = 1.2  # The pad swells in slowly, like a breath.
+MUSIC_PAD_RELEASE = 1.2  # ...and lingers under the start of the next chord.
+MUSIC_PAD_DECAY = 0.6  # After the swell the pad settles down to...
+MUSIC_PAD_SUSTAIN = 0.8  # ...this share of its peak while the chord is held.
+MUSIC_BASS_VOLUME = 0.16
+MUSIC_BASS_ATTACK = 0.3  # The bass eases in under each chord (s)...
+MUSIC_BASS_SUSTAIN = 0.9  # ...holds nearly full...
+MUSIC_BASS_RELEASE = 0.8  # ...and fades out over this long (s).
+# The arpeggio climbs and falls through the chord an octave above the pad.
+# The calm track plays two notes a second; the tense one four.
+MUSIC_ARP_PATTERN = (0, 1, 2, 3, 2, 1, 2, 3)
+MUSIC_ARP_STEPS = {False: 8, True: 16}  # Arpeggio notes per chord.
+MUSIC_ARP_VOLUME = {False: 0.075, True: 0.07}
+MUSIC_ARP_RING = {False: 1.4, True: 0.45}  # How long each arpeggio note rings (s).
+MUSIC_HEARTBEAT_VOLUME = 0.16  # The tense track's soft low pulse on every beat.
+MUSIC_HEARTBEAT_RING = 0.25  # How long each heartbeat thump rings (s).
+MUSIC_BEATS_PER_CHORD = 4
+
+
+def music_notes(tense: bool) -> list[Note]:
+    """Return one loop of the soundtrack: calm, or tense when `tense` is True.
+
+    Every note ends by `MUSIC_LOOP_SECONDS`, so the loop restarts without a
+    note being cut off mid-ring. The final chord is shortened to make room
+    for its release.
+    """
+    notes: list[Note] = []
+    span = MUSIC_CHORD_SECONDS
+    for index, (bass, pad) in enumerate(MUSIC_CHORDS):
+        start = index * span
+        last = index == len(MUSIC_CHORDS) - 1
+        hold = span - MUSIC_PAD_RELEASE if last else span
+        for pitch in pad:
+            notes.append(
+                Note(
+                    midi(pitch),
+                    start,
+                    hold,
+                    "triangle",
+                    MUSIC_PAD_VOLUME,
+                    attack=MUSIC_PAD_ATTACK,
+                    decay=MUSIC_PAD_DECAY,
+                    sustain=MUSIC_PAD_SUSTAIN,
+                    release=MUSIC_PAD_RELEASE,
+                )
+            )
+        notes.append(
+            Note(
+                midi(bass),
+                start,
+                hold,
+                "sine",
+                MUSIC_BASS_VOLUME,
+                attack=MUSIC_BASS_ATTACK,
+                sustain=MUSIC_BASS_SUSTAIN,
+                release=MUSIC_BASS_RELEASE,
+            )
+        )
+        steps = MUSIC_ARP_STEPS[tense]
+        for step in range(steps):
+            pitch = pad[MUSIC_ARP_PATTERN[step % len(MUSIC_ARP_PATTERN)]] + 12
+            voice = "pluck" if tense else "sine"
+            at = start + step * span / steps
+            notes.append(pluck(pitch, at, MUSIC_ARP_RING[tense], MUSIC_ARP_VOLUME[tense], voice))
+        if tense:
+            for beat in range(MUSIC_BEATS_PER_CHORD):
+                at = start + beat * span / MUSIC_BEATS_PER_CHORD
+                notes.append(pluck(bass - 12, at, MUSIC_HEARTBEAT_RING, MUSIC_HEARTBEAT_VOLUME, "sine"))
+    return [note for note in notes if note.end <= MUSIC_LOOP_SECONDS]

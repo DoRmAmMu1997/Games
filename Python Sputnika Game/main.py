@@ -26,6 +26,7 @@ from audio import init_mixer, reserve_channels
 # `OrbitalOrchardGame` is the main "controller" object for the whole program.
 # It owns the window, the current scene, the list of bodies, and the game loop.
 from game import OrbitalOrchardGame
+from settings import MUSIC_CHANNEL_COUNT
 
 
 def _resource_path(name: str) -> Path:
@@ -63,8 +64,9 @@ def main() -> None:
 
     # Initialize every pygame subsystem we use: display, mixer, fonts, input, etc.
     pygame.init()
-    # Now that the mixer is open, keep its music channel away from effects.
-    reserve_channels()
+    # Now that the mixer is open, keep the music channels (calm and tense)
+    # away from effects.
+    reserve_channels(MUSIC_CHANNEL_COUNT)
     try:
         # Load the generated project icon if it is available.
         # This is optional on purpose: if the icon file is missing for any reason,
