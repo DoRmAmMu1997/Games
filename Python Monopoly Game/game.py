@@ -47,6 +47,55 @@ TURN_SAFETY_CAP = 3000
 # named AI profiles and guards future loaders from guessing at unknown payloads.
 SAVE_VERSION = 2
 
+# The event kinds ``MonopolyGame`` queues for the window's sounds (see
+# ``drain_events``), one per sound-worthy moment:
+# - roll: any dice roll, even one equal to the previous roll;
+# - doubles: the roll was a double (queued right after its roll);
+# - three_doubles_jail: a third double in a row, which sends the player to Jail;
+# - pass_go: a token passed or landed on GO and collected the salary;
+# - buy: a title was bought at list price;
+# - rent: a landing charged rent to another player;
+# - tax: a landing charged Income or Luxury Tax;
+# - card_chance / card_chest: a card was drawn from that deck;
+# - go_to_jail: a player was sent to Jail;
+# - leave_jail: a player left Jail (doubles, the fine, or a card);
+# - build_house / build_hotel: a building went up;
+# - sell_building: a building was sold back to the Bank;
+# - mortgage / unmortgage: a title was mortgaged / its mortgage was lifted;
+# - auction_start / auction_bid / auction_won: an auction opened, took a
+#   bid, or ended with a winner;
+# - trade_proposed / trade_accepted / trade_rejected: a trade offer and its answer;
+# - raise_funds: a short human must raise cash (queued on entering that state);
+# - bankrupt: a player went bankrupt;
+# - game_over: the game ended.
+EVENT_KINDS = (
+    "roll",
+    "doubles",
+    "three_doubles_jail",
+    "pass_go",
+    "buy",
+    "rent",
+    "tax",
+    "card_chance",
+    "card_chest",
+    "go_to_jail",
+    "leave_jail",
+    "build_house",
+    "build_hotel",
+    "sell_building",
+    "mortgage",
+    "unmortgage",
+    "auction_start",
+    "auction_bid",
+    "auction_won",
+    "trade_proposed",
+    "trade_accepted",
+    "trade_rejected",
+    "raise_funds",
+    "bankrupt",
+    "game_over",
+)
+
 
 class TradeSide(TypedDict):
     """One side of a trade offer: the titles, cash and jail cards handed over."""
@@ -91,6 +140,9 @@ class MonopolyGame:
       of whichever decision is open right now.
     - `rng`: the seeded random generator behind every die and shuffle.
     - `log`: the short event history the side panel shows.
+    - `events`: sound-worthy moments since the shell last called
+      `drain_events`, as short kind strings in the order they happened
+      (see `EVENT_KINDS`). Never saved.
     """
 
     # ----------------------------------------------------------------------
@@ -160,6 +212,9 @@ class MonopolyGame:
         self.last_card: dict | None = None  # most recent card drawn (for the UI)
 
         self.log: list[str] = []
+        # Not part of the game state: `to_dict` leaves it out, so a loaded
+        # game always starts with an empty queue.
+        self.events: list[str] = []
         self._note(f"New game on the {board_data.THEMES[theme]['name']} board.")
 
     # ----------------------------------------------------------------------
@@ -172,6 +227,20 @@ class MonopolyGame:
         # unbounded list would grow for the whole game.
         if len(self.log) > 60:
             self.log = self.log[-60:]
+
+    def _emit(self, kind: str) -> None:
+        """Queue one event kind (one of `EVENT_KINDS`) for `drain_events`."""
+        self.events.append(kind)
+
+    def drain_events(self) -> list[str]:
+        """Return every queued event, oldest first, and empty the queue.
+
+        The window calls this once per frame and turns each kind into a
+        sound. Humans, the AI, tests and simulations all change the game
+        through the same methods, so their actions queue the same events.
+        """
+        events, self.events = self.events, []
+        return events
 
     @property
     def current_player(self) -> Player:
@@ -302,7 +371,7 @@ class MonopolyGame:
             self._note(f"{payer.name} must raise ${amount} to pay "
                        f"{'the Bank' if payee is None else payee.name}.")
             if self.awaiting != "auction":
-                self.awaiting = "raise_funds"
+                self._enter_raise_funds()
             return
         if payer.cash < amount:
             # Try to cover the shortfall by selling houses and mortgaging.
@@ -398,6 +467,7 @@ class MonopolyGame:
         """
         player.bankrupt = True
         self._note(f"{player.name} has gone bankrupt!")
+        self._emit("bankrupt")
 
         # Buildings always go back to the bank's supply; a player creditor is
         # paid their half-price value. (On the automatic path every building
@@ -454,6 +524,7 @@ class MonopolyGame:
             self.phase = "game_over"
             self.awaiting = "game_over"
             self.winner = survivors[0].index if survivors else None
+            self._emit("game_over")
             if self.winner is not None:
                 self._note(f"{self.players[self.winner].name} wins the game!")
 
@@ -521,6 +592,7 @@ class MonopolyGame:
         self.phase = "game_over"
         self.awaiting = "game_over"
         self.winner = survivors[0].index if survivors else None
+        self._emit("game_over")
         self._note("Turn limit reached -- the richest player wins.")
 
     def end_turn(self) -> None:
@@ -554,6 +626,9 @@ class MonopolyGame:
         is_double = die_a == die_b
         total = die_a + die_b
         self._normal_double = False
+        self._emit("roll")
+        if is_double:
+            self._emit("doubles")
 
         if player.in_jail:
             self._roll_in_jail(player, total, is_double)
@@ -564,6 +639,7 @@ class MonopolyGame:
             if self.doubles_count >= 3:
                 # Three doubles in a row sends you straight to jail.
                 self._note(f"{player.name} rolled three doubles and goes to Jail.")
+                self._emit("three_doubles_jail")
                 self.go_to_jail(player)
                 self._continue_after_landing()
                 return self.dice
@@ -595,6 +671,7 @@ class MonopolyGame:
             self._note(f"{player.name} rolled doubles and leaves Jail.")
             player.in_jail = False
             player.jail_turns = 0
+            self._emit("leave_jail")
             self._step_forward(player, total)
             self._resolve_landing(player)
             # Escaping on doubles does NOT grant an extra roll.
@@ -613,6 +690,7 @@ class MonopolyGame:
                 # forward and resolves the landing.
                 self._continue_after_landing()
                 return
+            self._emit("leave_jail")
             if self.debts:
                 # A human is raising funds for the fine: they move the rolled
                 # amount once it is paid (see _continue_after_landing).
@@ -641,6 +719,7 @@ class MonopolyGame:
         player.in_jail = False
         player.jail_turns = 0
         self._note(f"{player.name} pays the ${JAIL_FINE} fine and is free.")
+        self._emit("leave_jail")
 
     def use_jail_card(self) -> None:
         """Current player spends a Get Out of Jail Free card before rolling."""
@@ -653,6 +732,7 @@ class MonopolyGame:
         player.in_jail = False
         player.jail_turns = 0
         self._note(f"{player.name} uses a Get Out of Jail Free card.")
+        self._emit("leave_jail")
 
     def _continue_after_landing(self) -> None:
         """Decide what happens after a landing fully resolves.
@@ -670,7 +750,7 @@ class MonopolyGame:
             return
         self._drop_void_debts()
         if self.debts:
-            self.awaiting = "raise_funds"
+            self._enter_raise_funds()
             return
         steps, self._pending_jail_move = self._pending_jail_move, None
         if steps is not None and not self.current_player.bankrupt:
@@ -691,6 +771,16 @@ class MonopolyGame:
     # ----------------------------------------------------------------------
     # Raising funds: a short human pays or concedes their queued debts
     # ----------------------------------------------------------------------
+    def _enter_raise_funds(self) -> None:
+        """Wait in "raise_funds" for the oldest debt, announcing it on the way in.
+
+        Only the switch into the state queues an event: a second debt
+        queued while the player is already raising funds adds no repeat.
+        """
+        if self.awaiting != "raise_funds":
+            self._emit("raise_funds")
+        self.awaiting = "raise_funds"
+
     def _drop_void_debts(self) -> None:
         """Forget debts owed by, or to, a player who has gone bankrupt."""
         self.debts = [debt for debt in self.debts
@@ -755,6 +845,7 @@ class MonopolyGame:
         if new_position < player.position:
             self.gain(player, GO_SALARY)
             self._note(f"{player.name} passes GO and collects ${GO_SALARY}.")
+            self._emit("pass_go")
         player.position = new_position
 
     def advance_to(self, player: Player, position: int,
@@ -770,6 +861,7 @@ class MonopolyGame:
         if position != player.position and position <= player.position:
             self.gain(player, GO_SALARY)
             self._note(f"{player.name} passes GO and collects ${GO_SALARY}.")
+            self._emit("pass_go")
         player.position = position
         self._resolve_landing(player, rail_rent_multiplier=rail_rent_multiplier,
                               utility_card_rent=utility_card_rent)
@@ -786,6 +878,7 @@ class MonopolyGame:
         player.jail_turns = 0
         self._normal_double = False
         self._note(f"{player.name} goes to Jail.")
+        self._emit("go_to_jail")
 
     def _resolve_landing(self, player: Player, rail_rent_multiplier: int = 1,
                          utility_card_rent: bool = False) -> None:
@@ -810,6 +903,7 @@ class MonopolyGame:
             # from settings, so retuning a tax there takes effect here.
             amount = INCOME_TAX if space.tax >= INCOME_TAX else LUXURY_TAX
             self._note(f"{player.name} pays ${amount} {space.name}.")
+            self._emit("tax")
             self.charge(player, amount)
             return
         if kind in ("chance", "chest"):
@@ -834,6 +928,7 @@ class MonopolyGame:
                               rail_rent_multiplier, utility_card_rent)
         if rent > 0:
             self._note(f"{player.name} pays ${rent} rent to {owner.name}.")
+            self._emit("rent")
             self.transfer(player, owner, rent)
 
     def _rent_for(self, position: int, owner: Player, dice_total: int,
@@ -876,6 +971,7 @@ class MonopolyGame:
         deck = self._deck(deck_name)
         card = deck.draw()
         self.last_card = card
+        self._emit(f"card_{deck_name}")
         self._note(f"{player.name} draws: {cards_module.format_card_text(card, self.board)}")
         cards_module.apply_card(self, player, card)
 
@@ -904,6 +1000,7 @@ class MonopolyGame:
         player.cash -= space.price
         self.owners[self.pending_purchase] = player.index
         self._note(f"{player.name} buys {space.name} for ${space.price}.")
+        self._emit("buy")
         self.pending_purchase = None
         self._continue_after_landing()
 
@@ -927,6 +1024,7 @@ class MonopolyGame:
             "context": context,
         }
         self.awaiting = "auction"
+        self._emit("auction_start")
         if context == "bankruptcy":
             self._note(f"Bank bankruptcy auction: {self.board[position].name}.")
         else:
@@ -961,6 +1059,7 @@ class MonopolyGame:
             return  # an illegal bid is simply ignored
         auction["high_bid"] = amount
         auction["high_bidder"] = auction["current"]
+        self._emit("auction_bid")
         self._advance_auction()
 
     def auction_pass(self) -> None:
@@ -1008,6 +1107,7 @@ class MonopolyGame:
             winner = self.players[winner_index]
             winner.cash -= auction["high_bid"]
             self.owners[position] = winner_index
+            self._emit("auction_won")
             self._note(f"{winner.name} wins {self.board[position].name} "
                        f"at auction for ${auction['high_bid']}.")
         else:
@@ -1198,6 +1298,7 @@ class MonopolyGame:
         self.houses[position] = level + 1
         what = "a hotel" if level == 4 else "a house"
         self._note(f"{player.name} builds {what} on {space.name}.")
+        self._emit("build_hotel" if level == 4 else "build_house")
         return True
 
     def can_sell_building(self, player: Player, position: int) -> bool:
@@ -1225,6 +1326,7 @@ class MonopolyGame:
         if not forced and not self.can_sell_building(player, position):
             return False
         space = self.board[position]
+        self._emit("sell_building")
         if level == 5 and self.bank_houses < 4:
             self._break_hotels_in_shortage(player, space.group)
             return True
@@ -1293,6 +1395,7 @@ class MonopolyGame:
         self.mortgaged.add(position)
         player.cash += space.mortgage
         self._note(f"{player.name} mortgages {space.name} for ${space.mortgage}.")
+        self._emit("mortgage")
         return True
 
     def unmortgage(self, position: int) -> bool:
@@ -1306,6 +1409,7 @@ class MonopolyGame:
         player.cash -= cost
         self.mortgaged.discard(position)
         self._note(f"{player.name} lifts the mortgage on {self.board[position].name}.")
+        self._emit("unmortgage")
         return True
 
     # ----------------------------------------------------------------------
@@ -1386,6 +1490,7 @@ class MonopolyGame:
         self.pending_trade = offer
         self.awaiting = "trade_response"
         self._trades_proposed += 1
+        self._emit("trade_proposed")
         self._note(f"{self.players[offer['from']].name} offers "
                    f"{self.players[offer['to']].name} a trade.")
         return True
@@ -1398,8 +1503,10 @@ class MonopolyGame:
         if accept and self.trade_is_legal(offer):
             self._execute_trade(offer)
             self._note(f"{self.players[offer['to']].name} accepts the trade.")
+            self._emit("trade_accepted")
         else:
             self._note(f"{self.players[offer['to']].name} rejects the trade.")
+            self._emit("trade_rejected")
             for wanted in offer["get"]["props"]:
                 self._rejected_offers[(offer["from"], offer["to"], wanted)] = self.turn_count
         self.pending_trade = None
