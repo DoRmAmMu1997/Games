@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from audio import Note, midi
+
 # Window and render-space size.
 # The game internally renders to this portrait canvas even when the desktop
 # window itself is resized smaller or larger.
@@ -378,3 +380,103 @@ def build_tiers() -> list[TierInfo]:
 
 # Build the tier list once at import time so every other file can reuse it.
 TIERS = build_tiers()
+
+
+# ---- Sound ----
+# Every sound is a recipe: a list of `Note`s that audio.py renders into
+# samples when the game starts (no audio files ship with the game). Pitches
+# are written as MIDI note numbers through `midi()`: 69 is A4 (440 Hz), +12 is
+# one octave up. The palette lives in A minor pentatonic (A C D E G), which
+# has no clashing notes, so overlapping effects always sound consonant.
+#
+# Beginner note:
+# - A "pluck" note below has no sustain: it rises over a few milliseconds and
+#   then rings down over `ring` seconds, like a struck bell or a marimba bar.
+# - Volumes stay well under 1.0 on purpose: several effects often play at
+#   once and their samples add up.
+SFX_PLUCK_ATTACK = 0.004  # A struck note reaches full volume this fast (s).
+SFX_PLUCK_RELEASE = 0.02  # Tail after a pluck's ring, so it never ends abruptly (s).
+# The merge ladder: tier n merges at A3 plus the n-th step of the pentatonic
+# scale, so every evolution sounds a little higher than the one before.
+MERGE_ROOT_NOTE = 57  # A3.
+PENTATONIC_STEPS = (0, 3, 5, 7, 10)
+
+
+def pluck(pitch: float, start: float, ring: float, volume: float, voice: str = "pluck") -> Note:
+    """Return a struck note: a near-instant attack, then a ring down to silence."""
+    return Note(
+        midi(pitch),
+        start,
+        SFX_PLUCK_ATTACK + ring,
+        voice,
+        volume,
+        attack=SFX_PLUCK_ATTACK,
+        decay=ring,
+        sustain=0.0,
+        release=SFX_PLUCK_RELEASE,
+    )
+
+
+def ladder_note(step: int) -> int:
+    """Return the MIDI note `step` places up the A minor pentatonic ladder."""
+    octave, degree = divmod(step, len(PENTATONIC_STEPS))
+    return MERGE_ROOT_NOTE + 12 * octave + PENTATONIC_STEPS[degree]
+
+
+def merge_notes(tier: int) -> list[Note]:
+    """Return the merge sound for reaching `tier`: a rising fifth with a shimmer."""
+    root = ladder_note(tier)
+    return [
+        pluck(root, 0.0, 0.16, 0.3),
+        pluck(root + 7, 0.055, 0.22, 0.26),
+        pluck(root + 12, 0.055, 0.3, 0.1, voice="sine"),
+    ]
+
+
+def big_merge_notes(tier: int) -> list[Note]:
+    """Return the big-merge sound for `tier`: a quick minor arpeggio over a soft swell."""
+    root = ladder_note(tier)
+    notes = [pluck(root + offset, index * 0.05, 0.3, 0.24) for index, offset in enumerate((0, 3, 7, 12))]
+    notes.append(Note(midi(root - 12), 0.0, 0.25, "triangle", 0.18, attack=0.06, decay=0.2, sustain=0.5, release=0.3))
+    return notes
+
+
+SFX_RECIPES: dict[str, list[Note]] = {
+    # A soft launcher "thup": a sine falling in pitch with a bright tick on top.
+    "drop": [
+        Note(midi(64), 0.0, 0.08, "sine", 0.32, glide=-1400.0, attack=0.003, decay=0.08, sustain=0.0, release=0.02),
+        pluck(76, 0.0, 0.05, 0.1),
+    ],
+    "merge": merge_notes(1),
+    "big_merge": big_merge_notes(len(TIERS) - 3),
+    # A short, soft two-note click for every button.
+    "button": [pluck(84, 0.0, 0.05, 0.22, voice="sine"), pluck(91, 0.012, 0.04, 0.08, voice="sine")],
+    # Game over without a record: a gentle descending A minor phrase over a low pad.
+    "game_over": [
+        Note(midi(64), 0.0, 0.28, "triangle", 0.26, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+        Note(midi(60), 0.3, 0.28, "triangle", 0.26, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+        Note(midi(57), 0.6, 0.7, "triangle", 0.28, attack=0.015, decay=0.2, sustain=0.6, release=0.5),
+        Note(midi(45), 0.6, 0.7, "sine", 0.2, attack=0.2, decay=0.2, sustain=0.8, release=0.5),
+        Note(midi(52), 0.6, 0.7, "sine", 0.12, attack=0.3, decay=0.2, sustain=0.8, release=0.5),
+    ],
+    # A record (new best tier or high score): an ascending A major fanfare
+    # that settles into a ringing chord.
+    "record": [
+        *(pluck(pitch, index * 0.11, 0.35, 0.26) for index, pitch in enumerate((69, 73, 76, 81))),
+        Note(midi(81), 0.44, 0.5, "triangle", 0.16, attack=0.05, decay=0.2, sustain=0.6, release=0.45),
+        Note(midi(76), 0.44, 0.5, "sine", 0.14, attack=0.05, decay=0.2, sustain=0.6, release=0.45),
+        Note(midi(85), 0.44, 0.5, "sine", 0.08, attack=0.05, decay=0.2, sustain=0.6, release=0.45),
+    ],
+    # The danger beep: a hollow low fourth, short enough to repeat quickly.
+    "warning": [
+        Note(midi(55), 0.0, 0.08, "square", 0.17, attack=0.006, decay=0.04, sustain=0.6, release=0.04),
+        Note(midi(60), 0.0, 0.08, "square", 0.12, attack=0.006, decay=0.04, sustain=0.6, release=0.04),
+    ],
+}
+# The fewest seconds between two plays of the same effect. A cascade can merge
+# several pairs in one frame; one merge sound per frame reads better than a
+# pile of identical sounds stacked on top of each other.
+SFX_COOLDOWNS: dict[str, float] = {
+    "merge": 0.03,
+    "big_merge": 0.03,
+}

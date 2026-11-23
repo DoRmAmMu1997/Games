@@ -1,9 +1,12 @@
-"""Procedural art, fonts, background generation, and placeholder sounds.
+"""Procedural art, fonts, background generation, and the sound bank.
 
 The goal of this file is to keep the project self-contained:
 - no external images are required,
 - no external sound files are required,
 - the rest of the game can request ready-to-use surfaces by tier.
+
+The sounds themselves are synthesised by `audio.py` from the recipes in
+`settings.py`; this file only builds the bank the game plays them from.
 
 Beginner note:
 - "Procedural" means the game draws or generates assets in code at runtime.
@@ -15,16 +18,18 @@ from __future__ import annotations
 
 import math
 import random
-from array import array
 
 import pygame
 
+from audio import SoundBank
 from settings import (
     BACKGROUND_STAR_COUNT,
     BG_BOTTOM,
     BG_TOP,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SFX_COOLDOWNS,
+    SFX_RECIPES,
     SOFT_WHITE,
     TIERS,
     WHITE,
@@ -48,112 +53,6 @@ def _blend_onto(surface: pygame.Surface, draw) -> None:
     surface.blit(layer, (0, 0))
 
 
-class SoundBank:
-    """Creates and stores short procedural sounds used by the game.
-
-    Every sound is synthesised from sine waves when the bank is created, so
-    the game ships without any audio files. Sounds are looked up by name
-    (`"drop"`, `"merge"`, `"big_merge"`, `"button"`, `"game_over"`,
-    `"record"`, `"warning"`) through `play()`.
-
-    Attributes:
-        enabled: False when the mixer is unavailable or a tone failed to
-            build. Then `play()` silently does nothing, so a machine without
-            audio still runs the game.
-        sounds: Name to `pygame.mixer.Sound` lookup.
-    """
-
-    def __init__(self) -> None:
-        """Build every named tone, or disable sound if the mixer is unavailable."""
-        # If the mixer failed to initialize, the game still runs silently.
-        self.enabled = pygame.mixer.get_init() is not None
-        self.sounds: dict[str, pygame.mixer.Sound] = {}
-        if not self.enabled:
-            return
-
-        try:
-            # Build a small sound palette from pure generated tones.
-            # Different frequency combinations make each event type sound distinct.
-            self.sounds["drop"] = self._make_tone([280, 420], 0.08, 0.35)
-            self.sounds["merge"] = self._make_tone([420, 560, 760], 0.14, 0.32)
-            self.sounds["big_merge"] = self._make_tone([320, 480, 720, 980], 0.22, 0.34)
-            self.sounds["button"] = self._make_tone([540, 780], 0.06, 0.28)
-            self.sounds["game_over"] = self._make_tone([300, 220, 160], 0.36, 0.34)
-            self.sounds["record"] = self._make_tone([520, 660, 880, 1200], 0.22, 0.34)
-            # A tense low double-tone used for the escalating danger warning beep.
-            self.sounds["warning"] = self._make_tone([196, 262], 0.11, 0.3)
-        except pygame.error:
-            # Any mixer/build error disables sound cleanly instead of crashing.
-            self.enabled = False
-            self.sounds.clear()
-
-    def play(self, name: str, volume: float = 1.0) -> None:
-        """Play one named sound if audio is available."""
-        if not self.enabled:
-            return
-        sound = self.sounds.get(name)
-        if sound is None:
-            return
-        sound.set_volume(max(0.0, min(1.0, volume)))
-        sound.play()
-
-    def _make_tone(self, frequencies: list[float], duration: float, volume: float) -> pygame.mixer.Sound:
-        """Synthesize a short waveform directly into a pygame Sound object.
-
-        The tone is the sum of one sine wave per entry in `frequencies`, with
-        the n-th wave played at `1/n` loudness. An envelope shapes the volume
-        over time: a fast linear fade-in over the first 6% of samples (to avoid
-        a click) and then an exponential decay.
-
-        Args:
-            frequencies: Pitches in hertz to layer together.
-            duration: Length of the sound in seconds.
-            volume: Overall loudness from 0 to 1 before clipping.
-
-        Returns:
-            A ready-to-play `pygame.mixer.Sound`.
-
-        Raises:
-            pygame.error: If the mixer is not initialised.
-
-        Beginner note:
-        - Digital audio is a long list of numbers ("samples"), each one the
-          speaker position at a moment in time. At a sample rate of 44100,
-          one second is 44100 numbers per channel.
-        - The mixer here uses signed 16-bit samples, so a wave in -1..1 is
-          scaled to -32767..32767. Values outside -1..1 are clipped first.
-        """
-        mixer_state = pygame.mixer.get_init()
-        if mixer_state is None:
-            raise pygame.error("Mixer unavailable")
-
-        sample_rate, _, channels = mixer_state
-        sample_count = int(sample_rate * duration)
-        samples = array("h")
-        for index in range(sample_count):
-            # Convert the current sample index into seconds.
-            t = index / sample_rate
-
-            # Quick attack + exponential decay keeps the tone snappy and game-like.
-            envelope = min(1.0, index / max(1, int(sample_count * 0.06)))
-            envelope *= math.exp(-3.4 * index / sample_count)
-            value = 0.0
-            for harmonic, frequency in enumerate(frequencies, start=1):
-                # Blend several sine waves; later harmonics are quieter.
-                # This is a tiny version of building a richer musical timbre.
-                value += math.sin(math.tau * frequency * t) / harmonic
-            value *= volume * envelope
-
-            # Convert from a floating-point wave in roughly [-1, 1] to a signed
-            # 16-bit integer sample pygame's mixer can store.
-            sample = int(max(-1.0, min(1.0, value)) * 32767)
-            # The mixer expects one sample per channel for every moment
-            # (left + right for stereo, more for surround setups), so the same
-            # value is copied into every channel.
-            samples.extend((sample,) * channels)
-        return pygame.mixer.Sound(buffer=samples.tobytes())
-
-
 class AssetLibrary:
     """Caches procedural surfaces and exposes shared fonts and sounds.
 
@@ -168,7 +67,7 @@ class AssetLibrary:
         stars, sparkles: Fixed-seed tuples describing the twinkling points
             that `draw_background()` animates each frame.
         vignette: Full-screen overlay that darkens the corners.
-        sounds: The game's `SoundBank`.
+        sounds: The game's `audio.SoundBank`, built from `SFX_RECIPES`.
         title_font ... tiny_font: pygame's built-in font at several sizes.
 
     Beginner note:
@@ -191,7 +90,7 @@ class AssetLibrary:
         self.stars = self._build_stars()
         self.sparkles = self._build_sparkles()
         self.vignette = self._build_vignette()
-        self.sounds = SoundBank()
+        self.sounds = SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
 
         # pygame's default built-in font is enough for this prototype.
         # Different sizes are stored here so callers can reuse them easily.
