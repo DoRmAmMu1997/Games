@@ -451,14 +451,16 @@ class AssetLibrary:
         surface = pygame.Surface((size, size), pygame.SRCALPHA)
 
         # Outer glow makes higher-tier bodies feel more magical and valuable.
-        # These circles are drawn straight onto the surface, so each smaller
-        # circle *replaces* the pixels of the larger one under it; the drawn
-        # glow therefore ends up as rings whose alpha grows toward the outside.
+        # These circles are drawn straight onto the surface, largest first, so
+        # each smaller circle *replaces* the pixels of the larger one under it
+        # and every 5 px ring keeps its own alpha. The alpha therefore grows as
+        # the rings shrink: the glow is strongest next to the orb and fades
+        # out to a faint outer edge.
         glow_alpha = 28 if tier >= 7 else 18
         for ring in range(5, 0, -1):
             pygame.draw.circle(
                 surface,
-                (*shade(info.color, 1.06), glow_alpha * ring),
+                (*shade(info.color, 1.06), glow_alpha * (6 - ring)),
                 center,
                 radius + ring * 5,
             )

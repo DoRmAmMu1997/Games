@@ -70,6 +70,27 @@ class OrbArtTests(unittest.TestCase):
             with self.subTest(tier=tier):
                 self.assertEqual(holes, 0)
 
+    def test_outer_glow_fades_away_from_the_orb(self) -> None:
+        """The glow is strongest next to the orb and faintest at its outer edge.
+
+        The glow is five stacked rings 5 px wide. Sampling straight below
+        each orb, in the middle of each ring band (well away from any
+        antialiased edge), the alpha must drop at every step outward. Some
+        tiers' rings, rays or wide sprites cover the nearer bands, so only
+        bands that show bare glow (alpha below 255) are compared.
+        """
+
+        for tier, info in enumerate(TIERS):
+            orb = self.assets.get_body_surface(tier)
+            cx, cy = orb.get_width() // 2, orb.get_height() // 2
+            radius = int(info.radius)
+            alphas = [orb.get_at((cx, cy + radius + offset)).a for offset in (7, 12, 17, 22)]
+            glow = [alpha for alpha in alphas if alpha < 255]
+            with self.subTest(tier=tier, alphas=alphas):
+                self.assertGreaterEqual(len(glow), 2)
+                self.assertEqual(glow, sorted(glow, reverse=True))
+                self.assertEqual(len(set(glow)), len(glow))
+
 
 if __name__ == "__main__":
     unittest.main()
