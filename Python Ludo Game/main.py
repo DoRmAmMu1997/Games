@@ -61,6 +61,10 @@ from settings import (
     INK,
     MAX_PLAYERS,
     MIN_PLAYERS,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_LOOP_SECONDS,
+    MUSIC_VOLUME,
     PANEL_BG,
     PANEL_CARD,
     PANEL_EDGE,
@@ -77,6 +81,7 @@ from settings import (
     TOKEN_HOP_SPEED,
     WHITE,
     WINDOW_TITLE,
+    music_notes,
     seat_colors,
     seat_name,
 )
@@ -550,6 +555,7 @@ class LudoApp:
         token_pixels / token_steps / token_waypoints / token_hops: Pawn
             animation state (see ``_update_token_pixels``).
         sounds: The ``audio.SoundBank`` of effects (silent without a mixer).
+        music: The ``audio.MusicPlayer`` looping the folk tune.
         ai_timer: Milliseconds since the last AI action, used to pace AI turns.
         stats: Lifetime stats loaded from disk.
     """
@@ -575,6 +581,10 @@ class LudoApp:
         self.running = True
         # Every effect is synthesised once here from the recipes in settings.
         self.sounds = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
+        # The tune renders in a background thread; it starts playing on the
+        # first frame after it is ready (``music.update`` in ``_update``).
+        self.music = audio.MusicPlayer(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME)
+        self.music.start(MUSIC_FADE_IN_MS)
 
         self.screen = "setup"
         self.game: LudoGame | None = None
@@ -839,6 +849,7 @@ class LudoApp:
         elif self.screen == "over":
             if key == "new_game":
                 self.screen = "setup"
+                self.music.start(MUSIC_FADE_IN_MS)
             elif key == "quit":
                 self.running = False
 
@@ -989,7 +1000,8 @@ class LudoApp:
     def _update(self, autotest: bool) -> None:
         """Advance animations, sounds, game-over bookkeeping, and AI turns.
 
-        Called once per frame. In order it: counts down the dice animation,
+        Called once per frame. In order it: lets the music player start the
+        tune once it has rendered, counts down the dice animation,
         moves pawns along their hop paths, plays the sounds for everything
         the engine reported since the last frame, switches to the game-over screen
         (recording stats once) when the engine says the game ended, and, if
@@ -1001,6 +1013,7 @@ class LudoApp:
         milliseconds, so timers count real time whatever the frame rate.
         """
 
+        self.music.update()
         elapsed = self.clock.get_time()
         if self.dice_anim_remaining > 0:
             self.dice_anim_remaining = max(0, self.dice_anim_remaining - elapsed)
@@ -1014,6 +1027,7 @@ class LudoApp:
             # Stats are recorded here instead of inside the engine because
             # stats are app persistence, not core Ludo rules.
             self._record_finished_game_once()
+            self._play_game_over_jingle()
             self.screen = "over"
             return
         if self.game.current_player.is_human:
@@ -1039,6 +1053,20 @@ class LudoApp:
         human_to_play = self.game.current_player.is_human
         for name, step in event_sounds(kinds, self.game.last_roll, human_to_play):
             self.sounds.play(name, pitch_step=step)
+
+    def _play_game_over_jingle(self) -> None:
+        """Fade the music out and play the win or lose jingle for the finished game.
+
+        The win jingle plays when a human won, and also when no human played
+        at all (an all-AI table); a computer beating the humans gets the
+        gentle lose jingle.
+        """
+
+        assert self.game is not None and self.game.winner is not None
+        self.music.stop(MUSIC_GAME_OVER_FADE_MS)
+        humans = [player for player in self.game.players if player.is_human]
+        won = not humans or self.game.players[self.game.winner].is_human
+        self.sounds.play("win" if won else "lose")
 
     def _perform_ai_step(self) -> None:
         """Let the current AI player roll or choose one move.

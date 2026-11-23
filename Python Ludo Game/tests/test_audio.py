@@ -27,7 +27,20 @@ import audio
 import main
 from audio import LIMIT, MusicPlayer, Note, SoundBank, midi, render
 from game import LudoGame, LudoRules
-from settings import DICE_RESULT_AT, HOP_PITCH_STEPS, SFX_COOLDOWNS, SFX_RECIPES
+from settings import (
+    DICE_RESULT_AT,
+    HOP_PITCH_STEPS,
+    MUSIC_BARS,
+    MUSIC_BEATS_PER_BAR,
+    MUSIC_BPM,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_LOOP_SECONDS,
+    MUSIC_VOLUME,
+    SFX_COOLDOWNS,
+    SFX_RECIPES,
+    music_notes,
+)
 
 RATE = 22050
 
@@ -320,7 +333,7 @@ class LudoRecipeTests(unittest.TestCase):
         """Each effect the shell plays has a recipe."""
 
         for name in ("dice", "six", "three_sixes", "leave_yard", "hop", "capture", "home", "bonus", "no_move",
-                     "turn", "click"):
+                     "turn", "click", "win", "lose"):
             with self.subTest(name=name):
                 self.assertIn(name, SFX_RECIPES)
 
@@ -580,6 +593,131 @@ class ShellSoundTests(unittest.TestCase):
         app.sounds = mock.Mock()
         app._handle_click((5, 5))
         app.sounds.play.assert_not_called()
+
+
+class LudoMusicTests(unittest.TestCase):
+    """The folk loop is the right length, loops seamlessly and stays in bounds."""
+
+    def test_loop_length_matches_its_bars_and_tempo(self) -> None:
+        """The loop is MUSIC_BARS bars at MUSIC_BPM, between 16 and 32 seconds."""
+
+        self.assertAlmostEqual(MUSIC_LOOP_SECONDS, MUSIC_BARS * MUSIC_BEATS_PER_BAR * 60.0 / MUSIC_BPM)
+        self.assertGreaterEqual(MUSIC_LOOP_SECONDS, 16.0)
+        self.assertLessEqual(MUSIC_LOOP_SECONDS, 32.0)
+
+    def test_track_loops_cleanly(self) -> None:
+        """The loop renders to its length, starts and ends near silence and never clips."""
+
+        notes = music_notes()
+        samples = render(notes, RATE, 1, total=MUSIC_LOOP_SECONDS)
+        self.assertEqual(len(samples), round(MUSIC_LOOP_SECONDS * RATE))
+        self.assertLess(abs(samples[0]), 300)
+        self.assertLess(abs(samples[-1]), 300)
+        self.assertLess(max(abs(value) for value in samples), 0.95 * 32767)
+
+    def test_every_note_fits_inside_the_loop(self) -> None:
+        """No note rings past the loop's end, so the restart never cuts one off."""
+
+        notes = music_notes()
+        self.assertTrue(all(note.start >= 0.0 and note.end <= MUSIC_LOOP_SECONDS + 1e-9 for note in notes))
+        self.assertTrue(all(note.voice in audio.VOICES for note in notes))
+
+    def test_track_is_deterministic(self) -> None:
+        """Building the loop twice gives the same notes."""
+
+        self.assertEqual(music_notes(), music_notes())
+
+    def test_jingles_are_major_up_and_minor_down(self) -> None:
+        """The win jingle climbs and the lose jingle falls, each 1.2 to 3 seconds long."""
+
+        for name, rising in (("win", True), ("lose", False)):
+            notes = SFX_RECIPES[name]
+            melody = sorted((note for note in notes if note.voice != "noise"), key=lambda note: note.start)
+            first, last = melody[0].freq, max(melody, key=lambda note: note.start).freq
+            with self.subTest(name=name):
+                self.assertEqual(last > first, rising)
+                self.assertGreaterEqual(max(note.end for note in notes), 1.2)
+                self.assertLessEqual(max(note.end for note in notes), 3.0)
+
+
+class ShellMusicTests(unittest.TestCase):
+    """The window plays the loop, and answers the end of a game with a jingle."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once so the app can open its dummy window."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after these tests."""
+
+        pygame.quit()
+
+    def test_music_starts_when_the_app_opens(self) -> None:
+        """The app builds the loop's player and asks it to fade in at once."""
+
+        with mock.patch.object(main.audio, "MusicPlayer") as player_class:
+            main.LudoApp(persist=False)
+        player_class.assert_called_once_with(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME)
+        player_class.return_value.start.assert_called_once_with(MUSIC_FADE_IN_MS)
+
+    def test_every_frame_updates_the_music(self) -> None:
+        """``_update`` gives the music player its per-frame turn, on every screen."""
+
+        app = main.LudoApp(persist=False)
+        music = app.music = mock.Mock()
+        app._update(autotest=False)
+        app._update(autotest=False)
+        self.assertEqual(music.update.call_count, 2)
+
+    def finish(self, human_seats: int, winner: int) -> tuple[main.LudoApp, mock.Mock, mock.Mock]:
+        """Return an app whose game seat ``winner`` has just won, after one update.
+
+        Also returns the mock bank and the mock music player standing in for
+        the real ones.
+        """
+
+        app, game, bank = make_app_with_game(human_seats)
+        music = app.music = mock.Mock()
+        for token in game.players[winner].tokens:
+            token.steps = game.layout.finish_steps
+        game._finish_game(winner)
+        app._update(autotest=False)
+        return app, bank, music
+
+    def test_a_human_win_fades_the_music_under_the_win_jingle(self) -> None:
+        """A human winner: music fades out and the win jingle plays, once."""
+
+        app, bank, music = self.finish(human_seats=1, winner=0)
+        self.assertEqual(app.screen, "over")
+        music.stop.assert_called_once_with(MUSIC_GAME_OVER_FADE_MS)
+        self.assertEqual([name for name, _ in played(bank)], ["win"])
+        app._update(autotest=False)
+        self.assertEqual([name for name, _ in played(bank)], ["win"])
+
+    def test_an_ai_win_over_humans_plays_the_lose_jingle(self) -> None:
+        """A computer beat the human table: the gentle lose jingle plays."""
+
+        _app, bank, music = self.finish(human_seats=1, winner=2)
+        music.stop.assert_called_once_with(MUSIC_GAME_OVER_FADE_MS)
+        self.assertEqual([name for name, _ in played(bank)], ["lose"])
+
+    def test_an_all_computer_game_ends_with_the_win_jingle(self) -> None:
+        """With nobody to disappoint, an all-AI game celebrates its winner."""
+
+        _app, bank, _music = self.finish(human_seats=0, winner=1)
+        self.assertEqual([name for name, _ in played(bank)], ["win"])
+
+    def test_new_game_after_the_end_brings_the_music_back(self) -> None:
+        """Leaving the game-over screen for setup fades the loop back in."""
+
+        app, _bank, music = self.finish(human_seats=1, winner=0)
+        music.reset_mock()
+        app._on_button("new_game")
+        self.assertEqual(app.screen, "setup")
+        music.start.assert_called_once_with(MUSIC_FADE_IN_MS)
 
 
 class MixerStartupTests(unittest.TestCase):

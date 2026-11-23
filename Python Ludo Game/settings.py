@@ -8,6 +8,7 @@ magic numbers through the code. The save paths intentionally live under
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from audio import Note, midi
@@ -310,3 +311,116 @@ SFX_COOLDOWNS: dict[str, float] = {
     "no_move": 0.2,
     "click": 0.04,
 }
+
+# Game-over jingles: the music fades out and one of these plays.
+SFX_RECIPES.update(
+    {
+        # A human won (or the AI table finished): an ascending G major
+        # fanfare that settles into a ringing chord over a low G.
+        "win": [
+            *(pluck(pitch, index * 0.12, 0.3, 0.24) for index, pitch in enumerate((67, 71, 74, 79))),
+            *(
+                Note(midi(pitch), 0.5, 0.7, "triangle", 0.13, attack=0.03, decay=0.2, sustain=0.6, release=0.6)
+                for pitch in (79, 83, 86)
+            ),
+            Note(midi(43), 0.5, 0.7, "sine", 0.22, attack=0.05, decay=0.2, sustain=0.8, release=0.6),
+            pluck(91, 0.5, 0.5, 0.1, voice="sine"),
+        ],
+        # A computer beat the humans: a gentle descending G minor phrase.
+        "lose": [
+            Note(midi(74), 0.0, 0.26, "triangle", 0.24, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+            Note(midi(70), 0.32, 0.26, "triangle", 0.24, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+            Note(midi(67), 0.64, 0.7, "triangle", 0.26, attack=0.015, decay=0.2, sustain=0.6, release=0.5),
+            Note(midi(43), 0.64, 0.7, "sine", 0.2, attack=0.2, decay=0.2, sustain=0.8, release=0.5),
+            Note(midi(50), 0.64, 0.7, "sine", 0.1, attack=0.3, decay=0.2, sustain=0.8, release=0.5),
+        ],
+    }
+)
+
+# Music: an upbeat folk tune in G major, rendered once into a loop that plays
+# on the reserved mixer channel 0 (see `music_notes`). A marimba melody rides
+# an "oom-pah" accompaniment: the bass plays the chord's root on beat 1 and
+# its fifth on beat 3, a soft chord answers on beats 2 and 4, and a quiet
+# shaker ticks on every off-beat.
+MUSIC_BPM = 128  # Beats per minute: a brisk walking-dance pace.
+MUSIC_BEATS_PER_BAR = 4
+MUSIC_BEAT_SECONDS = 60.0 / MUSIC_BPM
+MUSIC_VOLUME = 0.22  # Channel volume: low, so effects sit on top of the music.
+MUSIC_FADE_IN_MS = 1500  # The tune eases in when the app opens or a new game is set up.
+MUSIC_GAME_OVER_FADE_MS = 700  # How quickly the tune fades under the game-over jingle.
+# Each chord: (bass root, bass fifth, the three notes of the off-beat "pah"), as MIDI numbers.
+MUSIC_CHORDS: dict[str, tuple[int, int, tuple[int, int, int]]] = {
+    "G": (43, 50, (55, 59, 62)),
+    "C": (48, 43, (55, 60, 64)),
+    "D": (50, 45, (54, 57, 62)),
+    "Em": (40, 47, (55, 59, 64)),
+}
+# The tune, one bar per entry: the chord, then the melody notes as (beat in
+# the bar, length in beats, MIDI pitch). Bars 1-8 are the A part, 9-16 the B
+# part that wanders to E minor before coming home to G.
+MUSIC_SCORE: tuple[tuple[str, tuple[tuple[float, float, int], ...]], ...] = (
+    ("G", ((0, 0.5, 74), (0.5, 0.5, 71), (1, 0.5, 67), (1.5, 0.5, 71), (2, 1, 74), (3, 1, 79))),
+    ("C", ((0, 1, 76), (1, 0.5, 72), (1.5, 0.5, 76), (2, 1, 79), (3, 1, 76))),
+    ("G", ((0, 0.5, 74), (0.5, 0.5, 71), (1, 0.5, 74), (1.5, 0.5, 79), (2, 1, 71), (3, 0.5, 69), (3.5, 0.5, 67))),
+    ("D", ((0, 1, 69), (1, 0.5, 66), (1.5, 0.5, 69), (2, 2, 74))),
+    ("G", ((0, 0.5, 74), (0.5, 0.5, 71), (1, 0.5, 67), (1.5, 0.5, 71), (2, 1, 74), (3, 1, 79))),
+    ("C", ((0, 0.5, 76), (0.5, 0.5, 79), (1, 0.5, 76), (1.5, 0.5, 72), (2, 1, 76), (3, 0.5, 74), (3.5, 0.5, 72))),
+    ("D", ((0, 0.5, 69), (0.5, 0.5, 66), (1, 0.5, 69), (1.5, 0.5, 74), (2, 1, 78), (3, 1, 74))),
+    ("G", ((0, 2, 67), (2, 0.5, 67), (2.5, 0.5, 71), (3, 1, 74))),
+    ("Em", ((0, 1, 71), (1, 0.5, 67), (1.5, 0.5, 71), (2, 1, 76), (3, 0.5, 74), (3.5, 0.5, 71))),
+    ("C", ((0, 1, 72), (1, 0.5, 76), (1.5, 0.5, 79), (2, 1, 76), (3, 1, 72))),
+    ("G", ((0, 0.5, 71), (0.5, 0.5, 74), (1, 0.5, 79), (1.5, 0.5, 74), (2, 1, 71), (3, 1, 67))),
+    ("D", ((0, 0.5, 69), (0.5, 0.5, 71), (1, 0.5, 69), (1.5, 0.5, 66), (2, 2, 62))),
+    ("Em", ((0, 1, 76), (1, 0.5, 71), (1.5, 0.5, 76), (2, 1, 79), (3, 1, 76))),
+    ("C", ((0, 0.5, 79), (0.5, 0.5, 76), (1, 0.5, 72), (1.5, 0.5, 76), (2, 1, 79), (3, 1, 81))),
+    ("D", ((0, 1, 78), (1, 0.5, 76), (1.5, 0.5, 74), (2, 1, 69), (3, 1, 66))),
+    ("G", ((0, 1, 67), (1, 1, 71), (2, 2, 67))),
+)
+MUSIC_BARS = len(MUSIC_SCORE)
+MUSIC_LOOP_SECONDS = MUSIC_BARS * MUSIC_BEATS_PER_BAR * MUSIC_BEAT_SECONDS  # 30 s at 128 BPM.
+MUSIC_MELODY_VOLUME = 0.22
+MUSIC_MELODY_RING = 1.5  # A melody note rings this many times its written length (legato marimba).
+MUSIC_BASS_VOLUME = 0.26
+MUSIC_BASS_RING = 0.8  # Beats a bass note rings, so "oom" stays short and bouncy.
+MUSIC_CHORD_VOLUME = 0.06  # Per chord note; three of them sound together.
+MUSIC_CHORD_RING = 0.35  # Beats an off-beat chord rings: a light "pah".
+MUSIC_SHAKER_VOLUME = 0.03
+MUSIC_SHAKER_RATE = 6000.0  # Noise values per second: a high, airy hiss.
+MUSIC_SHAKER_RING = 0.06  # Seconds each shaker tick lasts.
+
+
+def music_notes() -> list[Note]:
+    """Return one loop of the folk tune (see `MUSIC_SCORE`).
+
+    Every note ends by `MUSIC_LOOP_SECONDS`: a note that would ring past the
+    end is shortened so its release fade finishes exactly there, so the loop
+    restarts without a click.
+    """
+
+    beat = MUSIC_BEAT_SECONDS
+    notes: list[Note] = []
+    for bar, (chord, melody) in enumerate(MUSIC_SCORE):
+        start = bar * MUSIC_BEATS_PER_BAR * beat
+        root, fifth, triad = MUSIC_CHORDS[chord]
+        for at, length, pitch in melody:
+            notes.append(pluck(pitch, start + at * beat, length * beat * MUSIC_MELODY_RING, MUSIC_MELODY_VOLUME))
+        for beat_index, bass in ((0, root), (2, fifth)):
+            notes.append(pluck(bass, start + beat_index * beat, MUSIC_BASS_RING * beat, MUSIC_BASS_VOLUME, "triangle"))
+        for beat_index in (1, 3):
+            for pitch in triad:
+                notes.append(pluck(pitch, start + beat_index * beat, MUSIC_CHORD_RING * beat, MUSIC_CHORD_VOLUME))
+        for beat_index in range(MUSIC_BEATS_PER_BAR):
+            at = start + (beat_index + 0.5) * beat
+            notes.append(
+                Note(MUSIC_SHAKER_RATE, at, 0.005, "noise", MUSIC_SHAKER_VOLUME, attack=0.003,
+                     decay=MUSIC_SHAKER_RING, sustain=0.0, release=0.01)
+            )
+    fitted = []
+    for note in notes:
+        room = MUSIC_LOOP_SECONDS - note.start - note.release
+        if note.end > MUSIC_LOOP_SECONDS:
+            if room <= 0:
+                continue
+            note = replace(note, length=room)
+        fitted.append(note)
+    return fitted
