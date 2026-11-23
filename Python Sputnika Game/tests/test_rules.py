@@ -22,11 +22,16 @@ if str(GAME_DIR) not in sys.path:
 
 import rules
 from settings import (
+    AIM_TICK_DEGREES,
     COMBO_MAX_MULTIPLIER,
     COMBO_WINDOW,
     FAIL_DECAY,
     FAIL_GRACE,
     FAIL_LINE_Y,
+    IMPACT_EVENT_SPEED,
+    IMPACT_LOUDEST_SPEED,
+    IMPACT_SOUND_BANDS,
+    IMPACT_VOLUME_RANGE,
     STRESS_PREVIEW_RANGE,
     STRESS_PREVIEW_SHARE,
     STRESS_TIMER_SHARE,
@@ -164,6 +169,30 @@ class StressTests(unittest.TestCase):
         """A full countdown reads as a completely full meter."""
 
         self.assertAlmostEqual(rules.stress_level(FAIL_LINE_Y - 10, FAIL_GRACE, warning=True), 1.0)
+
+
+class SoundCueTests(unittest.TestCase):
+    """Pure helpers that decide which variant of a sound to play, and how loud."""
+
+    def test_impacts_get_heavier_and_louder_with_speed(self) -> None:
+        """Slow hits are light and quiet; each band up is heavier; loudness tops out."""
+
+        low, high = IMPACT_VOLUME_RANGE
+        self.assertEqual(rules.impact_sound(IMPACT_EVENT_SPEED), (0, low))
+        self.assertEqual(rules.impact_sound(IMPACT_SOUND_BANDS[0])[0], 1)
+        self.assertEqual(rules.impact_sound(IMPACT_SOUND_BANDS[1])[0], 2)
+        self.assertEqual(rules.impact_sound(IMPACT_LOUDEST_SPEED * 3), (2, high))
+        middle = rules.impact_sound((IMPACT_EVENT_SPEED + IMPACT_LOUDEST_SPEED) / 2)[1]
+        self.assertAlmostEqual(middle, (low + high) / 2)
+
+    def test_aim_ticks_only_when_a_detent_is_crossed(self) -> None:
+        """Small moves inside one detent are silent; crossing one (either way) ticks."""
+
+        step = AIM_TICK_DEGREES
+        self.assertFalse(rules.aim_tick_crossed(0.5, step - 0.5))
+        self.assertTrue(rules.aim_tick_crossed(step - 0.5, step + 0.5))
+        self.assertTrue(rules.aim_tick_crossed(0.5, -0.5))
+        self.assertFalse(rules.aim_tick_crossed(-step * 2, -step * 2))
 
 
 class ProgressSanitizingTests(unittest.TestCase):

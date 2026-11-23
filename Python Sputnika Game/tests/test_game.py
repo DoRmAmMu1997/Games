@@ -36,12 +36,16 @@ from game import OrbitalOrchardGame
 from merge_logic import find_merge_events
 from physics import PhysicsWorld
 from settings import (
+    AIM_TICK_DEGREES,
+    COMBO_CHIME_TOP,
     FAIL_AGE_GATE,
+    FAIL_LINE_Y,
     MUSIC_CALM_CHANNEL,
     MUSIC_CROSSFADE_MS,
     MUSIC_FADE_IN_MS,
     MUSIC_GAME_OVER_FADE_MS,
     MUSIC_TENSE_CHANNEL,
+    SFX_VOLUMES,
     SPAWN_Y,
     TIERS,
 )
@@ -600,6 +604,182 @@ class MusicTests(GameTestCase):
         game.start_round()
         game._sync_music()
         self.assertEqual(self.calm.start.call_args_list, [mock.call(MUSIC_FADE_IN_MS)] * 2)
+
+
+class SoundEventTests(GameTestCase):
+    """Player actions and game events ask the sound bank for the right sounds."""
+
+    def setUp(self) -> None:
+        """Start a round with a mock sound bank that records every request."""
+
+        super().setUp()
+        self.game.start_round()
+        self.sounds = mock.Mock()
+        self.game.assets.sounds = self.sounds
+
+    def names(self) -> list[str]:
+        """Return the names of every sound requested so far, in order."""
+
+        return [call.args[0] for call in self.sounds.play.call_args_list]
+
+    def _merge(self, tier: int) -> None:
+        """Merge two touching ``tier`` bodies right now."""
+
+        game = self.game
+        radius = TIERS[tier].radius
+        center = game.world.center
+        game.bodies = [
+            CelestialBody(game._next_body_id, tier, pygame.Vector2(center), pygame.Vector2(), game.now - 5.0),
+            CelestialBody(
+                game._next_body_id + 1,
+                tier,
+                pygame.Vector2(center.x + radius, center.y),
+                pygame.Vector2(),
+                game.now - 5.0,
+            ),
+        ]
+        game._next_body_id += 2
+        game._apply_merges(find_merge_events(game.bodies, game.now))
+
+    def test_launch_plays_the_drop_and_a_whoosh(self) -> None:
+        """A launch thumps and whooshes."""
+
+        self.game.drop_current_body()
+        self.assertEqual(self.names(), ["drop", "whoosh"])
+        self.sounds.play.assert_called_with("whoosh", SFX_VOLUMES["whoosh"])
+
+    def test_launch_during_the_cooldown_is_refused_audibly(self) -> None:
+        """A launch attempt while recharging plays the "not yet" sound and launches nothing."""
+
+        self.game.drop_current_body()
+        self.game.drop_current_body()
+        self.assertEqual(self.names(), ["drop", "whoosh", "launch_blocked"])
+        self.assertEqual(len(self.game.bodies), 1)
+
+    def test_aim_ticks_when_a_detent_is_crossed(self) -> None:
+        """Turning past a detent ticks once; a tiny turn inside one is silent."""
+
+        self.game._nudge_launch_angle(AIM_TICK_DEGREES / 4)
+        self.assertEqual(self.names(), [])
+        self.game._nudge_launch_angle(AIM_TICK_DEGREES)
+        self.assertEqual(self.names(), ["aim_tick"])
+        self.game._set_launch_angle_from_point((round(self.game.spawn_x) - 300, SPAWN_Y + 300))
+        self.assertEqual(self.names(), ["aim_tick", "aim_tick"])
+
+    def test_aim_at_the_limit_stays_silent(self) -> None:
+        """Pushing against the angle limit does not keep ticking."""
+
+        self.game._nudge_launch_angle(1000.0)
+        self.game._nudge_launch_angle(1000.0)
+        self.assertEqual(self.names(), ["aim_tick"])
+
+    def test_hardest_impact_of_the_frame_thuds(self) -> None:
+        """One thud per frame, weighted and scaled by the hardest new impact."""
+
+        body = CelestialBody(1, 0, pygame.Vector2(self.game.world.center), pygame.Vector2(), self.game.now)
+        hits = [
+            mock.Mock(body_a=body, body_b=None, impact_speed=300.0, point=pygame.Vector2()),
+            mock.Mock(body_a=body, body_b=None, impact_speed=900.0, point=pygame.Vector2()),
+        ]
+        with (
+            mock.patch.object(self.game.world, "step", return_value=hits),
+            mock.patch.object(CelestialBody, "register_impact", return_value=True),
+        ):
+            self.game._update(0.016)
+        weight, volume = game_module.impact_sound(900.0)
+        self.sounds.play.assert_any_call("impact", volume, pitch_step=weight)
+        self.assertEqual(self.names().count("impact"), 1)
+
+    def test_ignored_impacts_stay_silent(self) -> None:
+        """Impacts the bodies do not register (too soft or too soon) make no thud."""
+
+        body = CelestialBody(1, 0, pygame.Vector2(self.game.world.center), pygame.Vector2(), self.game.now)
+        hit = mock.Mock(body_a=body, body_b=None, impact_speed=900.0, point=pygame.Vector2())
+        with (
+            mock.patch.object(self.game.world, "step", return_value=[hit]),
+            mock.patch.object(CelestialBody, "register_impact", return_value=False),
+        ):
+            self.game._update(0.016)
+        self.assertNotIn("impact", self.names())
+
+    def test_merge_pitch_rises_with_the_tier(self) -> None:
+        """A merge asks for the variant of the tier it creates."""
+
+        self.game.high_score = 10_000
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        self._merge(2)
+        self.sounds.play.assert_any_call("merge", 0.36, pitch_step=3)
+
+    def test_big_merge_pitch_rises_with_the_tier(self) -> None:
+        """A late-tier merge asks for the big merge variant of its tier."""
+
+        self.game.high_score = 10_000
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        self.game.goal_reached = True
+        self._merge(len(TIERS) - 3)
+        self.sounds.play.assert_any_call("big_merge", 0.42, pitch_step=len(TIERS) - 2)
+
+    def test_combo_chime_climbs_with_the_chain(self) -> None:
+        """Chained merges chime one step higher per link, up to the top chime."""
+
+        self.game.high_score = 10_000
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        for _ in range(COMBO_CHIME_TOP + 1):
+            self._merge(0)
+        steps = [call.kwargs["pitch_step"] for call in self.sounds.play.call_args_list if call.args[0] == "combo"]
+        self.assertEqual(steps, [*range(2, COMBO_CHIME_TOP + 1), COMBO_CHIME_TOP])
+
+    def test_passing_the_high_score_cheers_once_per_run(self) -> None:
+        """Beating the old high score mid-run plays its sparkle once."""
+
+        self.game.high_score = 2
+        self.game.start_round()
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        for _ in range(3):
+            self._merge(0)
+        self.assertEqual(self.names().count("high_score"), 1)
+
+    def test_a_first_ever_run_does_not_cheer(self) -> None:
+        """With no high score to beat yet, the first points are not a "new record"."""
+
+        self.game.high_score = 0
+        self.game.start_round()
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        self._merge(0)
+        self.assertNotIn("high_score", self.names())
+
+    def test_danger_is_announced_when_entered_and_cleared(self) -> None:
+        """Crossing the danger line and recovering each play their cue once."""
+
+        game = self.game
+        high = CelestialBody(1, 0, pygame.Vector2(game.world.center.x, FAIL_LINE_Y - 40), pygame.Vector2(), -10.0)
+        game.bodies = [high]
+        game._update_fail_state(0.016)
+        game._update_fail_state(0.016)
+        game.bodies = []
+        game._update_fail_state(0.016)
+        game._update_fail_state(0.016)
+        self.assertEqual([name for name in self.names() if name.startswith("danger")], ["danger_on", "danger_off"])
+
+    def test_pause_and_resume_have_their_own_sounds(self) -> None:
+        """Esc pauses, Enter, Space and P resume, each with its cue."""
+
+        game = self.game
+        for key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_p):
+            game._handle_keydown(pygame.K_ESCAPE)
+            self.assertEqual(game.scene, "paused")
+            game._handle_keydown(key)
+            self.assertEqual(game.scene, "playing")
+        self.assertEqual(self.names(), ["pause", "resume"] * 3)
+
+    def test_pause_and_resume_buttons_have_their_own_sounds(self) -> None:
+        """The Pause and Resume buttons play the same cues as the keys."""
+
+        game = self.game
+        game._handle_click(game.pause_button.rect.center)
+        game._handle_click(game.resume_button.rect.center)
+        self.assertEqual(self.names(), ["pause", "resume"])
+        self.assertEqual(game.scene, "playing")
 
 
 if __name__ == "__main__":

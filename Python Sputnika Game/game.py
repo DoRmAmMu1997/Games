@@ -33,8 +33,10 @@ from merge_logic import find_merge_events
 from physics import PhysicsWorld
 from rules import (
     advance_fail_timer,
+    aim_tick_crossed,
     combo_points,
     fail_ratio,
+    impact_sound,
     next_combo_count,
     sanitize_progress,
     stress_level,
@@ -42,6 +44,7 @@ from rules import (
 )
 from settings import (
     ANGLE_AIM_SPEED,
+    COMBO_CHIME_TOP,
     DROP_COOLDOWN,
     FAIL_AGE_GATE,
     FAIL_GRACE,
@@ -65,6 +68,7 @@ from settings import (
     SAVE_DATA_PATH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SFX_VOLUMES,
     SPAWN_WEIGHTS,
     SPAWN_Y,
     TIERS,
@@ -217,6 +221,10 @@ class OrbitalOrchardGame:
         self.lifetime_best_tier = progress["best_tier"]
         self.new_record = False
         self.best_tier_seen = 0
+        # The high score this run has to beat, and whether passing it has
+        # already been cheered (the sparkle plays once per run).
+        self._score_to_beat = self.high_score
+        self._high_score_cheered = False
 
         # Combo scoring state: quick back-to-back merges build a score
         # multiplier. `_combo_count` is the current chain length and
@@ -413,11 +421,9 @@ class OrbitalOrchardGame:
         if key in (pygame.K_ESCAPE, pygame.K_p):
             # `Esc` / `P` toggles pause during gameplay.
             if self.scene == "playing":
-                self.scene = "paused"
-                self.assets.sounds.play("button", 0.4)
+                self._pause()
             elif self.scene == "paused":
-                self.scene = "playing"
-                self.assets.sounds.play("button", 0.4)
+                self._resume()
             return
 
         if key == pygame.K_m:
@@ -449,7 +455,7 @@ class OrbitalOrchardGame:
             elif self.scene == "playing":
                 self.drop_current_body()
             elif self.scene == "paused":
-                self.scene = "playing"
+                self._resume()
             elif self.scene == "game_over":
                 self.start_round()
 
@@ -466,8 +472,7 @@ class OrbitalOrchardGame:
 
         if self.scene == "playing":
             if self.pause_button.contains(position):
-                self.scene = "paused"
-                self.assets.sounds.play("button", 0.4)
+                self._pause()
                 return True
             if self.restart_button.contains(position):
                 self.start_round()
@@ -482,10 +487,11 @@ class OrbitalOrchardGame:
                 (self.pause_menu_button, "menu"),
             ):
                 if button.contains(position):
-                    self.assets.sounds.play("button", 0.4)
                     if action == "resume":
-                        self.scene = "playing"
-                    elif action == "restart":
+                        self._resume()
+                        return True
+                    self.assets.sounds.play("button", 0.4)
+                    if action == "restart":
                         self.start_round()
                     else:
                         self.scene = "menu"
@@ -507,6 +513,16 @@ class OrbitalOrchardGame:
             return False
 
         return False
+
+    def _pause(self) -> None:
+        """Open the pause menu with its falling two-note cue."""
+        self.scene = "paused"
+        self.assets.sounds.play("pause", SFX_VOLUMES["pause"])
+
+    def _resume(self) -> None:
+        """Close the pause menu with its rising two-note cue."""
+        self.scene = "playing"
+        self.assets.sounds.play("resume", SFX_VOLUMES["resume"])
 
     def start_round(self) -> None:
         """Reset gameplay state and begin a new run.
@@ -533,6 +549,8 @@ class OrbitalOrchardGame:
         self.score = 0
         self.new_record = False
         self.best_tier_seen = 0
+        self._score_to_beat = self.high_score
+        self._high_score_cheered = False
         self.current_tier, self.current_seed = self._roll_spawn_choice()
         self.next_tier, self.next_seed = self._roll_spawn_choice()
         self.spawn_x = self.world.center.x
@@ -557,8 +575,13 @@ class OrbitalOrchardGame:
         legal spawn point, moving along the aim direction at `LAUNCH_SPEED`,
         the queue moves forward one slot, and the cooldown restarts.
         """
-        # Ignore launches when not actively playing or while the cooldown is active.
-        if self.scene != "playing" or self.drop_timer > 0.0:
+        # Ignore launches when not actively playing. While the cooldown is
+        # active a launch is refused, with a soft "not yet" so the player
+        # knows the click was heard.
+        if self.scene != "playing":
+            return
+        if self.drop_timer > 0.0:
+            self.assets.sounds.play("launch_blocked", SFX_VOLUMES["launch_blocked"])
             return
 
         # A body cap prevents the simulation from becoming too crowded or slow.
@@ -593,6 +616,7 @@ class OrbitalOrchardGame:
         self.next_tier, self.next_seed = self._roll_spawn_choice()
         self.drop_timer = DROP_COOLDOWN
         self.assets.sounds.play("drop", 0.35)
+        self.assets.sounds.play("whoosh", SFX_VOLUMES["whoosh"])
 
     def _update(self, dt: float) -> None:
         """Advance one frame of non-drawing game logic.
@@ -624,12 +648,20 @@ class OrbitalOrchardGame:
             # Physics runs only while the round is active.
             collisions = self.world.step(self.bodies, dt)
 
+            # The hardest impact a body registers this frame gets one thud;
+            # a pile of simultaneous thuds would only sound like noise.
+            hardest = 0.0
             for collision in collisions:
                 # Convert high-energy impacts into particles and pulse animations.
                 if collision.body_a.register_impact(self.now, collision.impact_speed):
                     self.effects.impact(collision.point, collision.body_a.info.color, collision.impact_speed)
+                    hardest = max(hardest, collision.impact_speed)
                 if collision.body_b and collision.body_b.register_impact(self.now, collision.impact_speed):
                     self.effects.impact(collision.point, collision.body_b.info.color, collision.impact_speed)
+                    hardest = max(hardest, collision.impact_speed)
+            if hardest > 0.0:
+                weight, volume = impact_sound(hardest)
+                self.assets.sounds.play("impact", volume, pitch_step=weight)
 
             for body in self.bodies:
                 # Bodies also update their own blink/pulse state each frame.
@@ -805,8 +837,11 @@ class OrbitalOrchardGame:
             self.score += gained
             self.effects.merge(merged_body.position, merged_body.info.color, gained, event.target_tier)
             if self._combo_count >= 2:
-                # A chain of quick merges earns its own callout popup.
+                # A chain of quick merges earns its own callout popup, and a
+                # chime that climbs one step with every link of the chain.
                 self.effects.combo(self._combo_count, merged_body.position)
+                chime = min(self._combo_count, COMBO_CHIME_TOP)
+                self.assets.sounds.play("combo", SFX_VOLUMES["combo"], pitch_step=chime)
             self.best_tier_seen = max(self.best_tier_seen, event.target_tier)
 
             # A merge that beats the best tier ever reached is a personal record.
@@ -824,15 +859,21 @@ class OrbitalOrchardGame:
                 self.effects.reward_burst(merged_body.position, merged_body.info.color)
                 self.assets.sounds.play("record", 0.42)
             elif event.target_tier >= len(TIERS) - 3:
-                self.assets.sounds.play("big_merge", 0.42)
+                self.assets.sounds.play("big_merge", 0.42, pitch_step=event.target_tier)
             else:
-                self.assets.sounds.play("merge", 0.36)
+                # Each tier merges one step higher up the scale.
+                self.assets.sounds.play("merge", 0.36, pitch_step=event.target_tier)
 
         if consumed:
             # Remove all consumed bodies, then append the newly spawned merged bodies.
             self.bodies = [body for body in self.bodies if body.body_id not in consumed]
             self.bodies.extend(spawned)
             self._refresh_high_score()
+            # Passing the old high score mid-run sparkles once. A first-ever
+            # run has no score to beat yet, so it stays quiet.
+            if not self._high_score_cheered and 0 < self._score_to_beat < self.score:
+                self._high_score_cheered = True
+                self.assets.sounds.play("high_score", SFX_VOLUMES["high_score"])
             if (self.high_score, self.lifetime_best_tier) != records_before:
                 self._save_progress()
 
@@ -861,6 +902,10 @@ class OrbitalOrchardGame:
         # Only older bodies count toward losing. This prevents a just-launched body
         # from instantly causing game over while it is still entering the field.
         warning = any(body.top < FAIL_LINE_Y and body.age(self.now) > FAIL_AGE_GATE for body in self.bodies)
+        if warning != self.warning_active:
+            # Entering and leaving danger each get a short cue of their own.
+            cue = "danger_on" if warning else "danger_off"
+            self.assets.sounds.play(cue, SFX_VOLUMES[cue])
         self.warning_active = warning
         # The fail timer fills while danger is active and drains when the
         # player recovers (the exact rates live in rules.py).
@@ -1231,7 +1276,18 @@ class OrbitalOrchardGame:
 
     def _nudge_launch_angle(self, delta: float) -> None:
         """Adjust the launcher angle while keeping it inside the allowed range."""
-        self.launch_angle = clamp(self.launch_angle + delta, -MAX_LAUNCH_ANGLE, MAX_LAUNCH_ANGLE)
+        self._aim_at(self.launch_angle + delta)
+
+    def _aim_at(self, angle: float) -> None:
+        """Set the launcher angle (clamped to the legal range), ticking at each detent.
+
+        The aim clicks softly every `AIM_TICK_DEGREES`, like a dial, so fine
+        aiming can be felt as well as seen.
+        """
+        angle = clamp(angle, -MAX_LAUNCH_ANGLE, MAX_LAUNCH_ANGLE)
+        if aim_tick_crossed(self.launch_angle, angle):
+            self.assets.sounds.play("aim_tick", SFX_VOLUMES["aim_tick"])
+        self.launch_angle = angle
 
     def _set_launch_angle_from_point(self, point: tuple[int, int]) -> None:
         """Aim the launcher toward a point in internal canvas coordinates."""
@@ -1249,8 +1305,7 @@ class OrbitalOrchardGame:
         # `atan2(x, y)` here turns the 2D direction into an angle in degrees.
         # We use x first and y second because our angle is defined as sideways
         # deviation from "straight down", not the usual math convention.
-        angle = math.degrees(math.atan2(delta.x, delta.y))
-        self.launch_angle = clamp(angle, -MAX_LAUNCH_ANGLE, MAX_LAUNCH_ANGLE)
+        self._aim_at(math.degrees(math.atan2(delta.x, delta.y)))
 
     def _recommended_window_size(self) -> tuple[int, int]:
         """Choose a starting window size that fits on the current monitor."""

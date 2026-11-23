@@ -7,6 +7,7 @@ under SDL's dummy audio driver.
 
 from __future__ import annotations
 
+import ast
 import os
 import sys
 import unittest
@@ -289,6 +290,25 @@ class SoundBankTests(unittest.TestCase):
             bank = SoundBank(self.RECIPES)
         self.assertFalse(bank.enabled)
         self.assertEqual(bank.sounds, {})
+
+
+class ImportTests(unittest.TestCase):
+    """The audio core can be imported without loading pygame."""
+
+    def test_pygame_is_only_imported_inside_functions(self) -> None:
+        """No top-level statement of ``audio.py`` imports pygame.
+
+        settings.py imports ``Note`` and ``midi`` from the core, and the
+        pygame-free rules import settings, so the core must not pull pygame
+        in at import time.
+        """
+
+        tree = ast.parse(Path(audio.__file__).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                self.assertNotIn("pygame", [alias.name.split(".")[0] for alias in node.names])
+            if isinstance(node, ast.ImportFrom):
+                self.assertNotEqual((node.module or "").split(".")[0], "pygame")
 
 
 class OrbitalRecipeTests(unittest.TestCase):

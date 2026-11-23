@@ -479,7 +479,93 @@ SFX_RECIPES: dict[str, list[Note]] = {
 SFX_COOLDOWNS: dict[str, float] = {
     "merge": 0.03,
     "big_merge": 0.03,
+    # Aim ticks and impact thuds can fire every frame; these keep them a
+    # gentle texture instead of a buzz.
+    "aim_tick": 0.045,
+    "impact": 0.07,
+    # Mashing launch during the cooldown gets one "not yet" per beat.
+    "launch_blocked": 0.25,
 }
+
+# The launcher clicks once each time the aim crosses a multiple of this many
+# degrees, like the detents on a dial.
+AIM_TICK_DEGREES = 5.0
+# Impact thuds come in three weights. A collision at or above each speed (in
+# pixels per second) uses the next heavier thud; `IMPACT_EVENT_SPEED` is the
+# softest hit that makes any sound at all.
+IMPACT_SOUND_BANDS = (420.0, 800.0)
+# Thud loudness grows with speed from the quietest to the loudest value,
+# reaching the top at `IMPACT_LOUDEST_SPEED`.
+IMPACT_VOLUME_RANGE = (0.12, 0.4)
+IMPACT_LOUDEST_SPEED = 1100.0
+# Combo chimes climb with the chain: a chain of n plays variant "combo@n",
+# up to this many (longer chains keep the top chime).
+COMBO_CHIME_TOP = 6
+# How loud each newer event sound plays (0 to 1).
+SFX_VOLUMES: dict[str, float] = {
+    "whoosh": 0.3,
+    "launch_blocked": 0.34,
+    "aim_tick": 0.22,
+    "combo": 0.34,
+    "high_score": 0.4,
+    "danger_on": 0.34,
+    "danger_off": 0.3,
+    "pause": 0.32,
+    "resume": 0.32,
+}
+
+
+def impact_notes(weight: int) -> list[Note]:
+    """Return an impact thud: a falling low sine with a dull noise burst.
+
+    `weight` 0 is a light tap; each step up is lower, longer and noisier.
+    """
+    ring = 0.07 + 0.03 * weight
+    return [
+        Note(midi(52 - 5 * weight), 0.0, ring, "sine", 0.4, glide=-160.0, attack=0.002, decay=ring, sustain=0.0),
+        Note(380.0 + 120.0 * weight, 0.0, 0.03, "noise", 0.08 + 0.04 * weight, attack=0.001, decay=0.03, sustain=0.0),
+    ]
+
+
+def combo_notes(chain: int) -> list[Note]:
+    """Return the combo chime for a chain of `chain`: a bright third, higher each link."""
+    root = ladder_note(8 + chain)
+    return [pluck(root, 0.0, 0.3, 0.26, voice="sine"), pluck(root + 4, 0.07, 0.4, 0.22, voice="sine")]
+
+
+SFX_RECIPES.update(
+    {
+        # Launch: a breathy whoosh that rises as the body leaves the launcher.
+        "whoosh": [
+            Note(1200.0, 0.0, 0.16, "noise", 0.16, glide=26000.0, attack=0.06, decay=0.1, sustain=0.4, release=0.08),
+            Note(midi(69), 0.0, 0.14, "sine", 0.05, glide=900.0, attack=0.05, decay=0.08, sustain=0.3, release=0.06),
+        ],
+        # A launch refused by the cooldown: a soft, low "not yet" double bump.
+        "launch_blocked": [pluck(45, 0.0, 0.06, 0.26, voice="square"), pluck(45, 0.08, 0.06, 0.2, voice="square")],
+        # One detent click of the aiming dial.
+        "aim_tick": [pluck(96, 0.0, 0.016, 0.18, voice="sine")],
+        "impact": impact_notes(0),
+        **{f"impact@{weight}": impact_notes(weight) for weight in range(1, len(IMPACT_SOUND_BANDS) + 1)},
+        "combo": combo_notes(2),
+        **{f"combo@{chain}": combo_notes(chain) for chain in range(3, COMBO_CHIME_TOP + 1)},
+        # Each merge sounds one step higher up the ladder than the tier before.
+        **{f"merge@{tier}": merge_notes(tier) for tier in range(1, len(TIERS))},
+        **{f"big_merge@{tier}": big_merge_notes(tier) for tier in range(len(TIERS) - 3, len(TIERS))},
+        # Passing the old high score mid-run: a quick sparkling A major run.
+        "high_score": [
+            *(pluck(pitch, index * 0.06, 0.4, 0.2, voice="sine") for index, pitch in enumerate((81, 85, 88, 93))),
+            Note(midi(93), 0.24, 0.2, "triangle", 0.08, attack=0.03, decay=0.15, sustain=0.5, release=0.3),
+        ],
+        # Crossing the danger line: a hollow falling third. Leaving it: a
+        # relieved rising sine phrase that resolves home to A.
+        "danger_on": [pluck(64, 0.0, 0.16, 0.22, voice="square"), pluck(60, 0.13, 0.22, 0.22, voice="square")],
+        "danger_off": [
+            pluck(pitch, index * 0.09, 0.25, 0.24, voice="sine") for index, pitch in enumerate((60, 64, 69))
+        ],
+        "pause": [pluck(76, 0.0, 0.12, 0.22, voice="sine"), pluck(69, 0.08, 0.18, 0.22, voice="sine")],
+        "resume": [pluck(69, 0.0, 0.12, 0.22, voice="sine"), pluck(76, 0.08, 0.18, 0.22, voice="sine")],
+    }
+)
 
 # Music: an ambient space pad with a slow arpeggio, rendered once into a loop
 # that plays on reserved mixer channels (see `music_notes`). The tense track
