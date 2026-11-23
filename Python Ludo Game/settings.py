@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from audio import Note, midi
+
 # ---------------------------------------------------------------------------
 # Window and timing
 # ---------------------------------------------------------------------------
@@ -173,3 +175,138 @@ def _user_save_dir() -> Path:
 SAVE_DIR = _user_save_dir()
 STATS_PATH = SAVE_DIR / "stats.json"          # lifetime games and wins
 SAVEGAME_PATH = SAVE_DIR / "savegame.json"    # one resumable in-progress game
+
+
+# ---------------------------------------------------------------------------
+# Sound
+# ---------------------------------------------------------------------------
+# Every sound is a recipe: a list of `Note`s that audio.py renders into
+# samples when the game starts (no audio files ship with the game). Pitches
+# are MIDI note numbers through `midi()`: 69 is A4 (440 Hz), +12 is one octave
+# up. The palette is bright marimba-like plucks in G major, the same key as
+# the music, so effects that overlap the tune or each other stay in harmony.
+#
+# Beginner note:
+# - A "pluck" note below has no sustain: it rises over a few milliseconds and
+#   then rings down over `ring` seconds, like a mallet striking a marimba bar.
+# - Volumes stay well under 1.0 on purpose: several effects often play at
+#   once (a hop, a capture and a turn change) and their samples add up.
+SFX_PLUCK_ATTACK = 0.004  # A struck note reaches full volume this fast (s).
+SFX_PLUCK_RELEASE = 0.02  # Tail after a pluck's ring, so it never ends abruptly (s).
+SFX_ROOT_NOTE = 67  # G4: the home note of the effects' G major ladder.
+G_MAJOR_STEPS = (0, 2, 4, 5, 7, 9, 11)  # Semitones above G for each degree of the scale.
+# The dice sound is a rattle of short noise ticks (the die tumbling), then the
+# face's own note lands DICE_RESULT_AT seconds in, as the tray animation stops.
+# Each tick is drawn at a different noise rate, so the rattle sounds uneven.
+DICE_RATTLE_TICKS = ((0.0, 3200.0), (0.05, 2400.0), (0.1, 3600.0), (0.16, 2800.0), (0.22, 3000.0), (0.27, 2200.0))
+DICE_RESULT_AT = 0.33  # Seconds; a little under DICE_ANIM_MS so the note lands with the last face.
+# The note each die face lands on (faces 1 to 6): the G major pentatonic
+# ladder G A B D E G, so a 6 lands an octave above a 1.
+DICE_FACE_NOTES = (67, 69, 71, 74, 76, 79)
+# A token's hops climb the G major ladder one degree per cell, so the player
+# hears the count: hop n of a move plays variant "hop@n". A move is at most
+# six hops; HOP_PITCH_STEPS variants cover that.
+HOP_PITCH_STEPS = 6
+
+
+def pluck(pitch: float, start: float, ring: float, volume: float, voice: str = "pluck") -> Note:
+    """Return a struck note: a near-instant attack, then a ring down to silence."""
+
+    return Note(
+        midi(pitch),
+        start,
+        SFX_PLUCK_ATTACK + ring,
+        voice,
+        volume,
+        attack=SFX_PLUCK_ATTACK,
+        decay=ring,
+        sustain=0.0,
+        release=SFX_PLUCK_RELEASE,
+    )
+
+
+def scale_note(degree: int) -> int:
+    """Return the MIDI note `degree` steps up the G major ladder from SFX_ROOT_NOTE."""
+
+    octave, step = divmod(degree, len(G_MAJOR_STEPS))
+    return SFX_ROOT_NOTE + 12 * octave + G_MAJOR_STEPS[step]
+
+
+def dice_notes(face: int) -> list[Note]:
+    """Return the dice sound for `face` (1 to 6): a noise rattle, then the face's marimba note."""
+
+    notes = [
+        Note(rate, at, 0.012, "noise", 0.16, attack=0.001, decay=0.025, sustain=0.0, release=0.01)
+        for at, rate in DICE_RATTLE_TICKS
+    ]
+    pitch = DICE_FACE_NOTES[face - 1]
+    notes.append(pluck(pitch, DICE_RESULT_AT, 0.2, 0.3))
+    notes.append(pluck(pitch + 12, DICE_RESULT_AT, 0.12, 0.08, voice="sine"))
+    return notes
+
+
+def hop_notes(step: int) -> list[Note]:
+    """Return one hop of a token: a short marimba tap `step` degrees up the ladder, with a wooden knock."""
+
+    return [
+        pluck(scale_note(step), 0.0, 0.07, 0.22),
+        Note(900.0, 0.0, 0.008, "noise", 0.05, attack=0.001, decay=0.015, sustain=0.0, release=0.005),
+    ]
+
+
+SFX_RECIPES: dict[str, list[Note]] = {
+    "dice": dice_notes(1),
+    **{f"dice@{face}": dice_notes(face) for face in range(2, 7)},
+    # A rolled 6: a quick high G major sparkle, timed to land with the die.
+    "six": [
+        pluck(pitch, DICE_RESULT_AT + 0.06 + index * 0.05, 0.25, 0.16, voice="sine")
+        for index, pitch in enumerate((79, 83, 86, 91))
+    ],
+    # A third 6 in a row forfeits the roll: a deflating G minor fall, also
+    # timed to follow the die.
+    "three_sixes": [
+        pluck(74, DICE_RESULT_AT + 0.06, 0.14, 0.2, voice="square"),
+        pluck(70, DICE_RESULT_AT + 0.2, 0.14, 0.2, voice="square"),
+        Note(midi(67), DICE_RESULT_AT + 0.34, 0.2, "triangle", 0.24, glide=-40.0, attack=0.01, decay=0.2,
+             sustain=0.4, release=0.15),
+    ],
+    # A token leaves its yard: a bouncy rising pop G - D - G.
+    "leave_yard": [
+        Note(midi(55), 0.0, 0.06, "sine", 0.18, glide=900.0, attack=0.004, decay=0.06, sustain=0.0, release=0.02),
+        *(pluck(pitch, 0.03 + index * 0.06, 0.14, 0.24) for index, pitch in enumerate((67, 74, 79))),
+    ],
+    "hop": hop_notes(0),
+    **{f"hop@{step}": hop_notes(step) for step in range(1, HOP_PITCH_STEPS)},
+    # A capture: two falling "bonks" with a dull thud, as the token is knocked home.
+    "capture": [
+        Note(midi(62), 0.0, 0.14, "triangle", 0.34, glide=-520.0, attack=0.002, decay=0.14, sustain=0.0,
+             release=0.02),
+        Note(500.0, 0.0, 0.03, "noise", 0.12, attack=0.001, decay=0.03, sustain=0.0, release=0.01),
+        Note(midi(55), 0.13, 0.2, "triangle", 0.3, glide=-260.0, attack=0.002, decay=0.2, sustain=0.0,
+             release=0.03),
+    ],
+    # A token reaches home: a ringing G major chord, struck low to high.
+    "home": [
+        *(pluck(pitch, index * 0.07, 0.4, 0.22) for index, pitch in enumerate((67, 71, 74, 79))),
+        Note(midi(83), 0.28, 0.12, "sine", 0.1, attack=0.02, decay=0.1, sustain=0.6, release=0.2),
+    ],
+    # A bonus roll earned by a capture or a token home: a bright rising fifth.
+    "bonus": [pluck(86, 0.0, 0.16, 0.16, voice="sine"), pluck(93, 0.07, 0.24, 0.14, voice="sine")],
+    # No legal move: a soft, low "nope" double bump.
+    "no_move": [pluck(50, 0.0, 0.07, 0.24, voice="square"), pluck(50, 0.1, 0.09, 0.2, voice="square")],
+    # The turn passes: a quiet two-note woodblock knock.
+    "turn": [pluck(74, 0.0, 0.05, 0.12), pluck(79, 0.06, 0.07, 0.1)],
+    # A short, soft two-note click for every button.
+    "click": [pluck(84, 0.0, 0.05, 0.2, voice="sine"), pluck(91, 0.012, 0.04, 0.07, voice="sine")],
+}
+# The fewest seconds between two plays of the same effect (variants share
+# their base name's cooldown). A slow frame can finish several hops at once,
+# and the autotest fires an AI action every frame; these keep such bursts a
+# gentle patter instead of a pile of identical sounds.
+SFX_COOLDOWNS: dict[str, float] = {
+    "hop": 0.05,
+    "dice": 0.1,
+    "turn": 0.15,
+    "no_move": 0.2,
+    "click": 0.04,
+}
