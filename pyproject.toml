@@ -49,6 +49,7 @@ known-first-party = [
     "models",
     "physics",
     "player",
+    "rules",
     "settings",
     "simulation",
     "solitaire",

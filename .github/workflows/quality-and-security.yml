@@ -5,7 +5,8 @@
 #   names, so mypy runs once per folder and pytest runs from inside each
 #   folder (which also isolates the tests' sys.path shim).
 # - The pygame games run fully headless via the SDL dummy drivers; the
-#   Solitaire suite only exercises the Tk-free KlondikeGame model.
+#   Solitaire suite never opens a Tk window: it tests the KlondikeGame model
+#   directly and the SolitaireApp shell through a mocked canvas.
 # - Coverage floors are per game, measured over the engine modules listed in
 #   each pytest command, and set ~5 points below the measured value when the
 #   floor was introduced. Raise them as coverage grows; never lower them to
@@ -60,21 +61,21 @@ jobs:
       - name: Validate pre-commit config
         run: pre-commit validate-config
 
-      - name: Ludo tests (coverage floor 75)
+      - name: Ludo tests (coverage floor 90)
         working-directory: "Python Ludo Game"
-        run: python -m pytest tests -q --cov=game --cov=board --cov=ai --cov=models --cov-fail-under=75
+        run: python -m pytest tests -q --cov=game --cov=board --cov=ai --cov=models --cov-fail-under=90
 
-      - name: Monopoly tests (coverage floor 80)
+      - name: Monopoly tests (coverage floor 87)
         working-directory: "Python Monopoly Game"
-        run: python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=80
+        run: python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=87
 
-      - name: Orbital Orchard tests (coverage floor 90)
+      - name: Orbital Orchard tests (coverage floor 93)
         working-directory: "Python Sputnika Game"
-        run: python -m pytest tests -q --cov=merge_logic --cov=physics --cov-fail-under=90
+        run: python -m pytest tests -q --cov=merge_logic --cov=physics --cov=rules --cov-fail-under=93
 
-      - name: Solitaire tests (coverage floor 32)
+      - name: Solitaire tests (coverage floor 77)
         working-directory: "Python Solitaire Game"
-        run: python -m pytest tests -q --cov=solitaire --cov-fail-under=32
+        run: python -m pytest tests -q --cov=solitaire --cov-fail-under=77
 
       - name: Headless autotests (full app smoke)
         run: |
