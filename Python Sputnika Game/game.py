@@ -78,6 +78,8 @@ from settings import (
     music_notes,
 )
 from ui import (
+    SOUND_BUTTON_HUD,
+    SOUND_BUTTON_MENU,
     Button,
     danger_label_rect,
     draw_danger_label,
@@ -86,9 +88,11 @@ from ui import (
     draw_menu_overlay,
     draw_pause_overlay,
     draw_playfield,
+    draw_sound_toggle,
     place_game_over_buttons,
     place_menu_buttons,
     place_pause_buttons,
+    sound_label,
 )
 
 
@@ -219,6 +223,8 @@ class OrbitalOrchardGame:
         self.high_score = progress["high_score"]
         self.games_played = progress["games_played"]
         self.lifetime_best_tier = progress["best_tier"]
+        # The player's sound on/off choice, saved with the progress.
+        self.muted = bool(progress["muted"])
         self.new_record = False
         self.best_tier_seen = 0
         # The high score this run has to beat, and whether passing it has
@@ -264,6 +270,10 @@ class OrbitalOrchardGame:
         place_menu_buttons([self.play_button])
         place_pause_buttons([self.resume_button, self.pause_restart_button, self.pause_menu_button])
         place_game_over_buttons([self.over_restart_button, self.over_menu_button])
+        # The sound toggle: one in the sidebar during a run, one under the menu.
+        self.sound_button = Button(SOUND_BUTTON_HUD.copy(), sound_label(self.muted))
+        self.menu_sound_button = Button(SOUND_BUTTON_MENU.copy(), sound_label(self.muted))
+        self._apply_mute()
 
     @property
     def current_body_name(self) -> str:
@@ -359,7 +369,7 @@ class OrbitalOrchardGame:
 
             if event.type == pygame.KEYDOWN:
                 # Keyboard actions are grouped in a helper so this loop stays readable.
-                self._handle_keydown(event.key)
+                self._handle_keydown(event.key, event.mod)
 
             if event.type == pygame.MOUSEWHEEL and self.scene == "playing":
                 # Mouse wheel provides fine angle adjustments.
@@ -403,10 +413,11 @@ class OrbitalOrchardGame:
                 # Releasing the right mouse button ends angle dragging.
                 self.angle_dragging = False
 
-    def _handle_keydown(self, key: int) -> None:
+    def _handle_keydown(self, key: int, mod: int = 0) -> None:
         """Handle one key press based on the current scene.
 
         Bindings:
+        - Ctrl+M: sound on/off, in every scene.
         - Esc / P: toggle between playing and paused.
         - M: back to the menu from any in-run scene.
         - R: restart a fresh run from any in-run scene.
@@ -417,7 +428,13 @@ class OrbitalOrchardGame:
 
         Args:
             key: The pygame key code from a `KEYDOWN` event.
+            mod: The modifier keys held down (the event's `mod` bit flags).
         """
+        if key == pygame.K_m and mod & pygame.KMOD_CTRL:
+            # Ctrl+M toggles sound. Plain M (below) keeps its menu job.
+            self._toggle_mute()
+            return
+
         if key in (pygame.K_ESCAPE, pygame.K_p):
             # `Esc` / `P` toggles pause during gameplay.
             if self.scene == "playing":
@@ -464,6 +481,13 @@ class OrbitalOrchardGame:
 
         Returns `True` when a button handled the click.
         """
+        # The sound toggle works on the menu and in every in-run scene (the
+        # sidebar stays visible behind the pause and game-over modals).
+        toggle = self.menu_sound_button if self.scene == "menu" else self.sound_button
+        if toggle.contains(position):
+            self._toggle_mute()
+            return True
+
         if self.scene == "menu":
             if self.play_button.contains(position):
                 self.start_round()
@@ -513,6 +537,23 @@ class OrbitalOrchardGame:
             return False
 
         return False
+
+    def _toggle_mute(self) -> None:
+        """Switch all sound off or back on, and remember the choice.
+
+        Turning sound back on plays a click, so the player hears it worked.
+        """
+        self.muted = not self.muted
+        self._apply_mute()
+        self._save_progress()
+        if not self.muted:
+            self.assets.sounds.play("button", 0.4)
+
+    def _apply_mute(self) -> None:
+        """Pass the mute setting to the effects bank and both music players."""
+        self.assets.sounds.muted = self.muted
+        for player in self.music.values():
+            player.set_muted(self.muted)
 
     def _pause(self) -> None:
         """Open the pause menu with its falling two-note cue."""
@@ -968,7 +1009,7 @@ class OrbitalOrchardGame:
         return self._roll_spawn_tier(), self.random.random()
 
     def _load_progress(self) -> dict:
-        """Read the saved high score and lifetime stats, falling back safely."""
+        """Read the saved high score, lifetime stats and sound setting, falling back safely."""
         try:
             data = json.loads(SAVE_DATA_PATH.read_text(encoding="utf-8")) if SAVE_DATA_PATH.exists() else {}
             return sanitize_progress(data)
@@ -978,7 +1019,7 @@ class OrbitalOrchardGame:
             # cannot become an int; `RecursionError` covers absurdly deep
             # nesting that exhausts the JSON reader. (`json.JSONDecodeError`
             # is a kind of `ValueError`, so it is already covered.)
-            return {"high_score": 0, "games_played": 0, "best_tier": 0}
+            return {"high_score": 0, "games_played": 0, "best_tier": 0, "muted": False}
 
     def _refresh_high_score(self) -> None:
         """Promote the current score to a new high score when it beats the old best."""
@@ -987,13 +1028,14 @@ class OrbitalOrchardGame:
             self.new_record = True
 
     def _save_progress(self) -> None:
-        """Persist high score and lifetime stats with a crash-safe atomic write."""
+        """Persist high score, lifetime stats and the sound setting with a crash-safe atomic write."""
         if not self.persist:
             return
         payload = {
             "high_score": self.high_score,
             "games_played": self.games_played,
             "best_tier": self.lifetime_best_tier,
+            "muted": self.muted,
         }
         try:
             SAVE_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1064,6 +1106,7 @@ class OrbitalOrchardGame:
             draw_hud(self.canvas, self, self.assets)
             self.pause_button.draw(self.canvas, self.assets, hover_mouse)
             self.restart_button.draw(self.canvas, self.assets, hover_mouse)
+            draw_sound_toggle(self.canvas, self.assets, self.sound_button, self.muted, hover_mouse)
 
         # Finally draw whichever full-screen overlay matches the current scene.
         if self.scene == "menu":
@@ -1076,6 +1119,7 @@ class OrbitalOrchardGame:
                 self.lifetime_best_tier_name,
                 hover_mouse,
             )
+            draw_sound_toggle(self.canvas, self.assets, self.menu_sound_button, self.muted, hover_mouse)
         elif self.scene == "paused":
             draw_pause_overlay(
                 self.canvas,

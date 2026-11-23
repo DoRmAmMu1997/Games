@@ -57,6 +57,16 @@ PAUSE_MODAL.centerx = PLAYFIELD_CENTER[0]
 GAME_OVER_MODAL = pygame.Rect(0, 300, 594, 460)
 GAME_OVER_MODAL.centerx = PLAYFIELD_CENTER[0]
 
+# The sound on/off toggle. In a run it sits in the sidebar below the Pause and
+# Restart buttons; on the main menu it sits centred below the menu modal.
+# Its keyboard shortcut is written just below the button.
+SOUND_BUTTON_HUD = pygame.Rect(790, 1116, 188, 58)
+SOUND_BUTTON_MENU = pygame.Rect(0, MENU_MODAL.bottom + 52, 220, 56)
+SOUND_BUTTON_MENU.centerx = MENU_MODAL.centerx
+SOUND_HINT = "Ctrl+M"
+# Gap between the button's glow and the hint below it.
+SOUND_HINT_GAP = 16
+
 # Largest visible radius (glow included) of the current and next queue previews.
 CURRENT_SLOT_RADIUS = 46
 NEXT_SLOT_RADIUS = 24
@@ -325,6 +335,38 @@ class Button:
         target.blit(shadow, shadow.get_rect(center=(self.rect.centerx, self.rect.centery + 2)))
         label = assets.ui_font.render(self.label, True, WHITE if hovered else SOFT_WHITE)
         target.blit(label, label.get_rect(center=self.rect.center))
+
+
+def sound_label(muted: bool) -> str:
+    """Return the sound toggle's label for the current mute state."""
+    return "Sound: Off" if muted else "Sound: On"
+
+
+def sound_hint_layout(assets, button: Button) -> tuple[pygame.Surface, pygame.Rect]:
+    """Render the toggle's shortcut hint and place it centred below `button`.
+
+    The hint starts below the button's 14 px glow, plus `SOUND_HINT_GAP`.
+    """
+    hint = assets.tiny_font.render(SOUND_HINT, True, SOFT_WHITE)
+    return hint, hint.get_rect(midtop=(button.rect.centerx, button.rect.bottom + 14 + SOUND_HINT_GAP))
+
+
+def draw_sound_toggle(
+    surface: pygame.Surface,
+    assets,
+    button: Button,
+    muted: bool,
+    mouse_pos: tuple[int, int],
+) -> None:
+    """Draw the sound toggle, labelled with the current state, and its shortcut hint.
+
+    The label is refreshed from `muted` every frame, so it can never show a
+    stale state.
+    """
+    button.label = sound_label(muted)
+    button.draw(surface, assets, mouse_pos)
+    hint, rect = sound_hint_layout(assets, button)
+    surface.blit(hint, rect)
 
 
 def draw_playfield(surface: pygame.Surface, danger_ratio: float) -> None:

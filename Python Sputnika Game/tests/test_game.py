@@ -12,6 +12,7 @@ Beginner note:
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import sys
@@ -383,7 +384,7 @@ class NoPersistTests(GameTestCase):
 class CorruptSaveTests(GameTestCase):
     """A damaged save file loads as fresh progress instead of crashing startup."""
 
-    DEFAULTS = {"high_score": 0, "games_played": 0, "best_tier": 0}
+    DEFAULTS = {"high_score": 0, "games_played": 0, "best_tier": 0, "muted": False}
 
     def _load_text(self, text: str) -> dict:
         """Write ``text`` as the save file and return what the game loads from it."""
@@ -780,6 +781,109 @@ class SoundEventTests(GameTestCase):
         game._handle_click(game.resume_button.rect.center)
         self.assertEqual(self.names(), ["pause", "resume"])
         self.assertEqual(game.scene, "playing")
+
+
+class MuteTests(GameTestCase):
+    """Ctrl+M and the on-screen toggles switch all sound off and on, and it is remembered."""
+
+    def setUp(self) -> None:
+        """Swap the players and the bank for mocks that record calls."""
+
+        super().setUp()
+        self.calm = mock.Mock()
+        self.tense = mock.Mock()
+        self.sounds = mock.Mock()
+        self.game.music = {"calm": self.calm, "tense": self.tense}
+        self.game.assets.sounds = self.sounds
+
+    def test_ctrl_m_mutes_and_unmutes(self) -> None:
+        """Ctrl+M silences effects and music, then brings them back."""
+
+        game = self.game
+        game._handle_keydown(pygame.K_m, pygame.KMOD_LCTRL)
+        self.assertTrue(game.muted)
+        self.assertTrue(self.sounds.muted)
+        self.calm.set_muted.assert_called_with(True)
+        self.tense.set_muted.assert_called_with(True)
+        game._handle_keydown(pygame.K_m, pygame.KMOD_RCTRL)
+        self.assertFalse(game.muted)
+        self.assertFalse(self.sounds.muted)
+        self.calm.set_muted.assert_called_with(False)
+
+    def test_plain_m_still_opens_the_menu(self) -> None:
+        """Without Ctrl, M keeps its old job and leaves sound alone."""
+
+        game = self.game
+        game.start_round()
+        game._handle_keydown(pygame.K_m)
+        self.assertEqual(game.scene, "menu")
+        self.assertFalse(game.muted)
+
+    def test_ctrl_m_does_not_leave_the_run(self) -> None:
+        """Ctrl+M in a run toggles sound without jumping to the menu."""
+
+        game = self.game
+        game.start_round()
+        game._handle_keydown(pygame.K_m, pygame.KMOD_CTRL)
+        self.assertEqual(game.scene, "playing")
+        self.assertTrue(game.muted)
+
+    def test_sidebar_and_menu_buttons_toggle_sound(self) -> None:
+        """The menu toggle works on the menu; the sidebar toggle works in every in-run scene."""
+
+        game = self.game
+        self.assertTrue(game._handle_click(game.menu_sound_button.rect.center))
+        self.assertTrue(game.muted)
+        game.start_round()
+        for scene in ("playing", "paused", "game_over"):
+            game.scene = scene
+            before = game.muted
+            with self.subTest(scene=scene):
+                self.assertTrue(game._handle_click(game.sound_button.rect.center))
+                self.assertNotEqual(game.muted, before)
+
+    def test_sidebar_toggle_clears_the_other_buttons(self) -> None:
+        """The sidebar toggle does not overlap Pause or Restart."""
+
+        for other in (self.game.pause_button, self.game.restart_button):
+            self.assertFalse(self.game.sound_button.rect.colliderect(other.rect))
+
+    def test_mute_survives_a_restart_of_the_game(self) -> None:
+        """The setting is saved and a new game starts muted, music and effects alike."""
+
+        self.game._toggle_mute()
+        self.assertTrue(json.loads(self.save_path.read_text(encoding="utf-8"))["muted"])
+        reloaded = self.make_game()
+        self.assertTrue(reloaded.muted)
+        self.assertTrue(reloaded.assets.sounds.muted)
+        self.assertTrue(all(player._muted for player in reloaded.music.values()))
+
+    def test_saving_progress_keeps_the_mute_setting(self) -> None:
+        """Ordinary progress saves write the current mute setting too."""
+
+        self.game.muted = True
+        self.game.start_round()
+        self.assertTrue(json.loads(self.save_path.read_text(encoding="utf-8"))["muted"])
+
+    def test_non_persisting_game_never_writes_the_setting(self) -> None:
+        """With ``persist=False`` toggling sound leaves the save untouched."""
+
+        self.save_path.parent.mkdir(parents=True, exist_ok=True)
+        original = '{"high_score": 5, "games_played": 3, "best_tier": 2, "muted": true}'
+        self.save_path.write_text(original, encoding="utf-8")
+        game = OrbitalOrchardGame(persist=False)
+        self.assertTrue(game.muted)
+        game._toggle_mute()
+        self.assertFalse(game.muted)
+        self.assertEqual(self.save_path.read_text(encoding="utf-8"), original)
+
+    def test_unmuting_confirms_with_a_click(self) -> None:
+        """Turning sound back on plays a button click so the player hears it work."""
+
+        self.game._toggle_mute()
+        self.sounds.play.assert_not_called()
+        self.game._toggle_mute()
+        self.sounds.play.assert_called_once_with("button", mock.ANY)
 
 
 if __name__ == "__main__":

@@ -150,14 +150,17 @@ def aim_tick_crossed(old_angle: float, new_angle: float) -> bool:
 
 
 def sanitize_progress(data: Any) -> dict[str, int]:
-    """Clean raw saved-progress data into three safe, non-negative integers.
+    """Clean raw saved-progress data into safe values.
 
-    Missing fields default to zero and `best_tier` is clamped onto the tier
-    ladder. Data that cannot be cleaned (not a JSON object, or a field that
+    The three counters become non-negative integers: missing fields default
+    to zero and `best_tier` is clamped onto the tier ladder. `muted` (the
+    sound setting) is True only for a real JSON `true`; anything else,
+    including a missing key, leaves sound on. Data that cannot be cleaned (not a JSON object, or a field that
     `int()` cannot convert) raises, and the caller falls back to fresh progress.
     """
     return {
         "high_score": max(0, int(data.get("high_score", 0))),
         "games_played": max(0, int(data.get("games_played", 0))),
         "best_tier": max(0, min(len(TIERS) - 1, int(data.get("best_tier", 0)))),
+        "muted": data.get("muted") is True,
     }

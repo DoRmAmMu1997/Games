@@ -201,19 +201,22 @@ class ProgressSanitizingTests(unittest.TestCase):
     def test_good_data_passes_through(self) -> None:
         """Valid fields are kept as integers."""
 
-        data = {"high_score": 120, "games_played": 4, "best_tier": 3}
+        data = {"high_score": 120, "games_played": 4, "best_tier": 3, "muted": True}
         self.assertEqual(rules.sanitize_progress(data), data)
 
     def test_missing_fields_default_to_zero(self) -> None:
         """An empty save means no progress yet."""
 
-        self.assertEqual(rules.sanitize_progress({}), {"high_score": 0, "games_played": 0, "best_tier": 0})
+        self.assertEqual(
+            rules.sanitize_progress({}),
+            {"high_score": 0, "games_played": 0, "best_tier": 0, "muted": False},
+        )
 
     def test_negative_values_are_clamped_to_zero(self) -> None:
         """Counters and scores cannot be negative."""
 
         cleaned = rules.sanitize_progress({"high_score": -5, "games_played": -1, "best_tier": -3})
-        self.assertEqual(cleaned, {"high_score": 0, "games_played": 0, "best_tier": 0})
+        self.assertEqual(cleaned, {"high_score": 0, "games_played": 0, "best_tier": 0, "muted": False})
 
     def test_best_tier_is_clamped_to_the_ladder(self) -> None:
         """A best tier past the top of the ladder becomes the top tier."""
@@ -224,6 +227,19 @@ class ProgressSanitizingTests(unittest.TestCase):
         """A hand-edited ``"42"`` still loads as the number 42."""
 
         self.assertEqual(rules.sanitize_progress({"high_score": "42"})["high_score"], 42)
+
+    def test_only_a_real_true_mutes(self) -> None:
+        """Sound stays on unless the save holds the JSON value ``true``.
+
+        A hand-edited ``"false"`` string or a stray number must not silence
+        the game by accident.
+        """
+
+        odd_values: tuple[object, ...] = ("false", "true", 1, 0, None, [])
+        for value in odd_values:
+            with self.subTest(value=value):
+                self.assertIs(rules.sanitize_progress({"muted": value})["muted"], False)
+        self.assertIs(rules.sanitize_progress({"muted": True})["muted"], True)
 
     def test_non_mapping_data_raises(self) -> None:
         """A save that is not a JSON object is rejected for the caller to handle."""
