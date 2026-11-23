@@ -53,7 +53,7 @@ python -m unittest discover -s tests
 CI runs the same suite through pytest with a coverage floor:
 
 ```bash
-python -m pytest tests -q --cov=merge_logic --cov=physics --cov=rules --cov-fail-under=93
+python -m pytest tests -q --cov=merge_logic --cov=physics --cov=rules --cov-fail-under=97
 ```
 
 What the suite covers:
