@@ -838,7 +838,16 @@ class MonopolyGame:
 
     def _rent_for(self, position: int, owner: Player, dice_total: int,
                   rail_rent_multiplier: int = 1, utility_card_rent: bool = False) -> int:
-        """Compute the rent owed for landing on an owned space."""
+        """Compute the rent owed for landing on an owned space.
+
+        Railroads charge by how many railroads the owner holds, multiplied
+        by `rail_rent_multiplier` (2 for the "nearest Railroad" Chance
+        cards). Utilities charge the dice total times 4, or times 10 when
+        the owner holds both; the "nearest Utility" card instead always
+        charges ten times a fresh throw (`utility_card_rent`). Streets
+        charge their printed rent for the current building level, and an
+        undeveloped street in a complete colour group charges double.
+        """
         space = self.board[position]
         if space.kind == "railroad":
             base = RAILROAD_RENT.get(self.count_railroads(owner), 0)

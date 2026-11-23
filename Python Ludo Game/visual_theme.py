@@ -398,7 +398,13 @@ def draw_round_icon_button(
 
 
 def _build_wallpaper(size: tuple[int, int]) -> pygame.Surface:
-    """Create a cached wallpaper surface for the requested window size."""
+    """Create a cached wallpaper surface for the requested window size.
+
+    The wallpaper is built in three layers: a vertical blue gradient, a
+    checkerboard of faint mini-board stamps, and a soft glow on top. It is
+    expensive to draw, so callers cache the result per window size and only
+    rebuild it when the window is resized.
+    """
 
     width, height = size
     wallpaper = pygame.Surface(size)
