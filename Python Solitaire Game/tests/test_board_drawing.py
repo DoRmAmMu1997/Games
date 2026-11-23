@@ -8,6 +8,7 @@ which keeps them independent of the fonts installed on a machine.
 
 from __future__ import annotations
 
+import itertools
 import random
 import sys
 import tempfile
@@ -221,6 +222,35 @@ class TopBandTests(DrawingTestCase):
         divider_bottom = self.band_and_divider()[1]
 
         self.assertLessEqual(divider_bottom, TABLEAU_Y - 4)
+
+
+class CardBackTests(DrawingTestCase):
+    """P4: card-back stripes stay inside the inner frame and are evenly spaced."""
+
+    def stripes(self) -> list[tuple[float, float, float, float]]:
+        """Draw the pattern at (100, 200) and return each stripe's end points."""
+
+        self.app.draw_card_back_pattern(100, 200)
+        return [tuple(call[1][:4]) for call in calls_named(self.canvas, "create_line")]
+
+    def test_stripes_stay_inside_the_inner_frame(self) -> None:
+        """No stripe reaches the 5 px inner frame or the rounded card corners."""
+
+        lines = self.stripes()
+        self.assertGreater(len(lines), 5)
+        for x1, y1, x2, y2 in lines:
+            for x, y in ((x1, y1), (x2, y2)):
+                self.assertGreater(x, 100 + 5)
+                self.assertLess(x, 100 + CARD_WIDTH - 5)
+                self.assertGreater(y, 200 + 5)
+                self.assertLess(y, 200 + CARD_HEIGHT - 5)
+
+    def test_stripes_are_evenly_spaced(self) -> None:
+        """Neighbouring 45-degree stripes are all the same distance apart."""
+
+        offsets = sorted(round(x1 - y1, 6) for x1, y1, _, _ in self.stripes())
+        gaps = {round(b - a, 6) for a, b in itertools.pairwise(offsets)}
+        self.assertEqual(len(gaps), 1)
 
 
 if __name__ == "__main__":

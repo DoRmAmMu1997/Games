@@ -62,6 +62,10 @@ TABLE_ACCENT_DARK = "#09573E"
 TABLE_ACCENT_LIGHT = "#128562"
 CARD_BACK_COLOR = "#274C77"
 CARD_BACK_ACCENT = "#86ADD8"
+# Card-back stripes: the gap between stripes, and how far inside the card
+# edge they are clipped (inside the 5 px inner frame and its round corners).
+CARD_BACK_STRIPE_SPACING = 14
+CARD_BACK_STRIPE_INSET = 8
 CARD_OUTLINE = "#1E1E1E"
 CARD_FILL = "#FFFDF8"
 CARD_SHADOW = "#083725"
@@ -2588,40 +2592,33 @@ class SolitaireApp:
         )
 
     def draw_card_back_pattern(self, x: float, y: float) -> None:
-        """Draw clipped diagonal stripes inside a face-down card.
+        """Draw clipped diagonal stripes inside a face-down card's inner frame.
 
-        The pattern is a family of parallel 45-degree lines spaced
-        `stripe_spacing` pixels apart. Each line starts on either the left
-        edge or the top edge of the card and travels down-right until it
-        meets either the right edge or the bottom edge, whichever comes
-        first -- that is how the lines stay neatly clipped inside the card.
+        The pattern is a family of parallel 45-degree lines. Along a 45-degree
+        line, (x - y) stays constant, so each stripe is identified by that
+        offset and consecutive offsets differ by exactly `CARD_BACK_STRIPE_SPACING`,
+        which keeps the gaps even. Each stripe is clipped to a box inset
+        `CARD_BACK_STRIPE_INSET` pixels from the card edge: that box sits
+        inside the inner frame, rounded corners included.
         """
-        stripe_spacing = 14
-        for offset in range(0, CARD_WIDTH + CARD_HEIGHT, stripe_spacing):
-            # Start each stripe on either the left edge or the top edge.
-            if offset <= CARD_HEIGHT:
-                start_x = x
-                start_y = y + offset
-            else:
-                start_x = x + (offset - CARD_HEIGHT)
-                start_y = y
+        left = x + CARD_BACK_STRIPE_INSET
+        top = y + CARD_BACK_STRIPE_INSET
+        width = CARD_WIDTH - 2 * CARD_BACK_STRIPE_INSET
+        height = CARD_HEIGHT - 2 * CARD_BACK_STRIPE_INSET
 
-            # Compute how far the stripe can travel before leaving the card.
-            distance_to_right = (x + CARD_WIDTH) - start_x
-            distance_to_bottom = (y + CARD_HEIGHT) - start_y
-
-            if start_y + distance_to_right <= y + CARD_HEIGHT:
-                end_x = x + CARD_WIDTH
-                end_y = start_y + distance_to_right
-            else:
-                end_x = start_x + distance_to_bottom
-                end_y = y + CARD_HEIGHT
-
+        # Offsets run from the bottom-left corner (-height) to the top-right
+        # corner (+width); the end points themselves would be zero-length.
+        for offset in range(-height + CARD_BACK_STRIPE_SPACING, width, CARD_BACK_STRIPE_SPACING):
+            # Start on the left edge for negative offsets, else on the top edge.
+            start_u = max(0, offset)
+            start_v = start_u - offset
+            # Travel down-right until the right or bottom edge, whichever is first.
+            length = min(width - start_u, height - start_v)
             self.canvas.create_line(
-                start_x,
-                start_y,
-                end_x,
-                end_y,
+                left + start_u,
+                top + start_v,
+                left + start_u + length,
+                top + start_v + length,
                 fill=CARD_BACK_ACCENT,
                 width=2,
             )
