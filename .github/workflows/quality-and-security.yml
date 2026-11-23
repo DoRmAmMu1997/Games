@@ -9,9 +9,9 @@
 #   directly and the SolitaireApp shell through a mocked canvas.
 # - Coverage floors are per game, measured over the engine modules listed in
 #   each pytest command, and set just below the measured value (about
-#   0.6-2 points of headroom). Raise them as coverage grows; never lower them to make a
-#   failing change pass. A change that removes tested code may need new
-#   tests to stay above the floor.
+#   1-2.5 points of headroom). Raise them as coverage grows; never lower
+#   them to make a failing change pass. A change that removes tested code
+#   may need new tests to stay above the floor.
 # - Third-party actions are pinned to full commit SHAs (the trailing comment
 #   names the release); Dependabot's github-actions updates keep them current.
 name: Quality & Security
@@ -66,9 +66,9 @@ jobs:
         working-directory: "Python Ludo Game"
         run: python -m pytest tests -q --cov=game --cov=board --cov=ai --cov=models --cov-fail-under=95
 
-      - name: Monopoly tests (coverage floor 92)
+      - name: Monopoly tests (coverage floor 95)
         working-directory: "Python Monopoly Game"
-        run: python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=92
+        run: python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=95
 
       - name: Orbital Orchard tests (coverage floor 97)
         working-directory: "Python Sputnika Game"

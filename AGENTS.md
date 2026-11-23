@@ -141,7 +141,7 @@ $env:SDL_VIDEODRIVER = 'dummy'; $env:SDL_AUDIODRIVER = 'dummy'
 
 # Tests with coverage floors, run FROM INSIDE each game folder
 cd "Python Ludo Game";     python -m pytest tests -q --cov=game --cov=board --cov=ai --cov=models --cov-fail-under=95; cd ..
-cd "Python Monopoly Game"; python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=92; cd ..
+cd "Python Monopoly Game"; python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=95; cd ..
 cd "Python Sputnika Game"; python -m pytest tests -q --cov=merge_logic --cov=physics --cov=rules --cov-fail-under=97; cd ..
 cd "Python Solitaire Game"; python -m pytest tests -q --cov=solitaire --cov-fail-under=80; cd ..
 
