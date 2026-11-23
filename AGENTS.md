@@ -18,7 +18,8 @@ shipping as a single Windows `.exe` via PyInstaller:
 
 These are hobby games, but they are maintained to production hygiene: typed,
 linted, security-scanned, and tested in CI. All art and sound is procedural —
-there are no image/audio assets except the window-icon `.ico` files.
+there are no image/audio assets except the window icons (an `.ico` for the
+exe, plus a `.png` copy that the pygame games load for the window).
 
 ## 2. Mandatory workflow skills
 
@@ -59,8 +60,10 @@ Games/
 
 Per-game module patterns (pygame games): `models.py` (dataclasses),
 `ai.py` (heuristics), `board_render.py`/`ui.py`/`visual_theme.py`/`assets.py`
-(drawing), `simulation.py` (seeded all-AI batches for tuning). Solitaire is a
-single file: `KlondikeGame` (rules) + `SolitaireApp` (tkinter shell).
+(drawing), `simulation.py` (seeded all-AI batches for tuning). Orbital
+Orchard also keeps its pure scoring and fail-timer rules in a pygame-free
+`rules.py`. Solitaire is a single file: `KlondikeGame` (rules) +
+`SolitaireApp` (tkinter shell).
 
 ## 4. Architecture pattern (all four games)
 
@@ -80,7 +83,14 @@ animation state, and persistence. Keep it that way:
   ordering of `DisplayLayout.track_positions` alone decides movement
   direction (clockwise). `tests/test_board_geometry.py` locks continuity,
   clockwise winding, and start/yard/home alignment — change geometry only
-  with those tests green and a headless PNG render inspected.
+  with those tests green and a headless PNG render inspected. The shared lap
+  is the classic 51 cells (`layout.lap_length`); saves carry `lap_version`
+  (now 2), and `LudoGame.from_dict` migrates older saves.
+- Monopoly specifics: a human who cannot pay a debt enters the
+  `"raise_funds"` state instead of going bankrupt at once. Debts queue
+  first-in, first-out; the player sells or mortgages, then calls
+  `pay_debts()` or `declare_bankruptcy()`, and play resumes through
+  `_continue_after_landing()`. Debts are never saved.
 
 ## 5. Coding conventions
 
@@ -90,7 +100,9 @@ animation state, and persistence. Keep it that way:
   create a shared package. Small helpers (`_atomic_write`, `_log_error`,
   `_resource_path`, window scaling) are deliberately duplicated per game so
   each folder builds into a standalone exe; keep the copies textually
-  consistent when you touch one.
+  consistent when you touch one. (Solitaire's `_log_error(error, save_dir)`
+  takes its folder as a parameter, because `KlondikeGame`'s save path is
+  injectable; otherwise it matches the others.)
 - The folder names contain spaces — always quote paths in commands, specs,
   and CI.
 - Flat module layout: game code does `from game import ...`; tests insert
@@ -173,11 +185,17 @@ The owner develops on Windows 11 with PowerShell 5.1:
   `python -m unittest discover -s tests` (both work). Every test module,
   class, and test carries a docstring stating the behaviour under test.
 - Tests are engine-first and fully headless: pygame under the SDL dummy
-  driver; Solitaire tests exercise only the Tk-free `KlondikeGame` (never
-  instantiate `Tk()` in a test).
+  driver. Solitaire tests never instantiate `Tk()`: they test `KlondikeGame`
+  directly, and build `SolitaireApp` with `object.__new__` and a mocked
+  root, canvas and messagebox to test its handlers and drawing.
 - Full-app smoke tests: `LUDO_AUTOTEST=1`, `MONOPOLY_AUTOTEST=1`, and
   `ORBITAL_ORCHARD_AUTOTEST=1` each play a short hidden-window session of
-  `main.py` and exit 0.
+  `main.py` and exit 0. They run the app with `persist=False`, so existing
+  saves are read but never written.
+- Layout and text-fit tests must hold under other fonts too: CI runners
+  resolve font names differently (DejaVu Sans, Liberation Sans, or pygame's
+  default). Leave real margin instead of asserting a 1-px fit, and check
+  colour contrast on the chosen colours, never on antialiased pixels.
 - Visual changes to the Ludo board: render each mode headless to a PNG and
   inspect it (create a small scratch script that calls
   `BoardRenderer.draw`/`draw_static` and `pygame.image.save`), in addition
