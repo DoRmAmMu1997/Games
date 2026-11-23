@@ -283,7 +283,12 @@ class RaiseFundsRuleTests(unittest.TestCase):
         self.assertEqual(MonopolyGame.from_dict(payload).debts, [])
 
     def test_debtor_may_sell_and_mortgage_but_not_build_while_raising_funds(self) -> None:
-        """Only selling and mortgaging are open, and a hotel may break in a shortage."""
+        """Only selling and mortgaging are open, and a hotel may break in a shortage.
+
+        With no houses in the Bank, breaking one hotel sells the whole orange
+        group down to bare land (three hotels, fifteen buildings at $50), so
+        the group never stays lopsided.
+        """
         game = rent_debt()
         human = game.players[0]
         give_group(game, 0, (16, 18, 19))
@@ -295,8 +300,8 @@ class RaiseFundsRuleTests(unittest.TestCase):
         self.assertFalse(actions["build"]["allowed"])
         self.assertTrue(game.asset_actions_for(human, 1)["mortgage"]["allowed"])
         self.assertTrue(game.sell_house(16))
-        self.assertEqual(game.houses[16], 0)
-        self.assertEqual(human.cash, 40 + 5 * 50)
+        self.assertEqual([game.houses[pos] for pos in (16, 18, 19)], [0, 0, 0])
+        self.assertEqual(human.cash, 40 + 15 * 50)
         self.assertFalse(game.unmortgage(1))
 
     def test_debt_queued_during_an_auction_waits_for_it_to_finish(self) -> None:

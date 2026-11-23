@@ -91,13 +91,15 @@ class ForcedHotelSaleTests(unittest.TestCase):
     """Breaking a hotel to raise cash never overdraws the Bank's houses."""
 
     def test_forced_hotel_sale_in_house_shortage_keeps_bank_supply_valid(self) -> None:
-        """A forced sale takes only the houses the Bank has; the rest are sold.
+        """A shortage hotel sale levels the whole group to what the Bank can supply.
 
-        With two houses left the hotel drops to two houses and three
-        buildings' worth of half-price cash is paid; with none left it is
-        sold down to bare land for five buildings' worth.
+        Breaking one hotel alone would leave the group at [2, 5] or [0, 5],
+        which breaks the even-building rule for good. So every hotel in the
+        group goes back to the Bank and the houses it has are spread evenly:
+        two houses make [1, 1] (eight buildings sold), none make bare land
+        (ten buildings sold), each at half the $200 build cost.
         """
-        for bank_houses, level, cash in ((2, 2, 3 * 100 - 50), (0, 0, 5 * 100 - 50)):
+        for bank_houses, levels, cash in ((2, [1, 1], 8 * 100 - 50), (0, [0, 0], 10 * 100 - 50)):
             with self.subTest(bank_houses=bank_houses):
                 game = make_game()
                 debtor = game.players[1]
@@ -110,11 +112,35 @@ class ForcedHotelSaleTests(unittest.TestCase):
                 game.charge(debtor, 50)
 
                 self.assertFalse(debtor.bankrupt)
-                self.assertEqual(game.houses[37], level)
-                self.assertEqual(game.houses[39], 5)
+                self.assertEqual([game.houses[37], game.houses[39]], levels)
                 self.assertEqual(debtor.cash, cash)
                 self.assertEqual(game.bank_houses, 0)
-                self.assertEqual(game.bank_hotels, BANK_HOTELS - 1)
+                self.assertEqual(game.bank_hotels, BANK_HOTELS)
+
+    def test_human_shortage_hotel_sale_keeps_the_group_even(self) -> None:
+        """A human raising funds who breaks a hotel never leaves [5, 0] behind.
+
+        A three-street group with one street at four houses shows the
+        spread: the Bank's one spare house plus the four already on the
+        group make five, shared out as [2, 2, 1] in board order.
+        """
+        game = make_game()
+        human = game.players[0]
+        give_group(game, human.index, (16, 18, 19))
+        game.houses = {16: 5, 18: 5, 19: 4}
+        game.bank_houses = 1
+        game.bank_hotels = BANK_HOTELS - 2
+        human.cash = 0
+        game.charge(human, 50)
+        self.assertEqual(game.awaiting, "raise_funds")
+
+        self.assertTrue(game.sell_house(16))
+
+        levels = [game.houses[pos] for pos in (16, 18, 19)]
+        self.assertEqual(levels, [2, 2, 1])
+        self.assertLessEqual(max(levels) - min(levels), 1)
+        self.assertEqual(game.bank_houses, 0)
+        self.assertEqual(game.bank_hotels, BANK_HOTELS)
 
 
 class AuctionOrderTests(unittest.TestCase):

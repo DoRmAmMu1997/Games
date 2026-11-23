@@ -1087,10 +1087,11 @@ class MonopolyGame:
         """Sell one building back to the bank for half its build cost.
 
         Selling a house drops the street one level. Selling a hotel trades
-        it back for four houses from the Bank; in a forced sale during a
-        house shortage the street keeps only the houses the Bank can supply
-        and every building beyond that is sold too, so the Bank's house
-        supply can never go negative.
+        it back for four houses from the Bank. During a house shortage (the
+        Bank has fewer than four houses) see `_break_hotels_in_shortage`:
+        the whole colour group is sold down to an even level the Bank can
+        supply, so the Bank's house supply never goes negative and the
+        even-building rule still holds.
         """
         player = self.players[self.actor()] if not forced else self.owner_of(position)
         if player is None or self.owners.get(position) != player.index:
@@ -1101,11 +1102,12 @@ class MonopolyGame:
         if not forced and not self.can_sell_building(player, position):
             return False
         space = self.board[position]
+        if level == 5 and self.bank_houses < 4:
+            self._break_hotels_in_shortage(player, space.group)
+            return True
         if level == 5:
-            # Breaking a hotel needs four houses from the Bank. In a forced
-            # sale during a shortage, take only the houses the Bank has; the
-            # rest are sold.
-            new_level = min(4, self.bank_houses)
+            # Breaking a hotel takes four houses from the Bank's supply.
+            new_level = 4
             self.bank_hotels += 1
             self.bank_houses -= new_level
         else:
@@ -1115,6 +1117,41 @@ class MonopolyGame:
         player.cash += (level - new_level) * (space.house_cost // 2)
         self._note(f"{player.name} sells a building on {space.name}.")
         return True
+
+    def _break_hotels_in_shortage(self, player: Player, group: str) -> None:
+        """Sell a colour group's hotels when the Bank cannot hand back four houses.
+
+        Beginner note: a hotel stands for five buildings. Turning it back
+        into four houses needs four houses from the Bank. In a shortage there
+        are not enough, and breaking just one hotel would leave its group
+        lopsided (say a hotel next to bare land), which the even-building
+        rule forbids. So every hotel in the group goes back to the Bank at
+        once, and the houses available (the Bank's spare ones plus any
+        already standing in the group) are shared out as evenly as possible,
+        at most four per street. Every building that does not fit is sold
+        for half its build cost, exactly like an ordinary sale.
+        """
+        streets = board_data.COLOR_GROUPS[group]
+        old_levels = {pos: self.houses.get(pos, 0) for pos in streets}
+        hotels = sum(1 for level in old_levels.values() if level == 5)
+        # Houses that could stand in the group afterwards: the Bank's spare
+        # ones plus those already on the group's non-hotel streets.
+        available = self.bank_houses + sum(level for level in old_levels.values() if level < 5)
+        share, extra = divmod(min(available, 4 * len(streets)), len(streets))
+        house_cost = self.board[streets[0]].house_cost
+        sold = 0
+        kept = 0
+        for slot, pos in enumerate(streets):
+            # The first `extra` streets (board order) take one more house.
+            new_level = share + (1 if slot < extra else 0)
+            self.houses[pos] = new_level
+            sold += old_levels[pos] - new_level
+            kept += new_level
+        self.bank_hotels += hotels
+        self.bank_houses = available - kept
+        player.cash += sold * (house_cost // 2)
+        self._note(f"{player.name} sells the hotels on the {group.replace('_', ' ')} group "
+                   f"in a house shortage.")
 
     def mortgage(self, position: int, forced: bool = False) -> bool:
         """Mortgage a property: raise its mortgage value, collect no rent on it.
