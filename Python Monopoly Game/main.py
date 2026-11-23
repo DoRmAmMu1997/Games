@@ -9,6 +9,9 @@ set: a seeded four-AI game is played for up to 4000 frames with no AI delay
 (use the SDL dummy video driver to keep the window hidden), which exercises
 the engine, the AI and all the drawing code at once. It never writes the
 player's save or stats.
+
+Sound: ``audio.py`` synthesises every effect; this shell plays them for the
+engine's events (``event_sounds``), token hops and button clicks.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from typing import Literal
 import pygame
 
 import ai
+import audio
 import board_render
 import ui
 from board_data import THEME_ORDER
@@ -38,6 +42,8 @@ from settings import (
     SAVEGAME_PATH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SFX_COOLDOWNS,
+    SFX_RECIPES,
     STATS_PATH,
     TOKEN_HOP_SPEED,
     WINDOW_TITLE,
@@ -53,6 +59,58 @@ class TradeDraft(TradeOffer, total=False):
 
     give_scroll: int
     get_scroll: int
+
+
+# Which effect (a name in settings.SFX_RECIPES) each engine event plays; see
+# game.EVENT_KINDS. "game_over" has no entry because the end of a game is
+# answered by the game-over jingle.
+EVENT_SOUNDS = {
+    "roll": "dice",
+    "doubles": "doubles",
+    "three_doubles_jail": "three_doubles",
+    "go_salary": "cha_ching",
+    "buy": "buy",
+    "rent": "rent",
+    "tax": "tax",
+    "card_chance": "card_chance",
+    "card_chest": "card_chest",
+    "go_to_jail": "jail",
+    "leave_jail": "leave_jail",
+    "build_house": "build_house",
+    "build_hotel": "build_hotel",
+    "sell_building": "sell",
+    "mortgage": "mortgage",
+    "unmortgage": "unmortgage",
+    "auction_start": "auction_start",
+    "auction_bid": "bid",
+    "auction_won": "gavel",
+    "trade_proposed": "trade_proposed",
+    "trade_accepted": "trade_accepted",
+    "trade_rejected": "trade_rejected",
+    "raise_funds": "raise_funds",
+    "bankrupt": "bankrupt",
+}
+
+
+def event_sounds(kinds: list[str]) -> list[str]:
+    """Return the effect names to play for one frame's engine events, oldest first.
+
+    A few events stay quiet so one moment never sounds twice: a third
+    double plays its own groan, which already ends in the jail bars (so
+    neither the doubles chime nor the jail clang repeats it), and doubles
+    rolled to escape Jail are heard as the release rather than the chime.
+    """
+    sounds: list[str] = []
+    for kind in kinds:
+        name = EVENT_SOUNDS.get(kind)
+        if (
+            name is None
+            or (kind == "doubles" and ("three_doubles_jail" in kinds or "leave_jail" in kinds))
+            or (kind == "go_to_jail" and "three_doubles_jail" in kinds)
+        ):
+            continue
+        sounds.append(name)
+    return sounds
 
 
 def _resource_path(name: str) -> str:
@@ -161,8 +219,9 @@ class MonopolyApp:
       the rules need, `mode` only says which dialog a human has open.
     - `trade`, `asset_position`, `message`: the open dialog's draft offer,
       the selected title, and the prompt line's last notice.
-    - `token_px`, `token_route`, `dice_show`, ...: animation state, which
-      only eases pixels toward what the engine already decided.
+    - `token_px`, `token_route`, `token_hops`, `dice_show`, ...: animation
+      state, which only eases pixels toward what the engine already decided.
+    - `sounds`: the `audio.SoundBank` of effects (silent without a mixer).
     - `persist`: False in the self-test, so nothing is written to disk.
     """
 
@@ -185,6 +244,8 @@ class MonopolyApp:
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
         self.running = True
+        # Every effect is synthesised once here from the recipes in settings.
+        self.sounds = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
 
         # Screen state: "setup", "playing" or "over".
         self.screen = "setup"
@@ -219,6 +280,9 @@ class MonopolyApp:
         self.token_px: dict = {}                 # player index -> (x, y) float pixels
         self.token_pos: dict = {}                # player index -> last-seen board space
         self.token_route: dict = {}              # player index -> pending waypoint pixels
+        # Player index -> pitch step of the token's next hop sound, or None
+        # while it slides (jail, long card jumps) instead of hopping.
+        self.token_hops: dict[int, int | None] = {}
         self.dice_show = (0, 0)                  # what the UI is currently drawing
         self.dice_anim_remaining_ms = 0          # >0 while the dice shuffle
         self.last_game_dice = (0, 0)             # used to spot a fresh roll
@@ -241,6 +305,7 @@ class MonopolyApp:
         self.token_px = {}
         self.token_pos = {}
         self.token_route = {}
+        self.token_hops = {}
         self.dice_show = (0, 0)
         self.dice_anim_remaining_ms = 0
         self.last_game_dice = (0, 0)
@@ -325,17 +390,20 @@ class MonopolyApp:
                 break
 
     def _update(self, autotest: bool) -> None:
-        """Advance the game: animate visuals, then step the AI if it is its turn.
+        """Advance the game: play sounds, animate visuals, then step the AI if it is its turn.
 
-        In order, once per frame: switch to the end screen when the game is
-        over; autosave when the turn passes; move each token along its queue
-        of waypoints; run the dice shuffle; then, if an AI must act, call
-        `ai.take_action` once its delay has passed. `autotest` skips the
-        delay and the wait for animations.
+        In order, once per frame: play the sounds for everything the engine
+        reported since the last frame; switch to the end screen when the
+        game is over; autosave when the turn passes; move each token along
+        its queue of waypoints (tapping a hop sound at each space); run the
+        dice shuffle; then, if an AI must act, call `ai.take_action` once
+        its delay has passed. `autotest` skips the delay and the wait for
+        animations.
         """
         if self.screen != "playing" or self.game is None:
             return
         game = self.game
+        self._play_event_sounds()
         if game.phase == "game_over":
             self._end_game()
             return
@@ -374,9 +442,11 @@ class MonopolyApp:
                         board_render.token_center((old + step) % 40, idx)
                         for step in range(1, forward + 1)
                     ]
+                    self.token_hops[idx] = 0
                 else:
                     self.token_route[idx] = [
                         board_render.token_center(player.position, idx)]
+                    self.token_hops[idx] = None
                 self.token_pos[idx] = player.position
             target = board_render.token_center(player.position, idx)
             current = self.token_px[idx]
@@ -392,6 +462,7 @@ class MonopolyApp:
                     current = head
                     route.pop(0)
                     remaining -= length
+                    self._play_hop(idx)
                 else:
                     # Not reached this frame: step `remaining` pixels toward
                     # the waypoint (dx / length is the unit direction).
@@ -427,6 +498,27 @@ class MonopolyApp:
             self.ai_timer = 0
             ai.take_action(game)
 
+    def _play_event_sounds(self) -> None:
+        """Drain the engine's event queue and play each event's effect.
+
+        Draining once per frame means every event is heard exactly once,
+        whether a human click or an AI step caused it.
+        """
+        game = self._require_game()
+        for name in event_sounds(game.drain_events()):
+            self.sounds.play(name)
+
+    def _play_hop(self, idx: int) -> None:
+        """Tap the hop sound for a token that just reached a space, one step higher each time.
+
+        Slides (to Jail, or a long card jump) are silent here: their events
+        have their own sounds.
+        """
+        step = self.token_hops.get(idx)
+        if step is not None:
+            self.sounds.play("hop", pitch_step=step)
+            self.token_hops[idx] = step + 1
+
     # ------------------------------------------------------------------
     # Input
     # ------------------------------------------------------------------
@@ -452,9 +544,10 @@ class MonopolyApp:
                 self._click_button(pos)
 
     def _click_button(self, pos: tuple[int, int]) -> bool:
-        """Check the current buttons; act on the first one hit."""
+        """Check the current buttons; act on the first one hit (with a click sound)."""
         for button in self.buttons:
             if button.hit(pos):
+                self.sounds.play("click")
                 self._on_button(button.key)
                 return True
         return False
@@ -1234,8 +1327,14 @@ class MonopolyApp:
 # Entry point
 # --------------------------------------------------------------------------
 def main() -> None:
-    """Initialise pygame, run the app, and shut down cleanly."""
+    """Initialise pygame, run the app, and shut down cleanly.
+
+    The mixer format is requested before ``pygame.init()`` opens the mixer,
+    and the music channel is reserved right after.
+    """
+    audio.init_mixer()
     pygame.init()
+    audio.reserve_channels()
     try:
         icon_path = _resource_path("monopoly_icon.png")
         if os.path.exists(icon_path):

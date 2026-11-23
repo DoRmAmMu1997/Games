@@ -78,7 +78,7 @@ class EventQueueTests(unittest.TestCase):
             ai.take_action(game)
             seen.update(game.drain_events())
         self.assertLessEqual(seen, set(EVENT_KINDS))
-        self.assertLessEqual({"roll", "buy", "rent", "pass_go", "card_chance", "card_chest"}, seen)
+        self.assertLessEqual({"roll", "buy", "rent", "go_salary", "card_chance", "card_chest"}, seen)
 
     def test_ai_actions_queue_the_same_events(self) -> None:
         """An AI roll goes through roll_dice, so it queues a roll like a human's."""
@@ -111,10 +111,10 @@ class DiceEventTests(unittest.TestCase):
         self.assertEqual(rolled(game, 3, 3), ["roll", "doubles", "three_doubles_jail", "go_to_jail"])
 
     def test_passing_go_on_a_roll(self) -> None:
-        """A roll that wraps past GO queues pass_go."""
+        """A roll that wraps past GO queues go_salary."""
         game = make_game()
         game.players[0].position = 38
-        self.assertEqual(rolled(game, 1, 2), ["roll", "pass_go"])
+        self.assertEqual(rolled(game, 1, 2), ["roll", "go_salary"])
 
 
 class LandingEventTests(unittest.TestCase):
@@ -162,7 +162,7 @@ class LandingEventTests(unittest.TestCase):
         to_go = make_game()
         to_go.players[0].position = 4
         stack_card(to_go, "chance", CHANCE_ADVANCE_TO_GO)
-        self.assertEqual(rolled(to_go, 1, 2), ["roll", "card_chance", "pass_go"])
+        self.assertEqual(rolled(to_go, 1, 2), ["roll", "card_chance", "go_salary"])
         to_jail = make_game()
         to_jail.players[0].position = 4
         stack_card(to_jail, "chance", CHANCE_GO_TO_JAIL)

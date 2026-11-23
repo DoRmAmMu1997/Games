@@ -52,7 +52,7 @@ SAVE_VERSION = 2
 # - roll: any dice roll, even one equal to the previous roll;
 # - doubles: the roll was a double (queued right after its roll);
 # - three_doubles_jail: a third double in a row, which sends the player to Jail;
-# - pass_go: a token passed or landed on GO and collected the salary;
+# - go_salary: a token passed or landed on GO and collected the salary;
 # - buy: a title was bought at list price;
 # - rent: a landing charged rent to another player;
 # - tax: a landing charged Income or Luxury Tax;
@@ -72,7 +72,7 @@ EVENT_KINDS = (
     "roll",
     "doubles",
     "three_doubles_jail",
-    "pass_go",
+    "go_salary",
     "buy",
     "rent",
     "tax",
@@ -845,7 +845,7 @@ class MonopolyGame:
         if new_position < player.position:
             self.gain(player, GO_SALARY)
             self._note(f"{player.name} passes GO and collects ${GO_SALARY}.")
-            self._emit("pass_go")
+            self._emit("go_salary")
         player.position = new_position
 
     def advance_to(self, player: Player, position: int,
@@ -861,7 +861,7 @@ class MonopolyGame:
         if position != player.position and position <= player.position:
             self.gain(player, GO_SALARY)
             self._note(f"{player.name} passes GO and collects ${GO_SALARY}.")
-            self._emit("pass_go")
+            self._emit("go_salary")
         player.position = position
         self._resolve_landing(player, rail_rent_multiplier=rail_rent_multiplier,
                               utility_card_rent=utility_card_rent)

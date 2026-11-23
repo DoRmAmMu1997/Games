@@ -22,9 +22,12 @@ if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
 import pygame
+from test_engine_regressions import rig_rolls
 
 import audio
+import main
 from audio import LIMIT, MusicPlayer, Note, SoundBank, midi, render
+from game import EVENT_KINDS, MonopolyGame
 from settings import DICE_RESULT_AT, HOP_PITCH_STEPS, SFX_COOLDOWNS, SFX_RECIPES
 
 RATE = 22050
@@ -423,6 +426,240 @@ class MonopolyRecipeTests(unittest.TestCase):
         for notes in SFX_RECIPES.values():
             render(notes, RATE, 2)
         self.assertLess(time.perf_counter() - start, 2.0)
+
+
+def make_app_with_game(human_seats: int = 1) -> tuple[main.MonopolyApp, MonopolyGame, mock.Mock]:
+    """Return a non-persisting app playing a seeded 4-seat game, with a mock sound bank.
+
+    The first ``human_seats`` seats are human. The mock replaces the real
+    bank, so tests can read exactly which sounds were asked for.
+    """
+
+    app = main.MonopolyApp(persist=False)
+    game = MonopolyGame([(f"P{seat + 1}", seat < human_seats) for seat in range(4)], seed=3)
+    app.start_game(game)
+    app.sounds = mock.Mock()
+    return app, game, app.sounds
+
+
+def played(bank: mock.Mock) -> list[tuple[str, int]]:
+    """Return ``(name, pitch_step)`` for every ``play`` call on a mock bank, in order."""
+
+    return [(call.args[0], call.kwargs.get("pitch_step", 0)) for call in bank.play.call_args_list]
+
+
+def names(bank: mock.Mock) -> list[str]:
+    """Return just the effect names asked of a mock bank, in order."""
+
+    return [name for name, _step in played(bank)]
+
+
+class EventSoundMapTests(unittest.TestCase):
+    """``main.event_sounds`` turns one frame's engine events into effect names."""
+
+    def test_each_event_kind_has_its_sound(self) -> None:
+        """Every sounding kind maps to its own effect."""
+
+        cases = {
+            "roll": "dice",
+            "doubles": "doubles",
+            "three_doubles_jail": "three_doubles",
+            "go_salary": "cha_ching",
+            "buy": "buy",
+            "rent": "rent",
+            "tax": "tax",
+            "card_chance": "card_chance",
+            "card_chest": "card_chest",
+            "go_to_jail": "jail",
+            "leave_jail": "leave_jail",
+            "build_house": "build_house",
+            "build_hotel": "build_hotel",
+            "sell_building": "sell",
+            "mortgage": "mortgage",
+            "unmortgage": "unmortgage",
+            "auction_start": "auction_start",
+            "auction_bid": "bid",
+            "auction_won": "gavel",
+            "trade_proposed": "trade_proposed",
+            "trade_accepted": "trade_accepted",
+            "trade_rejected": "trade_rejected",
+            "raise_funds": "raise_funds",
+            "bankrupt": "bankrupt",
+        }
+        for kind, sound in cases.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(main.event_sounds([kind]), [sound])
+
+    def test_game_over_has_no_effect_of_its_own(self) -> None:
+        """The end of the game is answered by the game-over jingle instead."""
+
+        self.assertEqual(main.event_sounds(["bankrupt", "game_over"]), ["bankrupt"])
+
+    def test_every_event_kind_is_known_to_the_map(self) -> None:
+        """Each engine kind either has a sound or is the silent game_over."""
+
+        self.assertEqual(set(main.EVENT_SOUNDS) | {"game_over"}, set(EVENT_KINDS))
+        for name in main.EVENT_SOUNDS.values():
+            with self.subTest(name=name):
+                self.assertIn(name, SFX_RECIPES)
+
+    def test_third_double_replaces_the_chime_and_the_clang(self) -> None:
+        """A third double plays its own groan (which ends in the bars), not doubles and jail too."""
+
+        kinds = ["roll", "doubles", "three_doubles_jail", "go_to_jail"]
+        self.assertEqual(main.event_sounds(kinds), ["dice", "three_doubles"])
+
+    def test_doubles_out_of_jail_sound_like_freedom(self) -> None:
+        """Escaping Jail on doubles plays the release, not the doubles chime."""
+
+        self.assertEqual(main.event_sounds(["roll", "doubles", "leave_jail"]), ["dice", "leave_jail"])
+
+    def test_a_card_to_jail_flips_then_clangs(self) -> None:
+        """A Go to Jail card still plays its flip and the jail bars."""
+
+        self.assertEqual(main.event_sounds(["roll", "card_chance", "go_to_jail"]),
+                         ["dice", "card_chance", "jail"])
+
+
+class ShellSoundTests(unittest.TestCase):
+    """The window plays the engine's events, token hops and button clicks."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once so the app can open its dummy window."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after these tests."""
+
+        pygame.quit()
+
+    def test_app_builds_its_bank_from_the_monopoly_recipes(self) -> None:
+        """The real app's bank is a SoundBank with every recipe (when a mixer is running)."""
+
+        app = main.MonopolyApp(persist=False)
+        self.assertIsInstance(app.sounds, SoundBank)
+        if app.sounds.enabled:
+            self.assertEqual(set(app.sounds.sounds), set(SFX_RECIPES))
+
+    def test_update_plays_this_frame_s_events_once(self) -> None:
+        """A human's roll onto Income Tax plays the dice and the tax, and the queue is emptied."""
+
+        app, game, bank = make_app_with_game()
+        rig_rolls(game, 1, 3)
+        game.roll_dice()
+        app._update(False)
+        self.assertEqual([name for name in names(bank) if name != "hop"], ["dice", "tax"])
+        self.assertEqual(game.events, [])
+        bank.reset_mock()
+        app._update(False)
+        self.assertNotIn("dice", names(bank))
+
+    def test_human_roll_button_rattles_the_dice(self) -> None:
+        """Clicking Roll Dice plays the click, then the dice on the next update."""
+
+        app, _game, bank = make_app_with_game()
+        app._draw()
+        button = next(button for button in app.buttons if button.key == "roll")
+        app._handle_click(button.rect.center)
+        app._update(False)
+        self.assertEqual(names(bank)[:2], ["click", "dice"])
+
+    def test_ai_turns_are_heard_too(self) -> None:
+        """An AI roll goes through the engine, so the next frame plays its dice."""
+
+        app, _game, bank = make_app_with_game(human_seats=0)
+        app._update(True)
+        app._update(True)
+        self.assertIn("dice", names(bank))
+
+    def test_finished_game_plays_its_last_events(self) -> None:
+        """The bankruptcy that ends the game is still heard as the screen changes."""
+
+        app, game, bank = make_app_with_game()
+        for player in game.players[1:3]:
+            player.bankrupt = True
+        game._bankrupt(game.players[3], game.players[0])
+        app._update(False)
+        self.assertEqual(app.screen, "over")
+        self.assertIn("bankrupt", names(bank))
+
+    def hops_after(self, app: main.MonopolyApp, bank: mock.Mock, elapsed_ms: int) -> list[tuple[str, int]]:
+        """Run one update lasting ``elapsed_ms`` and return the hop sounds asked of ``bank`` so far."""
+
+        with mock.patch.object(app, "clock") as clock:
+            clock.get_time.return_value = elapsed_ms
+            app._update(False)
+        return [sound for sound in played(bank) if sound[0] == "hop"]
+
+    def test_each_hop_climbs_in_pitch(self) -> None:
+        """A 4-space roll taps four rising hops as the token reaches each space."""
+
+        app, game, bank = make_app_with_game()
+        self.hops_after(app, bank, 0)
+        rig_rolls(game, 1, 3)
+        game.roll_dice()
+        self.assertEqual(self.hops_after(app, bank, 2000), [("hop", 0), ("hop", 1), ("hop", 2), ("hop", 3)])
+
+    def test_hops_wait_for_the_token_to_reach_each_space(self) -> None:
+        """A tiny frame that reaches no space taps no hop yet."""
+
+        app, game, bank = make_app_with_game()
+        self.hops_after(app, bank, 0)
+        rig_rolls(game, 1, 3)
+        game.roll_dice()
+        self.assertEqual(self.hops_after(app, bank, 1), [])
+
+    def test_jumps_slide_without_hopping(self) -> None:
+        """A long jump (Go To Jail, a card) is one silent slide; its event has its own sound."""
+
+        app, game, bank = make_app_with_game()
+        game.players[0].position = 30
+        self.hops_after(app, bank, 0)
+        game.go_to_jail(game.players[0])
+        self.assertEqual(self.hops_after(app, bank, 5000), [])
+
+    def test_every_button_clicks(self) -> None:
+        """A setup button press plays the click."""
+
+        app = main.MonopolyApp(persist=False)
+        app.sounds = mock.Mock()
+        app._draw()
+        button = next(button for button in app.buttons if button.key == "humans_up")
+        app._handle_click(button.rect.center)
+        self.assertEqual(names(app.sounds), ["click"])
+
+    def test_clicks_off_any_button_are_silent(self) -> None:
+        """A click on empty wallpaper plays nothing."""
+
+        app = main.MonopolyApp(persist=False)
+        app.sounds = mock.Mock()
+        app._draw()
+        app._handle_click((5, 5))
+        app.sounds.play.assert_not_called()
+
+
+class MixerStartupTests(unittest.TestCase):
+    """``main.main`` asks for the mixer format before pygame starts, and reserves music after."""
+
+    def test_mixer_is_set_up_around_pygame_init(self) -> None:
+        """Order: init_mixer, pygame.init, reserve_channels, then the app is built."""
+
+        order = mock.Mock()
+        with (
+            mock.patch.object(main.audio, "init_mixer", order.init_mixer),
+            mock.patch.object(main.pygame, "init", order.init),
+            mock.patch.object(main.audio, "reserve_channels", order.reserve_channels),
+            mock.patch.object(main, "MonopolyApp", order.MonopolyApp),
+            mock.patch.object(main.pygame, "quit", order.quit),
+            mock.patch.dict(os.environ, {"MONOPOLY_AUTOTEST": ""}),
+        ):
+            main.main()
+        calls = [name for name, _args, _kwargs in order.mock_calls]
+        self.assertEqual(calls[:3], ["init_mixer", "init", "reserve_channels"])
+        self.assertIn("MonopolyApp", calls)
 
 
 class MusicPlayerTests(unittest.TestCase):
