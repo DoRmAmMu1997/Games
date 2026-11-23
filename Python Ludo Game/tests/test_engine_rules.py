@@ -196,6 +196,161 @@ class EngineRuleTests(unittest.TestCase):
         self.assertEqual(restored.last_roll, 6)
 
 
+class EngineEventTests(unittest.TestCase):
+    """The engine queues one event kind per sound-worthy moment, for the shell to drain.
+
+    Every check drains the queue after setting up the board, so it sees only
+    the events of the action under test.
+    """
+
+    def test_a_new_game_has_no_events(self) -> None:
+        """Nothing has happened yet, so draining returns an empty list."""
+
+        self.assertEqual(make_game().drain_events(), [])
+
+    def test_drain_returns_the_events_in_order_and_empties_the_queue(self) -> None:
+        """A roll with no move queues roll, no_move, turn_change; a second drain is empty."""
+
+        game = make_game()
+        game.record_roll(3)
+        game.note_no_move(3)
+        self.assertEqual(game.drain_events(), ["roll", "no_move", "turn_change"])
+        self.assertEqual(game.drain_events(), [])
+
+    def test_every_roll_is_announced_even_a_repeated_value(self) -> None:
+        """Two rolls of the same value in a row both queue a roll event."""
+
+        game = make_game()
+        game.record_roll(2)
+        game.note_no_move(2)
+        game.record_roll(2)
+        self.assertEqual(game.drain_events(), ["roll", "no_move", "turn_change", "roll"])
+
+    def test_roll_die_announces_its_roll(self) -> None:
+        """The engine's own dice go through record_roll, so they queue a roll too."""
+
+        game = make_game()
+        game.roll_die()
+        self.assertEqual(game.drain_events()[0], "roll")
+
+    def test_a_six_is_announced_after_the_roll(self) -> None:
+        """Rolling a 6 queues roll then rolled_six."""
+
+        game = make_game()
+        game.record_roll(6)
+        self.assertEqual(game.drain_events(), ["roll", "rolled_six"])
+
+    def test_third_six_announces_the_penalty_and_the_turn_change(self) -> None:
+        """The forfeited third 6 queues roll, rolled_six, three_sixes, turn_change."""
+
+        game = make_game()
+        game.record_roll(6)
+        game.apply_move(game.legal_moves(6)[0])
+        game.record_roll(6)
+        game.apply_move(next(move for move in game.legal_moves(6) if move.token_index == 0))
+        game.drain_events()
+
+        self.assertTrue(game.record_roll(6))
+        self.assertEqual(game.drain_events(), ["roll", "rolled_six", "three_sixes", "turn_change"])
+
+    def test_entering_the_board_leaves_the_yard_and_earns_a_bonus(self) -> None:
+        """A yard entry on a 6 queues leave_yard then bonus_turn (no plain move)."""
+
+        game = make_game()
+        game.record_roll(6)
+        game.drain_events()
+        game.apply_move(game.legal_moves(6)[0])
+        self.assertEqual(game.drain_events(), ["leave_yard", "bonus_turn"])
+
+    def test_a_plain_move_passes_the_turn(self) -> None:
+        """An ordinary move queues move then turn_change."""
+
+        game = make_game()
+        game.players[0].tokens[0].steps = 0
+        game.record_roll(3)
+        game.drain_events()
+        game.apply_move(game.legal_moves(3)[0])
+        self.assertEqual(game.drain_events(), ["move", "turn_change"])
+
+    def test_capture_is_announced_with_its_bonus(self) -> None:
+        """Capturing queues move, capture, bonus_turn; without the bonus rule the turn passes."""
+
+        for bonus in (True, False):
+            with self.subTest(bonus_on_capture=bonus):
+                players = [(f"P{i + 1}", i == 0) for i in range(4)]
+                game = LudoGame(players, LudoRules(total_players=4, bonus_on_capture=bonus), seed=11)
+                game.players[0].tokens[0].steps = 0
+                landing = game.layout.track_index(0, 3)
+                assert landing is not None
+                game.players[1].tokens[0].steps = game.layout.steps_to_reach(1, landing)
+                game.record_roll(3)
+                game.drain_events()
+                game.apply_move(game.legal_moves(3)[0])
+                last = "bonus_turn" if bonus else "turn_change"
+                self.assertEqual(game.drain_events(), ["move", "capture", last])
+
+    def test_reaching_home_is_announced_with_its_bonus(self) -> None:
+        """A token reaching home queues move, home, bonus_turn."""
+
+        game = make_game()
+        game.players[0].tokens[0].steps = game.layout.finish_steps - 2
+        game.record_roll(2)
+        game.drain_events()
+        game.apply_move(game.legal_moves(2)[0])
+        self.assertEqual(game.drain_events(), ["move", "home", "bonus_turn"])
+
+    def test_winning_move_announces_the_win_and_nothing_after_it(self) -> None:
+        """The last token home queues move, home, game_won: no bonus and no turn change."""
+
+        game = make_game()
+        for token in game.players[0].tokens[1:]:
+            token.steps = game.layout.finish_steps
+        game.players[0].tokens[0].steps = game.layout.finish_steps - 2
+        game.record_roll(2)
+        game.drain_events()
+        game.apply_move(game.legal_moves(2)[0])
+        self.assertEqual(game.drain_events(), ["move", "home", "game_won"])
+
+    def test_six_with_no_move_keeps_the_turn(self) -> None:
+        """A 6 that cannot be played queues no_move but no turn change."""
+
+        game = make_game()
+        for token in game.players[0].tokens:
+            token.steps = game.layout.finish_steps - 2
+        game.record_roll(6)
+        game.drain_events()
+        game.note_no_move(6)
+        self.assertEqual(game.drain_events(), ["no_move"])
+
+    def test_end_turn_announces_the_turn_change(self) -> None:
+        """Passing the turn by hand queues turn_change."""
+
+        game = make_game()
+        game.end_turn()
+        self.assertEqual(game.drain_events(), ["turn_change"])
+
+    def test_nobody_left_to_play_ends_the_game(self) -> None:
+        """When every seat has finished, advancing the turn queues game_won instead."""
+
+        game = make_game()
+        for player in game.players:
+            for token in player.tokens:
+                token.steps = game.layout.finish_steps
+        game.end_turn()
+        self.assertEqual(game.drain_events(), ["game_won"])
+
+    def test_events_are_never_saved_or_loaded(self) -> None:
+        """to_dict leaves the queue out, and a loaded game starts with an empty queue."""
+
+        game = make_game()
+        game.record_roll(6)
+        data = game.to_dict()
+        self.assertNotIn("events", data)
+        data["events"] = ["capture", "game_won"]
+        self.assertEqual(LudoGame.from_dict(data).drain_events(), [])
+        self.assertEqual(game.drain_events(), ["roll", "rolled_six"])
+
+
 class ClassicLapTests(unittest.TestCase):
     """A lap is one cell shorter than the shared track, as on a real board.
 
