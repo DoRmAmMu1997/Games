@@ -47,6 +47,8 @@ class DealTests(unittest.TestCase):
     """The standard Klondike opening layout."""
 
     def setUp(self) -> None:
+        """Deal a fresh game whose score file lives in a throwaway folder."""
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.game = make_game(self.tmp.name)
@@ -106,6 +108,8 @@ class MoveRuleTests(unittest.TestCase):
     """Tableau and foundation placement legality."""
 
     def setUp(self) -> None:
+        """Start each test from an empty board in a throwaway folder, ready to be hand-crafted."""
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.game = make_game(self.tmp.name)
@@ -281,6 +285,8 @@ class UndoTests(unittest.TestCase):
     """Snapshot/restore powers the undo stack."""
 
     def setUp(self) -> None:
+        """Deal a fresh game whose score file lives in a throwaway folder."""
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.game = make_game(self.tmp.name)
@@ -303,6 +309,8 @@ class HintEngineTests(unittest.TestCase):
     """The hint pipeline: generate, filter, rank."""
 
     def setUp(self) -> None:
+        """Start each test from an empty board in a throwaway folder, ready to be hand-crafted."""
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.game = make_game(self.tmp.name)

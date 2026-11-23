@@ -3,8 +3,24 @@ Simple Klondike Solitaire built with tkinter.
 
 Everything lives in this one file so it is easy to run and study.
 The code is split into:
-1. A game model that knows the rules and scoring.
-2. A tkinter app that draws the cards and handles input.
+1. A game model (`KlondikeGame`) that knows the rules and scoring. It never
+   imports or touches tkinter, so tests can drive it directly.
+2. A tkinter app (`SolitaireApp`) that draws the cards and handles input.
+   It only translates clicks into calls on the model and repaints the canvas.
+
+Small dataclasses (`Card`, `Selection`, `HintMove`, `AnimationState`) carry
+data between the two halves, and the constants at the top of the file hold
+every layout size, colour and timing value.
+
+Beginner note: Klondike vocabulary used throughout the code.
+- Stock: the face-down pile at top left. Clicking it turns one card over
+  onto the waste; when it is empty, a click recycles the waste back into it.
+- Waste: the face-up pile beside the stock. Only its top card can be played.
+- Foundations: the four piles at top right, one per suit. Each builds up
+  from Ace to King; filling all four wins the game.
+- Tableau: the seven columns below. Cards stack downward in alternating
+  colours (a red 6 on a black 7), and only a King may fill an empty column.
+  A face-down tableau card turns face up once nothing covers it.
 """
 
 import contextlib
@@ -197,7 +213,14 @@ class Card:
 
 @dataclass
 class Selection:
-    """A group of currently selected cards and where they came from."""
+    """A group of currently selected cards and where they came from.
+
+    `source_type` is "waste", "foundation" or "tableau". `pile_index` says
+    which foundation or tableau column (it is always 0 for the waste), and
+    `card_index` is the position of the first selected card inside that
+    pile. `cards` is the moving stack itself, front card first: one card
+    for the waste or a foundation, possibly several for a tableau run.
+    """
 
     source_type: str
     pile_index: int
@@ -207,7 +230,14 @@ class Selection:
 
 @dataclass
 class HintMove:
-    """A possible move plus a ready-to-show explanation for the player."""
+    """A possible move plus a ready-to-show explanation for the player.
+
+    The source fields mirror `Selection`, with one extra source type:
+    "future_waste" means the card is not on the waste yet and only arrives
+    there after `stock_clicks` clicks on the stock (0 for every other move).
+    `destination_type` is "foundation" or "tableau", and `description` is
+    the finished hint sentence shown in the status bar.
+    """
 
     source_type: str
     source_index: int
@@ -221,7 +251,14 @@ class HintMove:
 
 @dataclass
 class AnimationState:
-    """Information needed to draw cards moving between two positions."""
+    """Information needed to draw cards moving between two positions.
+
+    `start_positions` and `end_positions` hold one top-left canvas point per
+    moving card. `frame` counts up from 0 to `steps`; the drawing code turns
+    that ratio into how far along its path each card is. The destination
+    fields tell the board which pile must hide the cards while they are
+    still in flight, and `completion_message` is shown once they land.
+    """
 
     cards: list[Card]
     start_positions: list[tuple[float, float]]
@@ -234,12 +271,35 @@ class AnimationState:
 
 
 class KlondikeGame:
-    """Game model: stores the board and enforces the Klondike rules."""
+    """Game model: stores the board and enforces the Klondike rules.
+
+    This class has no tkinter code at all. The app, the tests and any
+    simulation drive it only through its methods, so the rules live in one
+    place and can be checked without opening a window.
+
+    Key attributes:
+    - `stock`, `waste`: lists of `Card`; the LAST item is the top card.
+    - `foundations`: four lists, one per suit in `FOUNDATION_SUITS` order.
+    - `tableau`: seven lists; index 0 is the card at the back of a column
+      and the last item is the uncovered card at its front.
+    - `score`, `high_score`, `wins`, `losses`: scoring and statistics; the
+      last three are saved to JSON at `high_score_path`.
+    - `won`, `lost`: set by the app when a game ends; they freeze input.
+    - `rng`: the random generator used to shuffle (seedable for tests).
+    - `_seen_positions`: every board this deal has left behind, used by
+      the hint engine to avoid suggesting moves that undo earlier ones.
+
+    The methods fall into three groups: dealing and saving, the move rules
+    (selections, legality checks, moving cards), and the hint engine, which
+    also decides when a game is lost (see the banner comment further down).
+    """
 
     # Score values used by the game.
     FOUNDATION_POINTS = 10
     REVEAL_POINTS = 5
     WIN_BONUS = 100
+    # The time bonus starts at this many points and drops by one per second
+    # of play, so a win after 700 seconds (11:40) or more earns no time bonus.
     TIME_BONUS_CAP = 700
 
     def __init__(self, high_score_path: str, rng: random.Random | None = None) -> None:
@@ -275,7 +335,14 @@ class KlondikeGame:
         self.new_game()
 
     def new_game(self) -> None:
-        """Reset the board and deal a standard Klondike opening layout."""
+        """Reset the board and deal a standard Klondike opening layout.
+
+        The deal gives column 1 one card, column 2 two cards, and so on up to
+        seven cards in column 7 (28 cards in all). Only the last card dealt to
+        each column is face up. The remaining 24 cards become the face-down
+        stock. The score and the seen-position memory are cleared, but the
+        saved high score and win/loss counts are kept.
+        """
         # Reset score and all piles for a fresh deal.
         self.score = 0
         self.stock = []
@@ -313,7 +380,14 @@ class KlondikeGame:
         return deck
 
     def load_saved_data(self) -> dict:
-        """Read saved high score and statistics from JSON, if possible."""
+        """Read saved high score and statistics from JSON, if possible.
+
+        Returns a dict with the integer keys "high_score", "wins" and
+        "losses". The method never raises: a missing, unreadable or
+        malformed file, or a field that is not a usable number, simply
+        reads as 0, and negative numbers are clamped up to 0. That way a
+        damaged save costs the player their statistics, never the game.
+        """
         try:
             with open(self.high_score_path, encoding="utf-8") as file:
                 data = json.load(file)
@@ -344,7 +418,13 @@ class KlondikeGame:
         }
 
     def save_high_score(self) -> None:
-        """Write best score and win/loss counts with a crash-safe atomic write."""
+        """Write best score and win/loss counts with a crash-safe atomic write.
+
+        Beginner note: an "atomic" write means other code (or the next run of
+        the game) sees either the complete old file or the complete new file,
+        never a half-written mix. The data goes to a temporary file first and
+        `os.replace` then swaps it into place in a single step.
+        """
         payload = {
             "high_score": self.high_score,
             "wins": self.wins,
@@ -380,7 +460,12 @@ class KlondikeGame:
         self.save_high_score()
 
     def snapshot(self) -> dict:
-        """Capture the entire game state so Undo can restore it later."""
+        """Capture the entire game state so Undo can restore it later.
+
+        Cards are copied into plain dictionaries, so later moves (which
+        mutate `Card` objects, for example flipping them face up) cannot
+        reach back and change a snapshot that is already stored.
+        """
         return {
             "score": self.score,
             "high_score": self.high_score,
@@ -398,7 +483,13 @@ class KlondikeGame:
         }
 
     def restore_snapshot(self, snapshot: dict) -> None:
-        """Restore a previously saved game state."""
+        """Restore a previously saved game state.
+
+        Everything goes back to the snapshot, including the win/loss counts
+        (so undoing out of a lost game also takes that loss back off the
+        statistics), with one exception: the high score never goes down.
+        The result is saved straight away so the file matches the board.
+        """
         # Keep the best score the player has ever reached in this session/file.
         previous_high_score = self.high_score
         self.score = int(snapshot["score"])
@@ -437,8 +528,15 @@ class KlondikeGame:
         ]
 
     def draw_from_stock(self) -> str:
-        """Draw from the stock or recycle waste back into stock."""
+        """Draw from the stock or recycle waste back into stock.
+
+        Returns "draw" when one card moved to the waste, "reset" when the
+        waste was turned back over into the stock, and "empty" when both
+        piles are empty and nothing changed. The app uses this word to pick
+        its status message and to decide whether an Undo step is needed.
+        """
         if self.stock or self.waste:
+            # Only a click that really changes the board is remembered.
             self.remember_position()
         if self.stock:
             # Normal draw: reveal one card and place it on the waste pile.
@@ -449,6 +547,9 @@ class KlondikeGame:
 
         if self.waste:
             # When stock is empty, recycle the waste pile back into stock.
+            # Popping from the waste's top and appending to the stock
+            # reverses the order, so the first card drawn this time round
+            # is the one that was drawn first last time, as in a real deck.
             while self.waste:
                 card = self.waste.pop()
                 card.face_up = False
@@ -782,7 +883,16 @@ class KlondikeGame:
         return candidates[0] if candidates else None
 
     def current_legal_moves(self) -> list[HintMove]:
-        """Collect all useful moves that can be made immediately."""
+        """Collect all useful moves that can be made immediately.
+
+        This is stage 1 (GENERATE) for moves that need no stock clicks. It
+        looks at three kinds of source in turn: the top waste card, the top
+        card of each foundation (moving back down to the tableau), and every
+        face-up card in each tableau column together with the cards below
+        it. Every legal move found is wrapped in a `HintMove`, and the list
+        is then passed through `is_meaningful_move` (stage 2) before it is
+        returned, so legal but pointless shuffles never reach the ranking.
+        """
         moves: list[HintMove] = []
 
         if self.waste:
@@ -834,6 +944,12 @@ class KlondikeGame:
                     )
                 )
 
+            # Every face-up card can lead a run: the card plus everything on
+            # top of it. This includes the single top card again, but only
+            # its tableau destinations are added here; the foundation moves
+            # for it already came from `single_card_moves` above. The repeat
+            # tableau entries are harmless, because the sorted list simply
+            # holds two equal candidates.
             for card_index, card in enumerate(column):
                 if not card.face_up:
                     continue
@@ -867,6 +983,13 @@ class KlondikeGame:
 
         This helps the hint system say things like "click the stock twice,
         then move 5♥ to the Hearts foundation."
+
+        The simulation clicks through copies of the stock and waste one card
+        at a time, recycling the waste when the stock runs out, exactly as
+        `draw_from_stock` would. After each click it tries the new top waste
+        card against the real tableau and foundations. It stops as soon as a
+        stock/waste arrangement repeats, which means a full cycle has been
+        seen. The resulting moves go through `is_meaningful_move` as well.
         """
         future_moves: list[HintMove] = []
         # Keyed by (suit, rank, destination type, destination index); the
@@ -890,6 +1013,8 @@ class KlondikeGame:
                 break
             seen_states.add(state_key)
 
+            # With zero clicks the top waste card is the one already on the
+            # board; `current_legal_moves` covers it, so only later cards count.
             if simulated_waste and stock_clicks > 0:
                 card = simulated_waste[-1]
                 for move in self.single_card_moves(
@@ -936,7 +1061,18 @@ class KlondikeGame:
         source_card_index: int,
         stock_clicks: int,
     ) -> list[HintMove]:
-        """Build every one-card move available for a given card."""
+        """Build every one-card move available for a given card.
+
+        The card is tried on each foundation and on each tableau column, and
+        every legal placement becomes a `HintMove`. The source arguments are
+        copied into those moves unchanged, which lets the same helper serve
+        the waste, a tableau top card, and simulated "future_waste" cards.
+        Two placements are skipped: a foundation card is never offered to a
+        foundation, and a tableau card is never offered to its own column.
+        The legality checks always use the REAL board, which is fine for
+        future-waste cards because stock clicks do not change the tableau
+        or the foundations.
+        """
         moves: list[HintMove] = []
 
         if source_type != "foundation":
@@ -983,7 +1119,13 @@ class KlondikeGame:
         destination_index: int,
         stock_clicks: int,
     ) -> HintMove:
-        """Package move information and its human-readable hint text together."""
+        """Package move information and its human-readable hint text together.
+
+        The hint sentence is written now, while the board still looks the
+        way it did when the move was found, so the text always matches the
+        move. `cards` is copied into a new list so later changes to the
+        caller's list cannot alter the stored move.
+        """
         description = self.describe_hint(
             source_type,
             source_index,
@@ -1126,8 +1268,13 @@ class KlondikeGame:
         """
         Filter out technically legal moves that are strategically pointless.
 
-        The user asked the hint system and loss detection to ignore several
-        "to and fro" moves, so this method applies those custom filters.
+        This is stage 2 (FILTER). The hint system and loss detection both
+        ignore several "to and fro" moves that could be repeated forever
+        without changing anything that matters, so a move is dropped if it
+        is any of: a lone tableau Ace moved to another column, a King-led
+        column moved into an empty column, a redundant transfer between
+        equivalent tableau cards, or a foundation card pulled back down
+        without unlocking real progress. Returns True if the move survives.
         """
         if self.is_tableau_ace_diversion(move):
             return False
@@ -1138,13 +1285,23 @@ class KlondikeGame:
         return not self.is_unproductive_foundation_return(move)
 
     def is_tableau_ace_diversion(self, move: HintMove) -> bool:
-        """Never prefer moving a tableau Ace to another tableau."""
+        """Never prefer moving a tableau Ace to another tableau.
+
+        An Ace's only useful destination is a foundation, which is always
+        open to it, so parking it on another column just wastes a move.
+        """
         if move.source_type != "tableau" or move.destination_type != "tableau":
             return False
         return len(move.cards) == 1 and move.cards[0].rank == 1
 
     def is_empty_king_shuffle(self, move: HintMove) -> bool:
-        """Ignore moving a full king-starting pile between empty columns."""
+        """Ignore moving a full king-starting pile between empty columns.
+
+        The filter only applies when the King is the bottom card of its column
+        (`source_card_index == 0`) and the destination is empty: the source
+        column then ends up empty instead, so the board is effectively the
+        same as before.
+        """
         if move.source_type != "tableau" or move.destination_type != "tableau":
             return False
         if move.source_card_index != 0:
@@ -1181,6 +1338,14 @@ class KlondikeGame:
         Example: moving a red 6 onto one black 7 when another identical black 7
         is available and neither resulting top card can immediately advance to a
         foundation.
+
+        The checks run in order: a move that reveals a hidden card or goes to
+        an empty column is never redundant; a swap between equivalent anchors
+        that frees no foundation play (see `is_equivalent_anchor_loop_on_board`)
+        always is; otherwise the
+        move is redundant only when it targets a non-canonical one of several
+        same-rank, same-colour destinations and none of them can feed a
+        foundation. Returns True when the move should be filtered out.
         """
         if self.move_reveals_hidden_on_board(source_index, source_card_index, tableau):
             return False
@@ -1244,6 +1409,13 @@ class KlondikeGame:
 
         Moving the Q-J stack between the two kings is just a reversible shuffle
         unless exposing the source king creates a foundation move.
+
+        Beginner note: an "anchor" is the card a moving stack rests on: the
+        card just above it in the source column, or the top card of the
+        destination column. Two anchors are equivalent when they share rank
+        and colour, because the same stacks fit on both. The move is still
+        allowed if either anchor could go to a foundation, since that turns
+        the shuffle into real progress.
         """
         if source_card_index <= 0:
             return False
@@ -1321,7 +1493,13 @@ class KlondikeGame:
         tableau: list[list[Card]],
         foundations: list[list[Card]],
     ) -> bool:
-        """Check whether a simulated tableau transfer would still be useful."""
+        """Check whether a simulated tableau transfer would still be useful.
+
+        This bundles the legality check with the same filters that
+        `is_meaningful_move` applies to real moves (the empty-column King
+        shuffle and the redundant-transfer check), but runs them against the
+        supplied simulated `tableau` and `foundations`.
+        """
         if source_index == destination_index:
             return False
         if not self.can_move_to_tableau_cards(cards, tableau[destination_index]):
@@ -1345,6 +1523,8 @@ class KlondikeGame:
         just a detour.
         """
         returned_card = move.cards[0]
+        # First test: would a stock or waste card that is otherwise stuck
+        # have a new home on top of the returned card?
         if any(
             self.can_move_to_tableau_cards([card], [returned_card]) and not self.card_can_move_to_any_foundation(card)
             for card in self.stock + self.waste
@@ -1361,6 +1541,9 @@ class KlondikeGame:
         foundations_after = [list(pile) for pile in self.foundations]
         foundations_after[move.source_index] = foundations_after[move.source_index][:-1]
 
+        # Second test: look for a tableau run in another column that could
+        # follow the returned card onto its new column, and that then makes
+        # visible progress. Only the first such follow-up is needed.
         for column_index, column in enumerate(tableau_after):
             if column_index == move.destination_index:
                 continue
@@ -1425,10 +1608,42 @@ class KlondikeGame:
 
 
 class SolitaireApp:
-    """tkinter user interface that draws the board and reacts to clicks."""
+    """tkinter user interface that draws the board and reacts to clicks.
+
+    The app owns everything the rules do not care about: the window and its
+    widgets, which card the player has picked up, hint highlights, card
+    animation, the auto-solve loop, the game clock, and the Undo history.
+    Every rule question is forwarded to `self.game` (a `KlondikeGame`).
+
+    Key attributes:
+    - `game`: the rules model.
+    - `selection`: the card or run the player has picked up, or None.
+    - `hint_move`: the move the Hint button last suggested, or None.
+    - `animation`: the cards currently gliding to a new pile, or None.
+      While it is set, clicks, Undo and Hint are refused.
+    - `auto_solving` / `auto_solve_seen_states`: the automatic finish that
+      starts once every tableau card is face up, and its loop detector.
+    - `history`: Undo snapshots, newest last, capped at UNDO_HISTORY_LIMIT.
+    - `started_at` / `elapsed_seconds`: the game clock.
+    - `canvas`: the tk.Canvas that the whole board is painted on.
+
+    Beginner note: tkinter is event driven. After `root.mainloop()` starts,
+    the program only runs code when something happens: a click calls a
+    bound handler, and `root.after(ms, func)` asks tkinter to call `func`
+    later. Animation, the clock and auto-solve are all chains of `after`
+    calls, each step scheduling the next, because there is no game loop.
+    The board itself is redrawn from scratch from the model after every
+    change (`redraw`), so the picture can never drift from the real state.
+    """
 
     def __init__(self, root: tk.Tk) -> None:
-        """Create the window, game model, and all UI state."""
+        """Create the window, game model, and all UI state.
+
+        The order matters: the model must exist before `build_ui` and
+        `redraw` read from it, and the first `check_for_loss` runs last,
+        after the board is visible, because a hopeless deal ends the game
+        and opens a message box straight away.
+        """
         self.root = root
         self.root.title("Klondike Solitaire")
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
@@ -1486,7 +1701,18 @@ class SolitaireApp:
         self.check_for_loss()
 
     def build_ui(self) -> None:
-        """Create the labels, buttons, status text, and drawing canvas."""
+        """Create the labels, buttons, status text, and drawing canvas.
+
+        The window is built from top to bottom: a header row (score, high
+        score, clock and statistics on the left; Undo, Hint, New Game and
+        Help on the right), then a one-line status bar, then the canvas
+        that fills the rest. Single and double left-clicks on the canvas are
+        bound to `on_canvas_click` and `on_canvas_double_click`.
+
+        Beginner note: `pack` is one of tkinter's layout managers. Each
+        `pack(side=...)` call pushes a widget against one side of the space
+        that is still free, in the order the calls are made.
+        """
         top_frame = tk.Frame(self.root, bg=BACKGROUND_COLOR, padx=12, pady=10)
         top_frame.pack(fill="x")
 
@@ -1570,7 +1796,12 @@ class SolitaireApp:
         self.canvas.bind("<Double-Button-1>", self.on_canvas_double_click)
 
     def show_help(self) -> None:
-        """Show a dialog explaining the objective, controls, and scoring."""
+        """Show a dialog explaining the objective, controls, and scoring.
+
+        The text is one long string built from adjacent string literals,
+        which Python joins together automatically. The `parent` argument
+        ties the dialog to the game window so it opens over it.
+        """
         messagebox.showinfo(
             "How to Play",
             "Objective\n"
@@ -1596,7 +1827,12 @@ class SolitaireApp:
         )
 
     def schedule_clock_update(self) -> None:
-        """Refresh the visible timer a few times per second."""
+        """Refresh the visible timer a few times per second.
+
+        The clock keeps rescheduling itself for as long as the window is
+        open. Once a game is won or lost, `elapsed_seconds` simply stops
+        changing, so the final time stays on screen.
+        """
         if not self.game.won and not self.game.lost:
             self.elapsed_seconds = int(time.time() - self.started_at)
         self.time_var.set(f"Time: {self.format_time(self.elapsed_seconds)}")
@@ -1608,6 +1844,8 @@ class SolitaireApp:
         """Deal a fresh game and clear all UI-only state."""
         # Guard an in-progress game: a non-empty history with no win/loss yet
         # means real moves would be discarded. Covers the button and Ctrl+N.
+        # `and` stops at the first False, so the question is only asked when
+        # there is real progress to lose; answering "No" cancels the deal.
         if self.history and not self.game.won and not self.game.lost and not messagebox.askyesno(
                 "New Game",
                 "Start a new game? Your current progress will be lost."):
@@ -1644,7 +1882,16 @@ class SolitaireApp:
             self.history = self.history[-UNDO_HISTORY_LIMIT:]
 
     def undo_last_action(self, event: tk.Event | None = None) -> None:
-        """Restore the most recent saved snapshot."""
+        """Restore the most recent saved snapshot.
+
+        Called by the Undo button (no argument) and by Ctrl+Z (with the key
+        event, which is ignored). Undo is refused while cards are animating
+        and after a win. Otherwise the newest history entry is popped and
+        restored, all UI-only state (selection, hint, auto-solve) is reset,
+        and the clock resumes from the time already shown. Undoing out of a
+        lost game is allowed; the restored snapshot also brings back the
+        loss count from before the loss was recorded.
+        """
         if self.animation is not None:
             self.status_var.set("Please wait for the card animation to finish.")
             return
@@ -1676,7 +1923,18 @@ class SolitaireApp:
             self.check_for_loss()
 
     def on_canvas_click(self, event: tk.Event) -> None:
-        """Main mouse handler: decide which pile the player clicked."""
+        """Main mouse handler: decide which pile the player clicked.
+
+        Clicks are refused (with a status message) while cards animate,
+        while auto-solve runs, and after the game has ended. Otherwise the
+        click point is tested against the piles in this order: stock, waste,
+        the four foundations, then the tableau. The first pile hit gets the
+        click. A click on bare felt just drops the current selection.
+
+        Beginner note: Solitaire here is "click to pick up, click to put
+        down". The first click on a card stores a `Selection`; the next
+        click on a pile tries to move that selection there.
+        """
         if self.animation is not None:
             self.status_var.set("Please wait for the card animation to finish.")
             return
@@ -1807,7 +2065,14 @@ class SolitaireApp:
         self.redraw()
 
     def handle_foundation_click(self, foundation_index: int) -> None:
-        """Either select a foundation card or place the current selection there."""
+        """Either select a foundation card or place the current selection there.
+
+        With a card already picked up, a legal placement animates it onto
+        this foundation; clicking the foundation the card came from cancels
+        the selection; any other click explains that the move does not fit.
+        With nothing picked up, the top foundation card is selected so it
+        can be moved back down to the tableau.
+        """
         if self.selection is not None:
             current_selection = self.selection
             moved_card_label = self.describe_cards(current_selection.cards)
@@ -1846,7 +2111,16 @@ class SolitaireApp:
             self.redraw()
 
     def handle_tableau_click(self, column_index: int, card_index: int | None) -> None:
-        """Handle selection, deselection, and placement inside the tableau."""
+        """Handle selection, deselection, and placement inside the tableau.
+
+        `card_index` is None when the click hit the column but no card (an
+        empty column, or the space below a column's last card). With a
+        selection held, the click first tries to place it on this column;
+        failing that, clicking the same card again deselects it, and
+        clicking another valid card switches the selection to that card.
+        With nothing held, a click on a face-up card that leads a valid run
+        selects the card and everything on top of it.
+        """
         if self.selection is not None:
             current_selection = self.selection
             moved_label = self.describe_cards(current_selection.cards)
@@ -1900,7 +2174,16 @@ class SolitaireApp:
         self.redraw()
 
     def show_hint(self) -> None:
-        """Ask the model for the best current move and highlight it."""
+        """Ask the model for the best current move and highlight it.
+
+        The suggested source cards become the current selection (yellow) and
+        the destination pile gets the orange hint outline, so the player can
+        carry the hint out with a single click on the destination. If the
+        engine finds no move at all, the game is over and is recorded as a
+        loss. For a "future_waste" hint nothing is selected yet, because the
+        card is still in the stock; the status text says how many stock
+        clicks it needs.
+        """
         if self.animation is not None:
             self.status_var.set("Please wait for the current animation to finish.")
             return
@@ -1950,7 +2233,16 @@ class SolitaireApp:
         destination_index: int,
         completion_message: str,
     ) -> None:
-        """Move cards in the model, then animate them on screen."""
+        """Move cards in the model, then animate them on screen.
+
+        The order of the first three lines matters: the start and end pixel
+        positions and the Undo snapshot are all taken from the board BEFORE
+        the move, because afterwards the cards are already somewhere else.
+        The model is then updated at once (the animation is only a picture
+        of a move that has already happened), and the first frame is
+        scheduled with `root.after`. An illegal move changes nothing and
+        leaves no Undo entry.
+        """
         start_positions = self.selection_positions(selection)
         end_positions = self.destination_positions(selection.cards, destination_type, destination_index)
         history_state = self.capture_history_state()
@@ -1981,7 +2273,12 @@ class SolitaireApp:
         self.root.after(ANIMATION_DELAY_MS, self.advance_animation)
 
     def advance_animation(self) -> None:
-        """Advance one frame of the in-progress card animation."""
+        """Advance one frame of the in-progress card animation.
+
+        Each call bumps the frame counter and redraws. After the last frame
+        the animation is cleared and `finish_turn` runs the end-of-move
+        checks; until then the method schedules itself again.
+        """
         if self.animation is None:
             return
 
@@ -1999,7 +2296,12 @@ class SolitaireApp:
         self.root.after(ANIMATION_DELAY_MS, self.advance_animation)
 
     def finish_turn(self) -> None:
-        """Run end-of-turn checks after a move or animation finishes."""
+        """Run end-of-turn checks after a move or animation finishes.
+
+        In priority order: a full set of foundations wins the game; a
+        running auto-solve takes its next step; a board with every tableau
+        card face up starts auto-solve; otherwise the loss check runs.
+        """
         if self.game.has_won() and not self.game.won:
             self.end_game_as_win()
             return
@@ -2033,7 +2335,24 @@ class SolitaireApp:
         self.root.after(140, self.advance_auto_solve)
 
     def advance_auto_solve(self) -> None:
-        """Perform one auto-solve step, then schedule the next one."""
+        """Perform one auto-solve step, then schedule the next one.
+
+        Each step does exactly one thing. If a card can go straight to a
+        foundation, it is animated there, and `finish_turn` schedules the
+        next step once it lands. Otherwise the step clicks the stock and
+        schedules itself. A board summary is remembered before each stock
+        click; meeting the same summary again means a whole stock cycle
+        brought no foundation move, so auto-solve stops instead of cycling
+        forever. When the stock and waste are both empty and no foundation
+        move exists, auto-solve also stops (or declares the win if the
+        foundations are already full).
+
+        Beginner note: once every tableau card is face up, each column is a
+        neat descending run whose lowest card is on top, and every stock
+        card comes round again as the stock is cycled. Sending cards home
+        one at a time is then enough to finish, which is why this simple
+        loop can complete the game for the player.
+        """
         if not self.auto_solving or self.game.won or self.game.lost:
             return
         if self.animation is not None:
@@ -2042,6 +2361,7 @@ class SolitaireApp:
         next_move = self.game.next_auto_foundation_move()
         if next_move is not None:
             # If a direct foundation move exists, animate that before anything else.
+            # Real progress was made, so the stock-cycle memory starts afresh.
             self.auto_solve_seen_states.clear()
             selection, foundation_index = next_move
             suit_name = FOUNDATION_SUITS[foundation_index].capitalize()
@@ -2103,14 +2423,26 @@ class SolitaireApp:
         )
 
     def check_for_loss(self) -> None:
-        """End the game if no meaningful move remains."""
+        """End the game if no meaningful move remains.
+
+        This reuses the hint engine: if `find_best_move` cannot suggest
+        anything, not even a move that needs stock clicks, the deal is lost.
+        """
         if self.game.won or self.game.lost:
             return
         if self.game.find_best_move() is None:
             self.end_game_as_loss()
 
     def end_game_as_win(self) -> None:
-        """Freeze the game, apply bonuses, update stats, and celebrate the win."""
+        """Freeze the game, apply bonuses, update stats, and celebrate the win.
+
+        Setting `game.won` first is what freezes the board: every click
+        handler, Undo and the clock check that flag. The win bonus and the
+        time bonus are added through `add_score`, so they can raise and save
+        the high score, and the win is saved to the statistics before the
+        confetti starts. The congratulations dialog is passed to the
+        celebration as a callback and only appears once the confetti ends.
+        """
         self.game.won = True
         self.auto_solving = False
         self.auto_solve_seen_states = set()
@@ -2151,6 +2483,9 @@ class SolitaireApp:
         tick, until the celebration has run for its fixed number of frames.
         """
         confetti_colors = ["#FFD24D", "#FF6B6B", "#4DD0E1", "#A5D6A7", "#CE93D8", "#FFFFFF"]
+        # Confetti is purely cosmetic, so it uses the module-level `random`
+        # rather than the game's seeded `rng`; deals stay reproducible.
+        # Pieces start above the canvas (negative y) so they fall into view.
         pieces = []
         for _ in range(60):
             piece_x = random.randint(0, WINDOW_WIDTH)
@@ -2197,6 +2532,7 @@ class SolitaireApp:
         )
 
         # A one-item list so the nested `step` function can change the counter.
+        # 96 frames at ANIMATION_DELAY_MS (16 ms) each is roughly 1.5 seconds.
         frames_left = [96]
 
         def step() -> None:
@@ -2218,7 +2554,12 @@ class SolitaireApp:
         step()
 
     def end_game_as_loss(self) -> None:
-        """Freeze the game, record the loss, and show the final result."""
+        """Freeze the game, record the loss, and show the final result.
+
+        Setting `game.lost` blocks further clicks and stops the clock. The
+        board is redrawn before the dialog opens because `showinfo` waits
+        until the player closes it. Undo still works after a loss.
+        """
         self.game.lost = True
         self.auto_solving = False
         self.auto_solve_seen_states = set()
@@ -2242,7 +2583,15 @@ class SolitaireApp:
         return max(0, self.game.TIME_BONUS_CAP - self.elapsed_seconds)
 
     def redraw(self) -> None:
-        """Repaint the entire canvas from scratch."""
+        """Repaint the entire canvas from scratch.
+
+        Beginner note: a tkinter Canvas remembers every shape drawn on it as
+        a separate item, and later items are painted on top of earlier ones.
+        Deleting "all" and drawing everything again, back to front (felt,
+        labels, piles, then any moving cards), is simpler and less bug-prone
+        than updating individual items, and this board is small enough for
+        a full repaint to be quick.
+        """
         self.canvas.delete("all")
         self.draw_table_surface()
         self.draw_top_labels()
@@ -2301,7 +2650,12 @@ class SolitaireApp:
         )
 
     def draw_top_labels(self) -> None:
-        """Draw the text labels above stock, waste, and foundations."""
+        """Draw the text labels above stock, waste, and foundations.
+
+        Each label is centred horizontally over its pile and sits
+        PILE_LABEL_OFFSET pixels above the top row of cards. The foundation
+        labels show the suit symbol of the pile, for example "♥ Foundation".
+        """
         self.canvas.create_text(
             self.stock_rect()[0] + CARD_WIDTH / 2,
             TOP_ROW_Y - PILE_LABEL_OFFSET,
@@ -2359,7 +2713,14 @@ class SolitaireApp:
             self.draw_empty_pile(rect[0], rect[1], "Waste", font_size=EMPTY_PILE_WORD_FONT_SIZE)
 
     def draw_foundations(self) -> None:
-        """Draw all four foundation piles."""
+        """Draw all four foundation piles.
+
+        Only the top card of each pile is drawn, since the cards beneath it
+        are completely covered. A card that is still flying in is left out
+        (see `visible_foundation_pile`). An empty foundation shows its suit
+        symbol, and either kind of pile gets the orange outline when it is
+        the destination of the current hint.
+        """
         for foundation_index, suit in enumerate(FOUNDATION_SUITS):
             rect = self.foundation_rect(foundation_index)
             pile = self.visible_foundation_pile(foundation_index)
@@ -2390,7 +2751,14 @@ class SolitaireApp:
                 )
 
     def draw_tableau(self) -> None:
-        """Draw the seven tableau columns from left to right."""
+        """Draw the seven tableau columns from left to right.
+
+        Within a column the cards are drawn back to front, so each card
+        overlaps the one before it and only a strip at the top of the
+        covered cards stays visible. Cards still in flight are left out
+        (see `visible_tableau_column`), and an empty column shows a "K"
+        placeholder as a reminder that only a King can go there.
+        """
         for column_index in range(TABLEAU_COLUMNS):
             x = self.tableau_x(column_index)
             column = self.visible_tableau_column(column_index)
@@ -2646,11 +3014,19 @@ class SolitaireApp:
             )
 
     def draw_animation(self) -> None:
-        """Draw cards that are currently moving between piles."""
+        """Draw cards that are currently moving between piles.
+
+        Each card is placed part of the way along a straight line from its
+        start point to its end point. These are drawn after (so on top of)
+        every pile, which is why they appear to fly over the board.
+        """
         if self.animation is None:
             return
 
         # Use smoothstep easing so motion starts and ends gently.
+        # Beginner note: `progress` runs evenly from 0 to 1. The formula
+        # 3p^2 - 2p^3 also runs from 0 to 1, but slowly near both ends and
+        # fastest in the middle, so cards ease out and settle in softly.
         progress = self.animation.frame / self.animation.steps
         eased_progress = progress * progress * (3 - 2 * progress)
         for card, start, end in zip(
@@ -2661,6 +3037,8 @@ class SolitaireApp:
         ):
             x = start[0] + (end[0] - start[0]) * eased_progress
             y = start[1] + (end[1] - start[1]) * eased_progress
+            # Lift the card up to 6 px at the start and set it down on
+            # landing, so it looks picked up rather than slid across.
             y -= (1.0 - eased_progress) * 6
             self.draw_card(x, y, card, face_up=card.face_up, selected=False)
 
@@ -2681,7 +3059,13 @@ class SolitaireApp:
         return column[:-hidden_count]
 
     def animation_hidden_count(self, pile_type: str, pile_index: int) -> int:
-        """Return how many cards should be hidden in a destination during animation."""
+        """Return how many cards should be hidden in a destination during animation.
+
+        The model moves cards before the animation starts, so the moving
+        cards are already the top cards of their destination pile. Hiding
+        that many cards from the pile while they are drawn in flight stops
+        the player from seeing each moving card twice.
+        """
         if self.animation is None:
             return 0
         if self.animation.destination_type != pile_type:
@@ -2727,7 +3111,13 @@ class SolitaireApp:
         destination_type: str,
         destination_index: int,
     ) -> list[tuple[float, float]]:
-        """Compute where each moving card should end up after a move."""
+        """Compute where each moving card should end up after a move.
+
+        This must be called BEFORE the model applies the move (see
+        `animate_move`): it reads the destination column as it is now and
+        places the first moving card one spacing step below the current top
+        card, then each further card FACE_UP_SPACING lower again.
+        """
         if destination_type == "foundation":
             x1, y1, _, _ = self.foundation_rect(destination_index)
             return [(x1, y1)]
@@ -2794,8 +3184,15 @@ class SolitaireApp:
         """
         Figure out which tableau column/card a mouse click landed on.
 
-        We scan from the top visible card downward so clicks prefer the card the
-        player can actually see.
+        Returns `(column_index, card_index)`. `card_index` is None when the
+        click is inside a column's area but not on a card (an empty column's
+        placeholder), and both are None when no column was hit.
+
+        Cards overlap, so a covered card only "owns" the visible strip
+        between its top edge and the top edge of the next card, while the
+        front (last) card owns its whole face. The scan starts from that
+        front card and works back toward the first card, so the card the
+        player can actually see wins the hit test.
         """
         for column_index in range(TABLEAU_COLUMNS):
             x1 = self.tableau_x(column_index)
