@@ -108,6 +108,21 @@ class CorruptSaveResumeTests(TempSaveDirTestCase):
                 self.assertEqual(app.screen, "setup")
                 self.assertIsNone(app.game)
 
+    def test_deeply_nested_files_load_as_defaults_instead_of_crashing(self) -> None:
+        """A save or stats file nested 100000 levels deep is treated as damaged.
+
+        Beginner note: Python's JSON reader recurses once per nesting level,
+        so a file like ``[[[[...`` raises RecursionError rather than a
+        decoding error. The loaders must catch it like any other bad file.
+        """
+        nested = "[" * 100000 + "]" * 100000
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.savegame_path.write_text(nested, encoding="utf-8")
+        self.stats_path.write_text(nested, encoding="utf-8")
+
+        self.assertIsNone(main.load_saved_game())
+        self.assertEqual(main.load_stats()["games"], 0)
+
 
 class StatsRepairTests(TempSaveDirTestCase):
     """Damaged lifetime stats are repaired field by field instead of crashing."""

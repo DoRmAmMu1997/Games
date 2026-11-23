@@ -357,7 +357,9 @@ def load_stats() -> dict:
         if not isinstance(counts, dict):
             counts = {}
         defaults["by_player_count"] = {**{"4": 0, "5": 0, "6": 0}, **counts}
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    # RecursionError: a file nested thousands of levels deep ("[[[[...")
+    # exhausts the JSON reader's recursion before it can report bad JSON.
+    except (OSError, TypeError, ValueError, RecursionError, json.JSONDecodeError):
         pass
     for field in ("games", "human_wins", "ai_wins", "turn_total"):
         defaults[field] = _stat_count(defaults[field], field)
@@ -387,7 +389,9 @@ def load_saved_game() -> LudoGame | None:
     # AttributeError covers a damaged entry of the wrong JSON type (a list
     # where a token object belongs). OverflowError covers huge numbers: JSON
     # reads 1e400 as float inf, and int(inf) raises OverflowError.
-    except (OSError, TypeError, ValueError, KeyError, AttributeError, OverflowError, json.JSONDecodeError):
+    # RecursionError covers a file nested thousands of levels deep.
+    except (OSError, TypeError, ValueError, KeyError, AttributeError, OverflowError, RecursionError,
+            json.JSONDecodeError):
         return None
 
 
