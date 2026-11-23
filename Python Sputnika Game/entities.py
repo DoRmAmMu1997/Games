@@ -345,27 +345,32 @@ class CelestialBody:
         mouth_color = shade(info.accent, 0.55)
 
         mood = info.mood
+        # A smile is the lower half of an ellipse (a cup, angles pi..tau) and a
+        # frown is the upper half (an arch, angles 0..pi); see the Beginner note
+        # above. Each half fills only half its rectangle, so the smile's
+        # rectangle is lifted (and the frown's lowered) by half its height to
+        # keep every mouth in the same band of the face.
+        smile_rect = mouth_rect.move(0, -mouth_rect.height // 2)
 
         # Dynamic expressions override the default mood when the game state
         # makes the body look more surprised, worried, or delighted.
         if expression["startled"]:
             pygame.draw.circle(target, mouth_color, (cx, int(cy + radius * 0.22)), max(2, int(radius * 0.07)), 2)
         elif expression["worried"]:
-            worried_rect = mouth_rect.copy()
-            worried_rect.y += int(radius * 0.03)
-            pygame.draw.arc(target, mouth_color, worried_rect, math.pi + 0.18, math.tau - 0.18, 3)
+            worried_rect = mouth_rect.move(0, mouth_rect.height // 2 + int(radius * 0.03))
+            pygame.draw.arc(target, mouth_color, worried_rect, 0.18, math.pi - 0.18, 3)
         elif expression["delighted"]:
-            happy_rect = mouth_rect.inflate(int(radius * 0.08), int(radius * 0.06))
-            pygame.draw.arc(target, mouth_color, happy_rect, 0.0, math.pi, 3)
+            happy_rect = smile_rect.inflate(int(radius * 0.08), int(radius * 0.06))
+            pygame.draw.arc(target, mouth_color, happy_rect, math.pi, math.tau, 3)
             sparkle_center = (int(cx - radius * 0.08), int(cy + radius * 0.2))
             pygame.draw.circle(target, (*WHITE, 90), sparkle_center, max(1, int(radius * 0.035)))
         # Different tiers use different mouth shapes so they feel like distinct characters.
         elif mood in {"cheery", "smile", "spark", "bright"}:
-            pygame.draw.arc(target, mouth_color, mouth_rect, 0.1, math.pi - 0.1, 3)
+            pygame.draw.arc(target, mouth_color, smile_rect, math.pi + 0.1, math.tau - 0.1, 3)
         elif mood == "curious":
             pygame.draw.circle(target, mouth_color, (cx, int(cy + radius * 0.2)), max(2, int(radius * 0.05)), 2)
         elif mood == "calm":
-            pygame.draw.arc(target, mouth_color, mouth_rect, 0.35, math.pi - 0.35, 2)
+            pygame.draw.arc(target, mouth_color, smile_rect, math.pi + 0.35, math.tau - 0.35, 2)
         elif mood == "wry":
             start = (int(cx - radius * 0.16), int(cy + radius * 0.2))
             end = (int(cx + radius * 0.16), int(cy + radius * 0.14))
@@ -379,7 +384,7 @@ class CelestialBody:
                 2,
             )
         elif mood == "proud":
-            pygame.draw.arc(target, mouth_color, mouth_rect, 0.0, math.pi, 2)
+            pygame.draw.arc(target, mouth_color, smile_rect, math.pi, math.tau, 2)
             pygame.draw.line(target, mouth_color, (cx, int(cy + radius * 0.08)), (cx, int(cy + radius * 0.18)), 2)
         else:
             # The fallback "cosmic" mouth gently wiggles over time.
@@ -387,9 +392,9 @@ class CelestialBody:
             pygame.draw.arc(
                 target,
                 mouth_color,
-                mouth_rect.move(0, wobble),
-                0.1,
-                math.pi - 0.1,
+                smile_rect.move(0, wobble),
+                math.pi + 0.1,
+                math.tau - 0.1,
                 3,
             )
 
