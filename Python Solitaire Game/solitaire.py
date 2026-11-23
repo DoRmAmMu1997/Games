@@ -2502,8 +2502,9 @@ class SolitaireApp:
             label = card.label()
             suit_symbol = SUIT_SYMBOLS[card.suit]
 
-            # Top-left corner index: the rank with a small suit pip below it,
-            # exactly like the index printed on a real playing card.
+            # Top-left corner index: the rank and suit together (for example
+            # "Q♥"). Only this top strip shows when cards are stacked, so it
+            # carries everything; a second pip below it would be hidden.
             self.canvas.create_text(
                 x + 9,
                 y + CORNER_INDEX_INSET_Y,
@@ -2511,14 +2512,6 @@ class SolitaireApp:
                 anchor="nw",
                 fill=text_color,
                 font=("Arial", 13, "bold"),
-            )
-            self.canvas.create_text(
-                x + 11,
-                y + CORNER_INDEX_INSET_Y + 18,
-                text=suit_symbol,
-                anchor="nw",
-                fill=text_color,
-                font=("Arial", 11, "bold"),
             )
 
             # Large centered suit symbol.
@@ -2530,7 +2523,7 @@ class SolitaireApp:
                 font=("Arial", 28, "bold"),
             )
 
-            # Bottom-right corner index: the same rank + suit pip, mirrored so
+            # Bottom-right corner index: the same rank and suit, mirrored so
             # the card still reads correctly when viewed from the other side.
             self.canvas.create_text(
                 x + CARD_WIDTH - 9,
@@ -2539,14 +2532,6 @@ class SolitaireApp:
                 anchor="se",
                 fill=text_color,
                 font=("Arial", 13, "bold"),
-            )
-            self.canvas.create_text(
-                x + CARD_WIDTH - 11,
-                y + CARD_HEIGHT - CORNER_INDEX_INSET_Y - 18,
-                text=suit_symbol,
-                anchor="se",
-                fill=text_color,
-                font=("Arial", 11, "bold"),
             )
             return
 

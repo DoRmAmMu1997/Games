@@ -275,6 +275,15 @@ class CardFaceTests(DrawingTestCase):
         label = next(call for call in self.corner_texts("se") if call[2]["text"] == "Q\u2665")
         self.assertEqual(label[1][1], 200 + CARD_HEIGHT - 4)
 
+    def test_each_corner_prints_the_suit_once(self) -> None:
+        """A corner shows "Q♥" and no second, separate suit pip (P6)."""
+
+        for anchor in ("nw", "se"):
+            with self.subTest(corner=anchor):
+                self.canvas.reset_mock()
+                texts = [call[2]["text"] for call in self.corner_texts(anchor)]
+                self.assertEqual(texts, ["Q\u2665"])
+
 
 if __name__ == "__main__":
     unittest.main()
