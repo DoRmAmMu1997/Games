@@ -27,6 +27,10 @@ CARD_HEIGHT = 120
 # Face-down cards overlap more tightly so columns stay compact.
 FACE_DOWN_SPACING = 16
 FACE_UP_SPACING = 24
+# The corner index starts this far inside the card's top (and bottom) edge.
+# A stacked card covers everything below FACE_UP_SPACING, so the index must
+# sit high enough that the next card's outline never clips the rank or suit.
+CORNER_INDEX_INSET_Y = 4
 
 # General layout values used to place piles on the canvas.
 TOP_ROW_Y = 28
@@ -2502,7 +2506,7 @@ class SolitaireApp:
             # exactly like the index printed on a real playing card.
             self.canvas.create_text(
                 x + 9,
-                y + 7,
+                y + CORNER_INDEX_INSET_Y,
                 text=label,
                 anchor="nw",
                 fill=text_color,
@@ -2510,7 +2514,7 @@ class SolitaireApp:
             )
             self.canvas.create_text(
                 x + 11,
-                y + 25,
+                y + CORNER_INDEX_INSET_Y + 18,
                 text=suit_symbol,
                 anchor="nw",
                 fill=text_color,
@@ -2530,7 +2534,7 @@ class SolitaireApp:
             # the card still reads correctly when viewed from the other side.
             self.canvas.create_text(
                 x + CARD_WIDTH - 9,
-                y + CARD_HEIGHT - 7,
+                y + CARD_HEIGHT - CORNER_INDEX_INSET_Y,
                 text=label,
                 anchor="se",
                 fill=text_color,
@@ -2538,7 +2542,7 @@ class SolitaireApp:
             )
             self.canvas.create_text(
                 x + CARD_WIDTH - 11,
-                y + CARD_HEIGHT - 25,
+                y + CARD_HEIGHT - CORNER_INDEX_INSET_Y - 18,
                 text=suit_symbol,
                 anchor="se",
                 fill=text_color,

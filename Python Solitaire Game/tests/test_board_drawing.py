@@ -28,6 +28,7 @@ from solitaire import (
     TABLEAU_Y,
     TOP_ROW_Y,
     WINDOW_WIDTH,
+    Card,
     KlondikeGame,
     SolitaireApp,
 )
@@ -251,6 +252,28 @@ class CardBackTests(DrawingTestCase):
         offsets = sorted(round(x1 - y1, 6) for x1, y1, _, _ in self.stripes())
         gaps = {round(b - a, 6) for a, b in itertools.pairwise(offsets)}
         self.assertEqual(len(gaps), 1)
+
+
+class CardFaceTests(DrawingTestCase):
+    """P5/P6: the corner index of a face-up card."""
+
+    def corner_texts(self, anchor: str) -> list:
+        """Draw Q♥ face up at (100, 200) and return its corner texts with ``anchor``."""
+
+        self.app.draw_card(100, 200, Card("hearts", 12, face_up=True), face_up=True, selected=False)
+        return [call for call in calls_named(self.canvas, "create_text") if call[2].get("anchor") == anchor]
+
+    def test_top_corner_index_sits_four_pixels_down(self) -> None:
+        """The rank starts 4 px below the card top, clear of the next card's outline."""
+
+        label = next(call for call in self.corner_texts("nw") if call[2]["text"] == "Q\u2665")
+        self.assertEqual(label[1][1], 200 + 4)
+
+    def test_bottom_corner_index_mirrors_the_top(self) -> None:
+        """The bottom-right index sits 4 px above the card bottom."""
+
+        label = next(call for call in self.corner_texts("se") if call[2]["text"] == "Q\u2665")
+        self.assertEqual(label[1][1], 200 + CARD_HEIGHT - 4)
 
 
 if __name__ == "__main__":
