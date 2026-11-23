@@ -128,6 +128,26 @@ class HousingShortageTests(unittest.TestCase):
         self.assertIn(5, [game.houses[pos] for pos in (16, 18, 19)])
         self.assertEqual(game.bank_houses, 4)
 
+    def test_refused_rebuild_is_reported_as_no_move(self) -> None:
+        """If the engine refuses the rebuild, the AI does not claim the move.
+
+        The donor house stays sold (the Bank now holds it, so the shortage
+        step will not run again), but the step must report False so the AI
+        goes on to its other options instead of treating the turn as used.
+        """
+        game = make_game()
+        iris = game.players[1]
+        give_group(game, iris.index, (16, 18, 19, 1, 3))
+        game.houses = {16: 3, 18: 4, 19: 4, 1: 2, 3: 2}
+        game.bank_houses = 0
+        iris.cash = 2000
+        game.current = iris.index
+        game.awaiting = "post_roll"
+
+        with mock.patch.object(game, "build_house", return_value=False):
+            self.assertFalse(ai._break_housing_shortage(game, iris))
+        self.assertEqual(game.bank_houses, 1)
+
 
 class JailCardTradeValueTests(unittest.TestCase):
     """The AI treats a Get Out of Jail Free card as worth the fine it saves."""

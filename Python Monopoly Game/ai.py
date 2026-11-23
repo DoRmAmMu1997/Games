@@ -287,7 +287,10 @@ def _break_housing_shortage(game: MonopolyGame, player: Player) -> bool:
             donor = next(pos for pos in donors if game.houses.get(pos, 0) == top)
             if not game.sell_house(donor):
                 return False
-            game.build_house(target)
+            # The sale puts a house back in the Bank, so this step cannot
+            # repeat; if the engine still refuses the build, say so honestly.
+            if not game.build_house(target):
+                return False
             _trace(game, player, f"moves a {donor_group} house to reach {group} hotels.")
             return True
     return False
