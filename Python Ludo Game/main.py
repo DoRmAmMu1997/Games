@@ -522,7 +522,7 @@ def save_game(game: LudoGame) -> None:
     _atomic_write(SAVEGAME_PATH, game.to_dict())
 
 
-def load_saved_game() -> LudoGame | None:
+def load_saved_game(*, persist: bool = True) -> LudoGame | None:
     """Load the saved game, returning ``None`` if there is no usable save.
 
     A missing file simply returns ``None``. A damaged file (bad JSON, wrong
@@ -531,21 +531,35 @@ def load_saved_game() -> LudoGame | None:
     ``savegame.bad.json``. That makes ``has_saved_game()`` false, so the
     Resume button greys out instead of silently failing on every click, and
     the file is kept for anyone who wants to inspect it (as in Monopoly).
+
+    A file that cannot be read right now (for example, locked by a virus
+    scanner or a sync tool) is only logged: its contents may be fine, so it
+    stays where it is and Resume can be tried again.
+
+    Beginner note: ``persist=False`` (used by autotests) still reads the
+    save, but never writes anything: no log entry and no rename.
     """
 
     try:
-        return LudoGame.from_dict(json.loads(SAVEGAME_PATH.read_text(encoding="utf-8")))
+        raw = SAVEGAME_PATH.read_bytes()
     except FileNotFoundError:
         return None
+    except OSError as error:
+        if persist:
+            _log_error(error)
+        return None
+    try:
+        return LudoGame.from_dict(json.loads(raw.decode("utf-8")))
     # AttributeError covers a damaged entry of the wrong JSON type (a list
     # where a token object belongs). OverflowError covers huge numbers: JSON
     # reads 1e400 as float inf, and int(inf) raises OverflowError.
     # RecursionError covers a file nested thousands of levels deep.
-    except (OSError, TypeError, ValueError, KeyError, AttributeError, OverflowError, RecursionError,
+    except (TypeError, ValueError, KeyError, AttributeError, OverflowError, RecursionError,
             json.JSONDecodeError) as error:
-        _log_error(error)
-        with contextlib.suppress(OSError):
-            os.replace(SAVEGAME_PATH, SAVEGAME_PATH.with_name("savegame.bad.json"))
+        if persist:
+            _log_error(error)
+            with contextlib.suppress(OSError):
+                os.replace(SAVEGAME_PATH, SAVEGAME_PATH.with_name("savegame.bad.json"))
         return None
 
 
@@ -964,7 +978,7 @@ class LudoApp:
             self.rule_three_sixes = not self.rule_three_sixes
         elif key == "resume":
             # Invalid or missing saves simply keep the player on setup.
-            saved = load_saved_game()
+            saved = load_saved_game(persist=self.persist)
             if saved is not None:
                 self.start_game(saved)
         elif key == "start":
