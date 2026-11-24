@@ -176,6 +176,9 @@ def _user_save_dir() -> Path:
 SAVE_DIR = _user_save_dir()
 STATS_PATH = SAVE_DIR / "stats.json"          # lifetime games played / wins
 SAVEGAME_PATH = SAVE_DIR / "savegame.json"    # one in-progress game
+# Player options (for now just the sound on/off choice). Kept apart from
+# stats.json, which the game-over screen rewrites with a fixed set of keys.
+OPTIONS_PATH = SAVE_DIR / "options.json"
 
 
 # --------------------------------------------------------------------------

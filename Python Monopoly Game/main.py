@@ -13,6 +13,8 @@ player's save or stats.
 Sound: ``audio.py`` synthesises every effect and the music; this shell plays
 them for the engine's events (``event_sounds``), token hops and button
 clicks, loops the swing tune, and ends each game with a win or lose jingle.
+Ctrl+M, or a Sound button, switches all sound off and on; the choice is
+saved as ``"sound"`` in options.json.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from settings import (
     MUSIC_GAME_OVER_FADE_MS,
     MUSIC_LOOP_SECONDS,
     MUSIC_VOLUME,
+    OPTIONS_PATH,
     SAVE_DIR,
     SAVEGAME_PATH,
     SCREEN_HEIGHT,
@@ -96,6 +99,11 @@ EVENT_SOUNDS = {
     "raise_funds": "raise_funds",
     "bankrupt": "bankrupt",
 }
+
+
+# The action-bar slot (bottom right) of the in-game Sound toggle. No turn
+# state uses more than seven slots, so this one is always free.
+SOUND_SLOT = 7
 
 
 def event_sounds(kinds: list[str]) -> list[str]:
@@ -170,6 +178,26 @@ def load_stats() -> dict:
         return {"games": 0, "human_wins": 0}
 
 
+def load_options() -> dict:
+    """Read the player's options, returning the defaults if none are saved yet.
+
+    Returns ``{"sound": bool}``. Sound stays on unless the file holds a
+    real JSON ``false``, so a damaged value can never silence the game; a
+    damaged file (not JSON, or not a JSON object) is logged and read as
+    the defaults instead of crashing the game.
+    """
+    try:
+        data = json.loads(OPTIONS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("options.json is not a JSON object")
+    except FileNotFoundError:
+        return {"sound": True}
+    except (OSError, ValueError) as error:
+        _log_error(error)
+        return {"sound": True}
+    return {"sound": data.get("sound", True) is not False}
+
+
 def save_game(game: MonopolyGame) -> None:
     """Write the current game to disk so it can be resumed later."""
     _atomic_write(SAVEGAME_PATH, game.to_dict())
@@ -230,6 +258,7 @@ class MonopolyApp:
     - `sounds`: the `audio.SoundBank` of effects (silent without a mixer).
     - `music`: the `audio.MusicPlayer` looping the swing tune.
     - `persist`: False in the self-test, so nothing is written to disk.
+    - `options`: the saved player options (`"sound"` on or off).
     """
 
     def __init__(self, persist: bool = True) -> None:
@@ -282,6 +311,9 @@ class MonopolyApp:
         self.fast_forward = False   # spectator: run the AI with no delay
         self.message = ""
         self.stats = load_stats()
+        self.options = load_options()
+        # A saved "sound": false silences the bank and the music from the first frame.
+        self._apply_sound_setting()
         self.buttons: list = []
         self._autosave_current: int | None = None   # last-seen turn marker
 
@@ -322,6 +354,30 @@ class MonopolyApp:
         self.last_game_dice = (0, 0)
         # Autosave baseline: a save fires when the turn (current player) moves.
         self._autosave_current = game.current
+
+    @property
+    def sound_on(self) -> bool:
+        """True unless the player has switched sound off (Ctrl+M or a Sound button)."""
+        return bool(self.options["sound"])
+
+    def _toggle_sound(self) -> None:
+        """Switch all sound off or back on, and remember the choice in options.json.
+
+        Muting stops the music at once and blocks every effect; unmuting
+        resumes the music and plays a click so the player hears it worked.
+        A non-persisting app (the self-test) only changes it in memory.
+        """
+        self.options["sound"] = not self.sound_on
+        self._apply_sound_setting()
+        if self.persist:
+            _atomic_write(OPTIONS_PATH, self.options)
+        if self.sound_on:
+            self.sounds.play("click")
+
+    def _apply_sound_setting(self) -> None:
+        """Pass the sound setting to the effects bank and the music player."""
+        self.sounds.muted = not self.sound_on
+        self.music.set_muted(not self.sound_on)
 
     def _require_game(self) -> MonopolyGame:
         """Return the active game on code paths that only run mid-game.
@@ -376,18 +432,8 @@ class MonopolyApp:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self._handle_click(event.pos)
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
-                    # F11 toggles fullscreen. The SCALED flag set at startup
-                    # keeps logical coordinates intact, so we don't need to
-                    # remap anything ourselves.
-                    pygame.display.toggle_fullscreen()
-                elif event.type == pygame.KEYDOWN and self.screen == "playing":
-                    self._handle_shortcut(event.key)
-                elif (event.type == pygame.KEYDOWN and self.screen == "setup"
-                      and self.active_field is not None
-                      and not self.confirm_new_game):
-                    # Typing into a focused human-name box on the setup screen.
-                    self._type_into_name_field(event)
+                elif event.type == pygame.KEYDOWN:
+                    self._handle_keydown(event)
                 elif (event.type == pygame.MOUSEWHEEL
                       and self.mode == "trade" and self.trade is not None):
                     # Scroll whichever side of the trade dialog the cursor
@@ -549,6 +595,27 @@ class MonopolyApp:
     # ------------------------------------------------------------------
     # Input
     # ------------------------------------------------------------------
+    def _handle_keydown(self, event: pygame.event.Event) -> None:
+        """Route one key press: Ctrl+M, F11, turn shortcuts or name typing.
+
+        Ctrl+M switches sound off and on, on every screen (even while a
+        name box has focus, so plain M still types there and still means
+        Mortgage on a turn).
+        """
+        if event.key == pygame.K_m and event.mod & pygame.KMOD_CTRL:
+            self._toggle_sound()
+        elif event.key == pygame.K_F11:
+            # F11 toggles fullscreen. The SCALED flag set at startup
+            # keeps logical coordinates intact, so we don't need to
+            # remap anything ourselves.
+            pygame.display.toggle_fullscreen()
+        elif self.screen == "playing":
+            self._handle_shortcut(event.key)
+        elif (self.screen == "setup" and self.active_field is not None
+              and not self.confirm_new_game):
+            # Typing into a focused human-name box on the setup screen.
+            self._type_into_name_field(event)
+
     def _handle_click(self, pos: tuple[int, int]) -> None:
         """Route a left-click to the right handler for the current screen."""
         if self.screen == "setup":
@@ -559,7 +626,9 @@ class MonopolyApp:
             game = self._require_game()
             actor = game.players[game.actor()]
             if not actor.is_human and not self._spectating():
-                return                   # ignore clicks during AI turns
+                # During AI turns only the Sound toggle is on screen.
+                self._click_button(pos)
+                return
             if self.mode in ("build", "sell", "mortgage"):
                 if not self._click_button(pos):      # the "Done" button
                     self._click_board(pos)
@@ -652,9 +721,13 @@ class MonopolyApp:
         The button keys form disjoint families (setup screen, turn actions,
         the asset manager, and the trade dialog), so each family lives in its
         own handler and the first one that recognises the key wins. Quit and
-        New Game come first: they also appear with no game in progress (the
-        setup screen), where the game-dependent handlers cannot run.
+        New Game come first (after the Sound toggle, which works on every
+        screen): they also appear with no game in progress (the setup
+        screen), where the game-dependent handlers cannot run.
         """
+        if key == "toggle_sound":
+            self._toggle_sound()
+            return
         if key == "new_game":
             self.screen = "setup"
             self.game = None
@@ -1150,7 +1223,7 @@ class MonopolyApp:
         if self.screen == "setup":
             if self.confirm_new_game:
                 return ui.confirm_buttons()
-            return ui.setup_buttons(has_saved_game())
+            return ui.setup_buttons(has_saved_game(), self.sound_on)
         if self.screen == "over":
             return [
                 ui.Button((SCREEN_WIDTH // 2 - 220, 540, 200, 52), "New Game",
@@ -1165,31 +1238,36 @@ class MonopolyApp:
         """Build the in-game buttons for the current player and state.
 
         Each dialog owns a small builder; this dispatcher just picks the one
-        matching the current mode or engine state.
+        matching the current mode or engine state. The Sound toggle sits in
+        the action bar's last slot whenever the bar shows, AI turns
+        included; the trade builder and asset manager cover the panel, so
+        they leave it out (Ctrl+M still works there).
         """
         game = self._require_game()
         actor = game.players[game.actor()]
+        sound = ui.Button(ui.bar_slot_rect(SOUND_SLOT), ui.sound_label(self.sound_on), "toggle_sound")
         if self._spectating():
             return [
                 ui.Button(ui.bar_slot_rect(0), "Fast-forward", "fast_forward",
                           enabled=not self.fast_forward, color=(46, 116, 78)),
                 ui.Button(ui.bar_slot_rect(1), "Concede / Main Menu", "concede",
                           color=(150, 60, 60)),
+                sound,
             ]
         if not actor.is_human:
-            return []
+            return [sound]
         if self.mode == "trade" and self.trade is not None:
             return self._trade_dialog_buttons()
         if self.mode == "assets":
             return self._asset_dialog_buttons(actor)
         if game.awaiting == "trade_response":
-            return self._trade_response_buttons()
+            return [*self._trade_response_buttons(), sound]
         if game.awaiting == "auction":
-            return self._auction_buttons(actor)
+            return [*self._auction_buttons(actor), sound]
         if self.mode in ("build", "sell", "mortgage"):
             # Board-click modes need only a way back out.
-            return [ui.Button(ui.bar_slot_rect(0), "Done", "done", color=(46, 116, 78))]
-        return self._action_bar_buttons(actor)
+            return [ui.Button(ui.bar_slot_rect(0), "Done", "done", color=(46, 116, 78)), sound]
+        return [*self._action_bar_buttons(actor), sound]
 
     def _trade_dialog_buttons(self) -> list:
         """Buttons for the trade-building dialog.

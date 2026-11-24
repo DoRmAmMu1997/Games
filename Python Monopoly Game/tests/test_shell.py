@@ -186,7 +186,7 @@ class LayoutHelperTests(ShellTestCase):
         app = self.make_app(game)
         layout = ui.auction_layout()
 
-        rects = {b.key: b.rect for b in app._playing_buttons()}
+        rects = {b.key: b.rect for b in app._playing_buttons() if b.key != "toggle_sound"}
 
         self.assertEqual(rects, {"bid": layout["bid"], "pass": layout["pass"]})
         for rect in rects.values():
@@ -237,7 +237,7 @@ class TradeResponseDialogTests(ShellTestCase):
         app = self.make_app(big_incoming_offer())
         layout = ui.trade_response_layout()
 
-        rects = {b.key: b.rect for b in app._playing_buttons()}
+        rects = {b.key: b.rect for b in app._playing_buttons() if b.key != "toggle_sound"}
 
         self.assertEqual(rects, {"trade_accept": layout["accept"], "trade_reject": layout["reject"]})
         app._draw()                          # the dialog renders without error
@@ -363,10 +363,10 @@ class SpectatorTests(SeededSaveDirTestCase):
     """With no solvent human left, the human may fast-forward or concede."""
 
     def test_spectator_bar_appears_once_no_solvent_human_remains(self) -> None:
-        """Only Fast-forward and Concede / Main Menu are offered, and they are clickable."""
+        """Only Fast-forward and Concede / Main Menu are offered (beside Sound), and they are clickable."""
         app = self.make_app(spectator_game())
 
-        self.assertEqual(set(button_states(app)), {"fast_forward", "concede"})
+        self.assertEqual(set(button_states(app)), {"fast_forward", "concede", "toggle_sound"})
 
     def test_fast_forward_runs_the_ai_without_delay(self) -> None:
         """Before fast-forward the AI waits its delay; after it, it acts every frame."""
@@ -527,7 +527,7 @@ class RaiseFundsBarTests(ShellTestCase):
 
         states = button_states(app)
 
-        self.assertEqual(set(states), {"pay_debts", "assets", "declare_bankruptcy"})
+        self.assertEqual(set(states), {"pay_debts", "assets", "declare_bankruptcy", "toggle_sound"})
         self.assertFalse(states["pay_debts"])
         pay = next(b for b in app.buttons if b.key == "pay_debts")
         self.assertIn("$100", pay.label)

@@ -8,8 +8,10 @@ under SDL's dummy audio driver.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -26,6 +28,7 @@ from test_engine_regressions import rig_rolls
 
 import audio
 import main
+import ui
 from audio import LIMIT, MusicPlayer, Note, SoundBank, midi, render
 from game import EVENT_KINDS, MonopolyGame
 from settings import (
@@ -804,6 +807,310 @@ class ShellMusicTests(unittest.TestCase):
         app._on_button("new_game")
         self.assertEqual(app.screen, "setup")
         music.start.assert_called_once_with(MUSIC_FADE_IN_MS)
+
+
+class SoundSettingTests(unittest.TestCase):
+    """Ctrl+M and the Sound buttons switch all sound off and on, and the choice is saved."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame once so the app can open its dummy window."""
+
+        pygame.init()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after these tests."""
+
+        pygame.quit()
+
+    def setUp(self) -> None:
+        """Point the app's save folder and its files at a fresh temp folder."""
+
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.save_dir = Path(temp.name) / "Monopoly"
+        self.options_path = self.save_dir / "options.json"
+        self.stats_path = self.save_dir / "stats.json"
+        for name, value in (("SAVE_DIR", self.save_dir), ("OPTIONS_PATH", self.options_path),
+                            ("STATS_PATH", self.stats_path), ("SAVEGAME_PATH", self.save_dir / "savegame.json")):
+            patcher = mock.patch.object(main, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def write_options(self, text: str) -> None:
+        """Write ``text`` as the on-disk options file."""
+
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.options_path.write_text(text, encoding="utf-8")
+
+    def make_app(self, persist: bool = False) -> tuple[main.MonopolyApp, mock.Mock, mock.Mock]:
+        """Return an app with a mock bank and mock music player (whose mute state starts applied)."""
+
+        with mock.patch.object(main.audio, "MusicPlayer") as player_class:
+            app = main.MonopolyApp(persist=persist)
+        app.sounds = bank = mock.Mock()
+        return app, bank, player_class.return_value
+
+    def press(self, app: main.MonopolyApp, key: int, ctrl: bool = False, unicode: str = "") -> None:
+        """Send one key press (with Ctrl held when ``ctrl``) through the app's key handler."""
+
+        mod = pygame.KMOD_LCTRL if ctrl else 0
+        app._handle_keydown(pygame.event.Event(pygame.KEYDOWN, key=key, mod=mod, unicode=unicode))
+
+    def start_human_game(self, app: main.MonopolyApp, human_seats: int = 1) -> MonopolyGame:
+        """Start a seeded four-seat game whose first ``human_seats`` seats are human."""
+
+        game = MonopolyGame([(f"P{seat + 1}", seat < human_seats) for seat in range(4)], seed=3)
+        app.start_game(game)
+        return game
+
+    def sound_button(self, app: main.MonopolyApp) -> ui.Button:
+        """Draw a frame and return the Sound toggle on screen."""
+
+        app._draw()
+        return next(button for button in app.buttons if button.key == "toggle_sound")
+
+    def test_sound_is_on_without_a_saved_choice(self) -> None:
+        """A missing options file, or one without the key, leaves sound on."""
+
+        self.assertEqual(main.load_options(), {"sound": True})
+        self.write_options('{"other": 1}')
+        self.assertEqual(main.load_options(), {"sound": True})
+
+    def test_only_a_real_false_turns_sound_off(self) -> None:
+        """JSON false mutes; damaged values and files fall back to on (and damaged files are logged)."""
+
+        for text, expected in (("{\"sound\": false}", False), ("{\"sound\": true}", True),
+                               ('{"sound": "off"}', True), ('{"sound": 0}', True), ('{"sound": null}', True),
+                               ("[false]", True), ("not json", True)):
+            with self.subTest(text=text):
+                self.write_options(text)
+                self.assertIs(main.load_options()["sound"], expected)
+        self.assertTrue((self.save_dir / "error.log").exists())
+
+    def test_saved_off_starts_the_app_silent(self) -> None:
+        """A saved "sound": false mutes the effects bank and the music from the first frame."""
+
+        self.write_options('{"sound": false}')
+        with mock.patch.object(main.audio, "MusicPlayer") as player_class:
+            app = main.MonopolyApp(persist=False)
+        self.assertTrue(app.sounds.muted)
+        player_class.return_value.set_muted.assert_called_with(True)
+
+    def test_ctrl_m_switches_sound_off_and_back_on(self) -> None:
+        """Ctrl+M mutes the bank and stops the music; again unmutes, resumes and clicks."""
+
+        app, bank, music = self.make_app()
+        music.reset_mock()
+        self.press(app, pygame.K_m, ctrl=True)
+        self.assertFalse(app.sound_on)
+        self.assertTrue(bank.muted)
+        music.set_muted.assert_called_once_with(True)
+        bank.play.assert_not_called()
+        self.press(app, pygame.K_m, ctrl=True)
+        self.assertTrue(app.sound_on)
+        self.assertFalse(bank.muted)
+        music.set_muted.assert_called_with(False)
+        bank.play.assert_called_once_with("click")
+
+    def test_ctrl_m_works_on_every_screen(self) -> None:
+        """Setup, a game, and the game-over screen all accept Ctrl+M."""
+
+        app, _bank, _music = self.make_app()
+        for screen in ("setup", "playing", "over"):
+            with self.subTest(screen=screen):
+                if screen == "playing":
+                    self.start_human_game(app)
+                app.screen = screen
+                before = app.sound_on
+                self.press(app, pygame.K_m, ctrl=True)
+                self.assertIs(app.sound_on, not before)
+
+    def test_ctrl_m_is_not_mortgage_and_plain_m_still_is(self) -> None:
+        """On a human turn Ctrl+M only toggles sound; plain M still opens mortgage mode."""
+
+        app, _bank, _music = self.make_app()
+        self.start_human_game(app)
+        self.press(app, pygame.K_m, ctrl=True)
+        self.assertEqual(app.mode, "normal")
+        self.assertFalse(app.sound_on)
+        self.press(app, pygame.K_m)
+        self.assertEqual(app.mode, "mortgage")
+        self.assertFalse(app.sound_on)
+
+    def test_ctrl_m_does_not_type_into_a_name_and_plain_m_still_does(self) -> None:
+        """With a name box focused, Ctrl+M toggles sound and plain M types an m."""
+
+        app, _bank, _music = self.make_app()
+        app.active_field = 0
+        app.name_fields[0] = "Ann"
+        self.press(app, pygame.K_m, ctrl=True, unicode="\r")
+        self.assertEqual(app.name_fields[0], "Ann")
+        self.assertFalse(app.sound_on)
+        self.press(app, pygame.K_m, unicode="m")
+        self.assertEqual(app.name_fields[0], "Annm")
+        self.assertFalse(app.sound_on)
+
+    def test_other_keys_keep_their_jobs(self) -> None:
+        """F11 still toggles fullscreen and R still rolls on a human turn."""
+
+        app, _bank, _music = self.make_app()
+        game = self.start_human_game(app)
+        with mock.patch.object(main.pygame.display, "toggle_fullscreen") as toggle:
+            self.press(app, pygame.K_F11)
+        toggle.assert_called_once_with()
+        self.press(app, pygame.K_r)
+        self.assertNotEqual(game.dice, (0, 0))
+        self.assertTrue(app.sound_on)
+
+    def test_setup_toggle_shows_and_flips_the_setting(self) -> None:
+        """The setup screen's Sound button reads On/Off and a click flips it."""
+
+        app, _bank, _music = self.make_app()
+        button = self.sound_button(app)
+        self.assertEqual(button.label, "Sound: On")
+        app._handle_click(button.rect.center)
+        self.assertFalse(app.sound_on)
+        self.assertEqual(self.sound_button(app).label, "Sound: Off")
+
+    def test_in_game_toggle_flips_the_setting_on_a_human_turn(self) -> None:
+        """During a human turn the action bar's Sound button flips the setting."""
+
+        app, _bank, _music = self.make_app()
+        self.start_human_game(app)
+        button = self.sound_button(app)
+        self.assertEqual(button.rect, ui.bar_slot_rect(main.SOUND_SLOT))
+        app._handle_click(button.rect.center)
+        self.assertFalse(app.sound_on)
+        self.assertEqual(app.screen, "playing")
+
+    def test_in_game_toggle_works_during_an_ai_turn(self) -> None:
+        """The Sound button stays usable while the computer plays (other clicks are ignored)."""
+
+        app, _bank, _music = self.make_app()
+        game = self.start_human_game(app, human_seats=0)
+        game.players[0].is_human = True
+        game.current = 1
+        app._draw()
+        self.assertEqual([button.key for button in app.buttons], ["toggle_sound"])
+        app._handle_click(self.sound_button(app).rect.center)
+        self.assertFalse(app.sound_on)
+
+    def test_dialogs_that_cover_the_panel_hide_the_toggle(self) -> None:
+        """The asset manager and the trade builder cover the action bar, so Ctrl+M stands in."""
+
+        app, _bank, _music = self.make_app()
+        game = self.start_human_game(app)
+        game.owners[1] = 0
+        for mode in ("assets", "trade"):
+            with self.subTest(mode=mode):
+                app.mode = "normal"
+                app._on_button(mode)
+                app._draw()
+                self.assertNotIn("toggle_sound", [button.key for button in app.buttons])
+
+    def test_choice_survives_a_restart(self) -> None:
+        """A persisting app saves the choice to options.json, and the next app starts muted."""
+
+        app, _bank, _music = self.make_app(persist=True)
+        self.press(app, pygame.K_m, ctrl=True)
+        self.assertEqual(json.loads(self.options_path.read_text(encoding="utf-8")), {"sound": False})
+        self.assertTrue(main.MonopolyApp(persist=False).sounds.muted)
+        self.press(app, pygame.K_m, ctrl=True)
+        self.assertEqual(json.loads(self.options_path.read_text(encoding="utf-8")), {"sound": True})
+
+    def test_choice_leaves_the_stats_alone(self) -> None:
+        """Saving the sound choice writes only options.json; stats.json keeps its fixed keys."""
+
+        self.save_dir.mkdir(parents=True)
+        self.stats_path.write_text('{"games": 5, "human_wins": 2}', encoding="utf-8")
+        app, _bank, _music = self.make_app(persist=True)
+        self.press(app, pygame.K_m, ctrl=True)
+        self.assertEqual(self.stats_path.read_text(encoding="utf-8"), '{"games": 5, "human_wins": 2}')
+
+    def test_non_persisting_app_never_writes_the_choice(self) -> None:
+        """persist=False (the self-test) toggles in memory only."""
+
+        app, _bank, _music = self.make_app(persist=False)
+        self.press(app, pygame.K_m, ctrl=True)
+        self.assertFalse(app.sound_on)
+        self.assertFalse(self.save_dir.exists())
+
+
+class SoundToggleLayoutTests(unittest.TestCase):
+    """The Sound buttons fit their labels and stay clear of everything around them."""
+
+    fonts: dict
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Initialize pygame and build the fonts for the layout checks."""
+
+        pygame.init()
+        cls.fonts = ui.make_fonts()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Release pygame after the layout checks."""
+
+        pygame.quit()
+
+    def test_labels_fit_in_the_normal_font_with_margin(self) -> None:
+        """Both labels fit either button in the regular button font, never shrunk or shortened."""
+
+        rects = (ui.setup_sound_rect(), ui.bar_slot_rect(main.SOUND_SLOT))
+        for rect in rects:
+            for on in (True, False):
+                button = ui.Button(rect, ui.sound_label(on), "toggle_sound")
+                text, font = button.fitted_label(self.fonts)
+                with self.subTest(rect=rect, label=button.label):
+                    self.assertEqual((text, font), (button.label, self.fonts["small"]))
+                    width, height = font.size(text)
+                    self.assertLessEqual(width + 2 * ui.BUTTON_LABEL_MARGIN + 8, rect.width)
+                    self.assertLessEqual(height + 8, rect.height)
+
+    def test_setup_toggle_clears_the_title_and_every_control(self) -> None:
+        """The setup Sound button overlaps no other button, name box, title line or the info panel."""
+
+        buttons = ui.setup_buttons(has_save=True, sound_on=False)
+        sound = next(button.rect for button in buttons if button.key == "toggle_sound")
+        others = [(button.key, button.rect) for button in buttons if button.key != "toggle_sound"]
+        others += [(f"name {index}", ui.setup_name_field_rect(index)) for index in range(4)]
+        title = pygame.Rect((0, 0), self.fonts["title"].size("MONOPOLY"))
+        title.center = (main.SCREEN_WIDTH // 2, 110)
+        subtitle = pygame.Rect((0, 0), self.fonts["small"].size(
+            "Four players. Choose how many are human -- the rest are AI."))
+        subtitle.center = (main.SCREEN_WIDTH // 2, 165)
+        others += [("title", title.inflate(16, 8)), ("subtitle", subtitle.inflate(16, 8)),
+                   ("info panel", pygame.Rect(470, 205, 720, 410))]
+        self.assertTrue(pygame.Rect(0, 0, main.SCREEN_WIDTH, main.SCREEN_HEIGHT).contains(sound))
+        for name, rect in others:
+            with self.subTest(other=name):
+                self.assertFalse(sound.inflate(8, 8).colliderect(rect), f"Sound {sound} overlaps {name} {rect}")
+
+    def test_in_game_slot_is_free_in_every_action_bar_state(self) -> None:
+        """No other action-bar button ever uses the Sound slot, and no board dialog covers it."""
+
+        sound = ui.bar_slot_rect(main.SOUND_SLOT)
+        for slot in range(8):
+            if slot != main.SOUND_SLOT:
+                with self.subTest(slot=slot):
+                    self.assertFalse(sound.colliderect(ui.bar_slot_rect(slot)))
+        for name, rect in (("auction", ui.auction_layout()["panel"]),
+                           ("trade response", ui.trade_response_layout()["panel"])):
+            with self.subTest(dialog=name):
+                self.assertFalse(sound.colliderect(rect))
+        app = main.MonopolyApp(persist=False)
+        for jailed in (False, True):
+            for awaiting in ("pre_roll", "post_roll"):
+                game = MonopolyGame([("P1", True), ("P2", False)], seed=1)
+                game.players[0].in_jail = jailed
+                game.awaiting = awaiting
+                app.start_game(game)
+                keys = [button.key for button in app._playing_buttons() if button.rect.colliderect(sound)]
+                with self.subTest(jailed=jailed, awaiting=awaiting):
+                    self.assertEqual(keys, ["toggle_sound"])
 
 
 class MixerStartupTests(unittest.TestCase):
