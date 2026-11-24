@@ -320,6 +320,33 @@ class RaiseFundsRuleTests(unittest.TestCase):
         self.assertEqual(game.awaiting, "raise_funds")
         self.assertEqual(game.actor(), 0)
 
+    def test_cash_owed_on_a_queued_debt_cannot_be_bid_at_auction(self) -> None:
+        """A human who owes more than they hold cannot spend that cash on bids.
+
+        The debt is queued while the auction runs, so before this fix the
+        debtor could bid the very cash they owed, then find they could no
+        longer cover the debt once raise_funds began.
+        """
+        game = make_game()
+        give_group(game, 0, (1, 3))
+        game.players[0].cash = 50
+        game._start_auction(5)
+        game.charge(game.players[0], 100)
+        self.assertEqual(game.spendable_cash(game.players[0]), 0)
+
+        auction = game.auction
+        assert auction is not None
+        auction["current"] = 0
+        game.auction_bid(10)
+
+        self.assertEqual(auction["high_bid"], 0)
+        self.assertEqual(game.players[0].cash, 50)
+
+    def test_spendable_cash_is_the_full_balance_with_no_debt(self) -> None:
+        """With nothing owed, every dollar a player holds is spendable."""
+        game = make_game()
+        self.assertEqual(game.spendable_cash(game.players[0]), game.players[0].cash)
+
     def test_pay_debts_settles_a_creditors_debt_in_the_same_call(self) -> None:
         """Paying the head debt can fund the next payer's debt, all in one call."""
         game = MonopolyGame([("Ann", True), ("Bob", True), ("Iris", False)], seed=2)

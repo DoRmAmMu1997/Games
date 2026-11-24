@@ -58,6 +58,16 @@ class SaveValidationTests(unittest.TestCase):
             "negative building level": lambda p: p["houses"].update({"1": -1}),
             "empty deck": lambda p: p.update(chance=[]),
             "deck index out of range": lambda p: p["chest"].append(99),
+            "mortgage off the board": lambda p: p.update(mortgaged=[40]),
+            "mortgage on an unowned title": lambda p: p.update(mortgaged=[5]),
+            "mortgage on an unownable space": lambda p: p.update(mortgaged=[0]),
+            "mortgage that is not a number": lambda p: p.update(mortgaged=["Boardwalk"]),
+            "buildings on a railroad": lambda p: (p["owners"].update({"5": 0}), p["houses"].update({"5": 3})),
+            "buildings on an unowned street": lambda p: p["houses"].update({"1": 2}),
+            "building entry off the board": lambda p: p["houses"].update({"99": 0}),
+            "building entry before the board": lambda p: p["houses"].update({"-1": 0}),
+            "buildings on a mortgaged street": lambda p: (
+                p["owners"].update({"1": 0}), p["houses"].update({"1": 1}), p.update(mortgaged=[1])),
         }
         for name, corrupt in corruptions.items():
             with self.subTest(name):
@@ -79,6 +89,24 @@ class SaveValidationTests(unittest.TestCase):
         self.assertEqual((game.bank_houses, game.bank_hotels), (30, 11))
         self.assertEqual(game.owners, {1: 2, 3: 2})
         for value in (game.current, game.turn_count, game.bank_houses, *game.owners.values()):
+            self.assertIs(type(value), int)
+
+    def test_mortgages_and_buildings_stored_as_text_are_coerced_to_int(self) -> None:
+        """Hand-edited mortgage and building entries load as real ints.
+
+        Before, ``"mortgaged": ["5"]`` loaded the string "5", so position 5
+        never counted as mortgaged and its owner kept collecting rent.
+        """
+        payload = saved_payload()
+        payload["owners"] = {"1": 0, "3": 0, "5": 1}
+        payload["houses"] = {"1": "2", "3": "1"}
+        payload["mortgaged"] = ["5"]
+
+        game = MonopolyGame.from_dict(payload)
+
+        self.assertEqual(game.mortgaged, {5})
+        self.assertEqual(game.houses, {1: 2, 3: 1})
+        for value in (*game.mortgaged, *game.houses.values()):
             self.assertIs(type(value), int)
 
     def test_post_bankruptcy_save_still_loads(self) -> None:

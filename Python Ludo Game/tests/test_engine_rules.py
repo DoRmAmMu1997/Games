@@ -196,6 +196,51 @@ class EngineRuleTests(unittest.TestCase):
         self.assertEqual(restored.last_roll, 6)
 
 
+class ForcedMoveTests(unittest.TestCase):
+    """``forced_move`` finds the roll whose every legal move ends the same way.
+
+    Beginner note: "only one move" means only one OUTCOME. Four yard tokens on
+    a 6 are four legal moves, but whichever token you pick, one token leaves
+    the yard onto the start square, so the choice is not a real choice.
+    """
+
+    def test_a_single_legal_move_is_forced(self) -> None:
+        """One token on the board and a non-6 roll leaves exactly one move."""
+
+        game = make_game()
+        game.players[0].tokens[0].steps = 4
+        game.record_roll(3)
+        move = game.forced_move(3)
+        self.assertEqual(move, game.legal_moves(3)[0])
+
+    def test_interchangeable_yard_tokens_count_as_one_move(self) -> None:
+        """A 6 with every token in the yard forces a token out."""
+
+        game = make_game()
+        game.record_roll(6)
+        self.assertEqual(len(game.legal_moves(6)), 4)
+        move = game.forced_move(6)
+        self.assertIsNotNone(move)
+        assert move is not None
+        self.assertTrue(move.enters_board)
+
+    def test_a_real_choice_is_not_forced(self) -> None:
+        """Two tokens on different squares give the player a real choice."""
+
+        game = make_game()
+        game.players[0].tokens[0].steps = 4
+        game.players[0].tokens[1].steps = 10
+        game.record_roll(2)
+        self.assertIsNone(game.forced_move(2))
+
+    def test_no_legal_move_is_not_forced(self) -> None:
+        """With nothing playable there is no move to make for the player."""
+
+        game = make_game()
+        game.record_roll(3)
+        self.assertIsNone(game.forced_move(3))
+
+
 class EngineEventTests(unittest.TestCase):
     """The engine queues one event kind per sound-worthy moment, for the shell to drain.
 
@@ -497,6 +542,35 @@ class CorruptSaveTests(unittest.TestCase):
         for name, data in cases.items():
             with self.subTest(case=name), self.assertRaises(ValueError):
                 LudoGame.from_dict(data)  # type: ignore[arg-type]
+
+    def test_a_choose_move_save_with_no_legal_move_resolves_like_live_play(self) -> None:
+        """A save waiting for a move nobody can make is resolved on load, not stuck.
+
+        All of P1's tokens are in the yard and the saved roll is a 3, so no
+        move is legal. A human resuming this save would get no Roll button and
+        nothing to click. Loading now resolves it exactly as ``note_no_move``
+        does in play: a 3 passes the turn to P2.
+        """
+
+        data = make_game().to_dict()
+        data.update(awaiting="choose_move", last_roll=3)
+        restored = LudoGame.from_dict(data)
+        self.assertEqual(restored.awaiting, "pre_roll")
+        self.assertEqual(restored.current, 1)
+        self.assertEqual(restored.drain_events(), [])
+
+    def test_a_stuck_six_keeps_its_bonus_roll_on_load(self) -> None:
+        """With no legal move on a saved 6, the same player rolls again, as in play."""
+
+        game = make_game()
+        for token in game.players[0].tokens:
+            token.steps = game.layout.finish_steps
+        game.players[0].tokens[0].steps = game.layout.finish_steps - 2
+        data = game.to_dict()
+        data.update(awaiting="choose_move", last_roll=6)
+        restored = LudoGame.from_dict(data)
+        self.assertEqual(restored.awaiting, "pre_roll")
+        self.assertEqual(restored.current, 0)
 
     def test_valid_choose_move_save_still_loads(self) -> None:
         """A save taken mid-turn, with a real die roll waiting, still resumes."""

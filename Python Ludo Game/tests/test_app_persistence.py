@@ -108,6 +108,66 @@ class CorruptSaveResumeTests(TempSaveDirTestCase):
                 self.assertEqual(app.screen, "setup")
                 self.assertIsNone(app.game)
 
+    def test_a_damaged_save_is_set_aside_so_resume_greys_out(self) -> None:
+        """A save that cannot load is logged and renamed, so Resume stops offering it.
+
+        Before, the Resume button stayed enabled for a damaged file and every
+        click silently did nothing. Like Monopoly, the file is now moved to
+        ``savegame.bad.json`` (kept for anyone who wants to inspect it) and
+        the reason is written to ``error.log``.
+        """
+
+        data = make_game().to_dict()
+        data["last_roll"] = float("inf")
+        self.write_save(data)
+        self.assertTrue(main.has_saved_game())
+
+        self.assertIsNone(main.load_saved_game())
+
+        self.assertFalse(main.has_saved_game())
+        self.assertTrue((self.save_dir / "savegame.bad.json").exists())
+        self.assertTrue((self.save_dir / "error.log").read_text(encoding="utf-8").strip())
+
+    def test_a_read_error_does_not_retire_a_good_save(self) -> None:
+        """A temporary read failure is logged, but the save itself is left alone.
+
+        On Windows a sync tool or virus scanner can briefly lock the file; the
+        save is fine, so it must not be renamed to savegame.bad.json.
+        """
+
+        self.write_save(make_game().to_dict())
+        with mock.patch.object(Path, "read_bytes", side_effect=PermissionError("locked")):
+            self.assertIsNone(main.load_saved_game())
+        self.assertTrue(main.has_saved_game())
+        self.assertFalse((self.save_dir / "savegame.bad.json").exists())
+
+    def test_a_save_that_is_not_utf8_is_set_aside(self) -> None:
+        """Bytes that are not valid UTF-8 count as a damaged save, not a crash."""
+
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.savegame_path.write_bytes(b"\xff\xfe not json")
+        self.assertIsNone(main.load_saved_game())
+        self.assertFalse(main.has_saved_game())
+        self.assertTrue((self.save_dir / "savegame.bad.json").exists())
+
+    def test_a_non_persisting_app_never_moves_a_damaged_save(self) -> None:
+        """Resume in a ``persist=False`` app reads the save but never renames or logs."""
+
+        data = make_game().to_dict()
+        data["last_roll"] = float("inf")
+        self.write_save(data)
+        app = main.LudoApp(persist=False)
+        app._on_setup_button("resume")
+        self.assertEqual(app.screen, "setup")
+        self.assertTrue(main.has_saved_game())
+        self.assertFalse((self.save_dir / "error.log").exists())
+
+    def test_a_missing_save_is_not_an_error(self) -> None:
+        """No save file at all loads as None without logging anything."""
+
+        self.assertIsNone(main.load_saved_game())
+        self.assertFalse((self.save_dir / "error.log").exists())
+
     def test_deeply_nested_files_load_as_defaults_instead_of_crashing(self) -> None:
         """A save or stats file nested 100000 levels deep is treated as damaged.
 

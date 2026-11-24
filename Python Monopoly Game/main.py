@@ -1390,7 +1390,7 @@ class MonopolyApp:
         assert auction is not None, "auction buttons only build during an auction"
         layout = ui.auction_layout()
         step = max(10, game.board[auction["position"]].price // 20)
-        can_bid = (auction["high_bid"] + step) <= actor.cash
+        can_bid = (auction["high_bid"] + step) <= game.spendable_cash(actor)
         return [
             ui.Button(layout["bid"], f"Bid +${step}", "bid", enabled=can_bid,
                       color=(46, 116, 78)),
