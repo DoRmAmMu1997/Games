@@ -10,8 +10,9 @@ set: a seeded four-AI game is played for up to 4000 frames with no AI delay
 the engine, the AI and all the drawing code at once. It never writes the
 player's save or stats.
 
-Sound: ``audio.py`` synthesises every effect; this shell plays them for the
-engine's events (``event_sounds``), token hops and button clicks.
+Sound: ``audio.py`` synthesises every effect and the music; this shell plays
+them for the engine's events (``event_sounds``), token hops and button
+clicks, loops the swing tune, and ends each game with a win or lose jingle.
 """
 
 from __future__ import annotations
@@ -38,6 +39,10 @@ from settings import (
     AI_TURN_DELAY_MS,
     BG,
     FPS,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_LOOP_SECONDS,
+    MUSIC_VOLUME,
     SAVE_DIR,
     SAVEGAME_PATH,
     SCREEN_HEIGHT,
@@ -47,6 +52,7 @@ from settings import (
     STATS_PATH,
     TOKEN_HOP_SPEED,
     WINDOW_TITLE,
+    music_notes,
 )
 
 
@@ -222,6 +228,7 @@ class MonopolyApp:
     - `token_px`, `token_route`, `token_hops`, `dice_show`, ...: animation
       state, which only eases pixels toward what the engine already decided.
     - `sounds`: the `audio.SoundBank` of effects (silent without a mixer).
+    - `music`: the `audio.MusicPlayer` looping the swing tune.
     - `persist`: False in the self-test, so nothing is written to disk.
     """
 
@@ -246,6 +253,10 @@ class MonopolyApp:
         self.running = True
         # Every effect is synthesised once here from the recipes in settings.
         self.sounds = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
+        # The tune renders in a background thread; it starts playing on the
+        # first frame after it is ready (``music.update`` in ``_update``).
+        self.music = audio.MusicPlayer(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME)
+        self.music.start(MUSIC_FADE_IN_MS)
 
         # Screen state: "setup", "playing" or "over".
         self.screen = "setup"
@@ -392,7 +403,8 @@ class MonopolyApp:
     def _update(self, autotest: bool) -> None:
         """Advance the game: play sounds, animate visuals, then step the AI if it is its turn.
 
-        In order, once per frame: play the sounds for everything the engine
+        In order, once per frame: let the music player start the tune once it
+        has rendered (on every screen); play the sounds for everything the engine
         reported since the last frame; switch to the end screen when the
         game is over; autosave when the turn passes; move each token along
         its queue of waypoints (tapping a hop sound at each space); run the
@@ -400,12 +412,14 @@ class MonopolyApp:
         its delay has passed. `autotest` skips the delay and the wait for
         animations.
         """
+        self.music.update()
         if self.screen != "playing" or self.game is None:
             return
         game = self.game
         self._play_event_sounds()
         if game.phase == "game_over":
             self._end_game()
+            self._play_game_over_jingle()
             return
 
         # Autosave once per completed turn: the engine advances `current` to
@@ -507,6 +521,19 @@ class MonopolyApp:
         game = self._require_game()
         for name in event_sounds(game.drain_events()):
             self.sounds.play(name)
+
+    def _play_game_over_jingle(self) -> None:
+        """Fade the music out and play the win or lose jingle for the finished game.
+
+        The win jingle plays when a human won, and also when no human played
+        at all (an all-AI table); a computer beating the humans, or a game
+        nobody survived, gets the gentle lose jingle.
+        """
+        game = self._require_game()
+        self.music.stop(MUSIC_GAME_OVER_FADE_MS)
+        humans = [player for player in game.players if player.is_human]
+        won = not humans or (game.winner is not None and game.players[game.winner].is_human)
+        self.sounds.play("win" if won else "lose")
 
     def _play_hop(self, idx: int) -> None:
         """Tap the hop sound for a token that just reached a space, one step higher each time.
@@ -631,6 +658,7 @@ class MonopolyApp:
         if key == "new_game":
             self.screen = "setup"
             self.game = None
+            self.music.start(MUSIC_FADE_IN_MS)
             return
         if key == "quit":
             self.running = False
