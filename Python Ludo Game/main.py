@@ -525,19 +525,27 @@ def save_game(game: LudoGame) -> None:
 def load_saved_game() -> LudoGame | None:
     """Load the saved game, returning ``None`` if there is no usable save.
 
-    A missing file and every kind of damaged file (bad JSON, wrong types,
-    impossible values rejected by ``LudoGame.from_dict``) all return
-    ``None``, so the setup screen just stays put instead of crashing.
+    A missing file simply returns ``None``. A damaged file (bad JSON, wrong
+    types, impossible values rejected by ``LudoGame.from_dict``) also
+    returns ``None``, but it is first logged to ``error.log`` and renamed to
+    ``savegame.bad.json``. That makes ``has_saved_game()`` false, so the
+    Resume button greys out instead of silently failing on every click, and
+    the file is kept for anyone who wants to inspect it (as in Monopoly).
     """
 
     try:
         return LudoGame.from_dict(json.loads(SAVEGAME_PATH.read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        return None
     # AttributeError covers a damaged entry of the wrong JSON type (a list
     # where a token object belongs). OverflowError covers huge numbers: JSON
     # reads 1e400 as float inf, and int(inf) raises OverflowError.
     # RecursionError covers a file nested thousands of levels deep.
     except (OSError, TypeError, ValueError, KeyError, AttributeError, OverflowError, RecursionError,
-            json.JSONDecodeError):
+            json.JSONDecodeError) as error:
+        _log_error(error)
+        with contextlib.suppress(OSError):
+            os.replace(SAVEGAME_PATH, SAVEGAME_PATH.with_name("savegame.bad.json"))
         return None
 
 
