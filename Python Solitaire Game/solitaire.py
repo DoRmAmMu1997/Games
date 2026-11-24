@@ -172,6 +172,14 @@ MARGIN_X = (WINDOW_WIDTH - BOARD_WIDTH) // 2
 #   crisp paper tick.
 # - Volumes stay well under 1.0 on purpose: auto-solve fires a chime every
 #   few frames, and overlapping sounds add up.
+# - A `Note` written out in full reads `Note(freq, start, length, voice,
+#   volume, ...)`: the pitch in Hz (for "noise", the noise rate), when it
+#   starts and how long it is held (seconds from the start of the effect),
+#   the waveform, and the peak loudness, then the optional glide and ADSR
+#   envelope. `midi(76)` is simply the Hz of MIDI note 76 (E5).
+# - A recipe named "name@N" is a pitch variant of "name". The app asks for
+#   it with `play(name, pitch_step=N)`, and the bank falls back to plain
+#   "name" when no such variant exists.
 SFX_STRIKE_ATTACK = 0.006  # A struck note reaches full volume this fast (s).
 SFX_STRIKE_RELEASE = 0.03  # Tail after a strike's ring, so it never ends abruptly (s).
 SFX_ROOT_NOTE = 60  # C4: the Ace's chime; every higher rank climbs the C major ladder.
@@ -191,7 +199,14 @@ RECYCLE_TICK_SPACING = 0.03
 
 
 def strike(pitch: float, start: float, ring: float, volume: float, voice: str = "sine", glide: float = 0.0) -> Note:
-    """Return a struck note: a near-instant attack, then a ring down to silence."""
+    """Return a struck note: a near-instant attack, then a ring down to silence.
+
+    `pitch` is a MIDI note number, `start` and `ring` are seconds, `volume`
+    is the peak loudness (0 to 1), and `glide` slides the pitch in Hz per
+    second. With `sustain=0` the decay falls all the way to silence over
+    `ring` seconds, so the note is held exactly long enough (attack plus
+    ring) for that fall to finish before the short release tail.
+    """
     return Note(
         midi(pitch),
         start,
@@ -221,13 +236,27 @@ def chime(pitch: float, start: float, ring: float, volume: float) -> list[Note]:
 
 
 def paper(start: float, rate: float, volume: float, ring: float = 0.03, glide: float = 0.0) -> Note:
-    """Return a short noise burst: a card tick, a slide or a soft thud on the felt."""
+    """Return a short noise burst: a card tick, a slide or a soft thud on the felt.
+
+    `rate` is the noise voice's "pitch": new random values per second, so a
+    low rate sounds dull and a high one crisp. The note is held for only
+    4 ms and then fades out over a 10 ms release, so every burst is a brief
+    tick. `ring` is the decay time: the release starts from wherever that
+    decay has reached after 4 ms, so a longer ring gives a slightly fuller
+    tick and a shorter one a thinner tick.
+    """
     return Note(rate, start, 0.004, "noise", volume, glide=glide, attack=0.001, decay=ring, sustain=0.0,
                 release=0.01)
 
 
 def scale_note(degree: int) -> int:
-    """Return the MIDI note `degree` steps up the C major ladder from SFX_ROOT_NOTE."""
+    """Return the MIDI note `degree` steps up the C major ladder from SFX_ROOT_NOTE.
+
+    `divmod` splits the degree into whole octaves and a step inside one, so
+    the ladder keeps climbing past the seventh note: degree 0 is C4 (60),
+    degree 7 is C5 (72), and degree 12 (a King's chime) is A5 (81). Only
+    white-key notes are used, so any two chimes sound well together.
+    """
     octave, step = divmod(degree, len(C_MAJOR_STEPS))
     return SFX_ROOT_NOTE + 12 * octave + C_MAJOR_STEPS[step]
 
@@ -252,7 +281,8 @@ SFX_RECIPES: dict[str, list[Note]] = {
         paper(0.012, 3000.0, 0.06, 0.02),
     ],
     # A card reaching its foundation: a chime that climbs with the rank
-    # ("foundation@1" for an Ace up to "foundation@13" for a King).
+    # ("foundation@1" for an Ace up to "foundation@13" for a King). The plain
+    # name is the Ace's chime, the fallback for a pitch step with no variant.
     "foundation": foundation_chime(1),
     **{f"foundation@{rank}": foundation_chime(rank) for rank in range(1, FOUNDATION_CHIME_STEPS + 1)},
     # Auto-solve sending a card home: the same ladder, quicker and lighter.
@@ -278,7 +308,8 @@ SFX_RECIPES: dict[str, list[Note]] = {
     ],
     # Clicking an empty stock with no waste left: two dull knocks.
     "empty": [paper(0.0, 700.0, 0.14, 0.05), paper(0.09, 650.0, 0.12, 0.05), strike(45, 0.0, 0.08, 0.08, "triangle")],
-    # A move the rules do not allow: a soft falling "uh-uh", never harsh.
+    # A move the rules do not allow: a soft falling "uh-uh" (D4 down a minor
+    # third to B3) on the mellow triangle voice, never harsh.
     "invalid": [strike(62, 0.0, 0.1, 0.16, "triangle"), strike(59, 0.11, 0.16, 0.16, "triangle")],
     # Undo: a short rewind, a falling glide over a falling paper sweep.
     "undo": [
@@ -297,7 +328,9 @@ SFX_RECIPES: dict[str, list[Note]] = {
 }
 # The fewest seconds between two plays of the same effect (variants share
 # their base name's cooldown). Auto-solve can land a card and click the stock
-# within a few frames; these keep such bursts a gentle patter.
+# within a few frames; these keep such bursts a gentle patter. Effects left
+# out ("deal", "hint", "undo", "empty", "win", "lose") have no cooldown: each
+# answers one deliberate click, so dropping a repeat would only hide it.
 SFX_COOLDOWNS: dict[str, float] = {
     "select": 0.04,
     "place": 0.04,
@@ -388,6 +421,8 @@ MUSIC_SCORE: tuple[tuple[str, tuple[tuple[float, float, int], ...]], ...] = (
     ("G7sus4", ((0, 2, 74), (2, 1, 72), (3, 1, 67))),
 )
 MUSIC_BARS = len(MUSIC_SCORE)
+# Loop length: 8 bars x 4 beats x (60 / 72) seconds per beat. The tune is
+# rendered to exactly this many seconds, so it repeats on the beat.
 MUSIC_LOOP_SECONDS = MUSIC_BARS * MUSIC_BEATS_PER_BAR * MUSIC_BEAT_SECONDS  # About 26.7 s at 72 BPM.
 MUSIC_CHORD_VOLUME = 0.05  # Per chord note; four of them sound together.
 MUSIC_CHORD_RING = 1.8  # Beats a struck chord rings.
@@ -408,7 +443,11 @@ MUSIC_HAT_RING = 0.03
 
 
 def swung(beat: float) -> float:
-    """Return where a written beat position is played: half beats are swung late."""
+    """Return where a written beat position is played: half beats are swung late.
+
+    Only the off-beat eighth moves: 1.5 is played at 1.58 (with MUSIC_SWING
+    0.58), while whole beats and any other fraction are left where written.
+    """
     whole = math.floor(beat)
     return whole + MUSIC_SWING if beat - whole == 0.5 else beat
 
@@ -430,17 +469,25 @@ def music_notes() -> list[Note]:
             for index, pitch in enumerate(voicing):
                 notes.append(strike(pitch, start + swung(at) * beat + index * MUSIC_CHORD_ROLL,
                                     MUSIC_CHORD_RING * beat, volume))
+        # Bass: the chord's root on beat 1, then its fifth (7 semitones up),
+        # shorter and softer, on beat 3.
         notes.append(strike(root, start, MUSIC_BASS_RING * beat, MUSIC_BASS_VOLUME))
         notes.append(strike(root + 7, start + 2 * beat, MUSIC_BASS_RING * beat / 2, MUSIC_BASS_VOLUME * 0.7))
         for at, length, pitch in melody:
             notes += chime(pitch, start + swung(at) * beat, length * beat * MUSIC_MELODY_RING, MUSIC_MELODY_VOLUME)
         # Drums: kick on 1 and 3, brush on 2 and 4, hi-hat on every swung eighth.
+        # The kick is a low A1 (MIDI 33, about 55 Hz) whose pitch glides down.
         for at in (0.0, 2.0):
             notes.append(strike(33, start + at * beat, 0.18, MUSIC_KICK_VOLUME, glide=MUSIC_KICK_GLIDE))
         for at in (1.0, 3.0):
             notes.append(paper(start + at * beat, MUSIC_BRUSH_RATE, MUSIC_BRUSH_VOLUME, MUSIC_BRUSH_RING))
         for eighth in range(MUSIC_BEATS_PER_BAR * 2):
             notes.append(paper(start + swung(eighth / 2) * beat, MUSIC_HAT_RATE, MUSIC_HAT_VOLUME, MUSIC_HAT_RING))
+    # Trim the loop's tail: the buffer is exactly MUSIC_LOOP_SECONDS long and
+    # restarts at once, so a note still sounding at the end would be cut off
+    # mid-wave (a click). Shortening its held part to `room` makes held part
+    # plus release end exactly on the loop point; a note too late even for its
+    # release is dropped.
     fitted = []
     for note in notes:
         if note.end > MUSIC_LOOP_SECONDS:
@@ -1956,7 +2003,14 @@ class SolitaireAudio:
     """
 
     def __init__(self, threaded: bool = True) -> None:
-        """Render every effect, and start rendering the music (in a background thread when `threaded`)."""
+        """Render every effect, and start rendering the music (in a background thread when `threaded`).
+
+        The effects are short and render at once. The music loop takes
+        longer, so by default it renders on a background thread and the
+        window opens without waiting; `update` later hands the finished
+        samples to the mixer. Tests pass `threaded=False` to keep it simple
+        and deterministic.
+        """
         self.bank = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
         self.music = audio.MusicPlayer(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME, threaded=threaded)
 
@@ -1983,6 +2037,8 @@ class SolitaireAudio:
 
     def close(self) -> None:
         """Shut the mixer down so the audio device is released when the window closes."""
+        # Importing here is safe: this wrapper only exists once `open_audio`
+        # has imported pygame successfully.
         import pygame
 
         with contextlib.suppress(pygame.error):
@@ -2121,6 +2177,9 @@ class SolitaireApp:
         self.root.bind("<Control-h>", lambda event: self.show_hint())
         self.root.bind("<Control-H>", lambda event: self.show_hint())
         # Ctrl+M switches sound off and on (the Sound button does the same).
+        # It is the mute shortcut in all four games of this repository, and,
+        # like the other shortcuts here, it needs Ctrl, so a stray letter key
+        # never changes a setting.
         self.root.bind("<Control-m>", self.toggle_sound)
         self.root.bind("<Control-M>", self.toggle_sound)
         self.refresh_header_labels()
@@ -2309,7 +2368,9 @@ class SolitaireApp:
         event, which is ignored). Muting stops the music at once and blocks
         every effect; unmuting resumes the music and plays a click so the
         player hears that it worked. It is a setting, not a move, so it
-        works at any time and never enters the Undo history.
+        works at any time and never enters the Undo history. The choice is
+        written at once, as "muted" in the same solitaire_high_score.json as
+        the statistics, so the next launch starts with it.
         """
         self.game.sound_muted = not self.game.sound_muted
         self.game.save_high_score()
@@ -2328,7 +2389,17 @@ class SolitaireApp:
         self.root.after(AUDIO_TICK_MS, self.schedule_audio_update)
 
     def start_new_game(self) -> None:
-        """Deal a fresh game and clear all UI-only state."""
+        """Deal a fresh game and clear all UI-only state.
+
+        Called by the New Game button and Ctrl+N. If moves have been made in
+        a game that has not ended, the player is asked to confirm first, and
+        answering "No" leaves everything as it was. Otherwise the model deals
+        a new board, the selection, hint, animation, auto-solve state, Undo
+        history and clock are reset, and the deal sound plays. The music is
+        asked to start again because it fades out at every win or loss
+        (asking while it already plays changes nothing). Finally a hopeless
+        deal is caught at once by `check_for_loss`.
+        """
         # Guard an in-progress game: a non-empty history with no win/loss yet
         # means real moves would be discarded. Covers the button and Ctrl+N.
         # `and` stops at the first False, so the question is only asked when
