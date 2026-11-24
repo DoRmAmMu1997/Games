@@ -9,7 +9,7 @@ keeps its progress under `%APPDATA%` so saves survive moving the executable.
 | Folder | Game | Engine |
 |---|---|---|
 | `Python Sputnika Game/` | **[Orbital Orchard](Python%20Sputnika%20Game/README.md)** — a Suika-style merge puzzle. Drop celestial bodies into a bubble, bounce and merge them up to a Quasar Crown. | pygame |
-| `Python Solitaire Game/` | **[Klondike Solitaire](Python%20Solitaire%20Game/README.md)** — the classic single-player card game with hints, auto-solve, undo, and a confetti win celebration. | tkinter |
+| `Python Solitaire Game/` | **[Klondike Solitaire](Python%20Solitaire%20Game/README.md)** — the classic single-player card game with hints, auto-solve, undo, and a confetti win celebration. | tkinter (+ pygame-ce for sound) |
 | `Python Monopoly Game/` | **[Monopoly](Python%20Monopoly%20Game/README.md)** — full standard rules, 1-4 humans + AI to fill out four players, thirteen themed boards, auctions, trading, and autosave + resume. | pygame |
 | `Python Ludo Game/` | **[Ludo](Python%20Ludo%20Game/README.md)** — classic competitive Ludo for 4-6 total players, 1-6 humans, heuristic AI, clockwise token movement, and a classic square board (4P) plus compact radial boards (5P/6P). | pygame |
 
@@ -18,9 +18,11 @@ features and build notes.
 
 ## Run from source
 
-Each game has its own `requirements.txt` (Monopoly, Orbital Orchard and Ludo
-use `pygame-ce`; Solitaire uses only the standard library). Install the deps
-once and start playing:
+Each game has its own `requirements.txt` with `pygame-ce` (Solitaire draws
+with tkinter and uses pygame-ce only for sound; without it, it runs silently).
+Every game has procedural sound effects and music: press Ctrl+M to switch
+sound off or on, and the choice is remembered. Install the deps once and
+start playing:
 
 ```bash
 cd "Python Ludo Game"              # or another game's folder

@@ -7,9 +7,9 @@
 #   (AGENTS.md: bump them together). `patterns: ["*"]` is required for
 #   entries in a multi-ecosystem group and keeps every other dev tool and
 #   hook in that same weekly PR.
-# - Each pygame game pins pygame-ce in its own requirements.txt;
-#   `group-by: dependency-name` bumps all three copies in one PR so they
-#   stay textually consistent. Solitaire is stdlib-only (no manifest).
+# - Every game pins pygame-ce in its own requirements.txt (Solitaire uses it
+#   for audio only); `group-by: dependency-name` bumps all four copies in one
+#   PR so they stay textually consistent.
 # - The game folder names contain spaces: keep them double-quoted.
 # - cooldown waits a week after a release before proposing it (GitHub's
 #   default is 3 days), a cheap guard against compromised fresh releases.
@@ -40,6 +40,7 @@ updates:
       - "/Python Ludo Game"
       - "/Python Monopoly Game"
       - "/Python Sputnika Game"
+      - "/Python Solitaire Game"
     schedule:
       interval: "weekly"
     groups:
