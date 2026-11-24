@@ -20,7 +20,7 @@ from board_data import RAILROAD_POSITIONS, UTILITY_POSITIONS
 # --------------------------------------------------------------------------
 # `text` may contain "{dest}", which format_card_text() fills with the themed
 # name of the destination space.
-CHANCE_CARDS = [
+CHANCE_CARDS: list[dict] = [
     dict(deck="chance", kind="advance", pos=0, text="Advance to {dest}."),
     dict(deck="chance", kind="advance", pos=24, text="Advance to {dest}."),
     dict(deck="chance", kind="advance", pos=11, text="Advance to {dest}."),
@@ -45,10 +45,13 @@ CHANCE_CARDS = [
          text="You are elected Chairman of the Board -- pay each player $50."),
     dict(deck="chance", kind="repairs", per_house=25, per_hotel=100,
          text="Make general repairs: pay $25 per house and $100 per hotel."),
-    dict(deck="chance", kind="advance", pos=0, text="Advance to {dest}."),
+    # The standard deck has TWO "nearest Railroad" cards (and one Advance to GO).
+    dict(deck="chance", kind="nearest_rail",
+         text="Advance to the nearest Railroad. If owned, pay the owner twice "
+              "the rent; otherwise you may buy it."),
 ]
 
-CHEST_CARDS = [
+CHEST_CARDS: list[dict] = [
     dict(deck="chest", kind="advance", pos=0, text="Advance to {dest}."),
     dict(deck="chest", kind="jail", text="Go directly to Jail."),
     dict(deck="chest", kind="jail_card",
@@ -97,6 +100,13 @@ class Deck:
     """
 
     def __init__(self, deck_name: str, master: list, rng=None, order=None):
+        """Create a deck over `master`, the full list of this deck's cards.
+
+        `deck_name` is "chance" or "chest". A new game passes the game's
+        seeded `rng`, which shuffles the order once. A resumed game passes
+        the saved `order` instead, so the pile continues exactly where it
+        stopped. With neither, the cards stay in list order (handy in tests).
+        """
         self.deck_name = deck_name
         self.master = master
         if order is not None:
@@ -133,6 +143,7 @@ def _nearest(position: int, targets: tuple) -> int:
         candidate = (position + step) % 40
         if candidate in targets:
             return candidate
+    # Only reached if the player already stands on the sole target.
     return targets[0]
 
 

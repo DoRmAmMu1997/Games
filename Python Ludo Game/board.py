@@ -1,4 +1,10 @@
-"""Generated board geometry for 4-, 5-, and 6-player Ludo."""
+"""Generated board geometry for 4-, 5-, and 6-player Ludo.
+
+``BoardLayout`` is the rules engine's map of the board: which shared track
+index each seat starts on, which squares are safe, how long a lap is, and
+where the home lane begins. The helper functions at the bottom produce the
+simple fallback pixel positions used when no renderer exists.
+"""
 
 from __future__ import annotations
 
@@ -12,12 +18,20 @@ Point = tuple[float, float]
 
 @dataclass(frozen=True)
 class BoardLayout:
-    """All track, home-lane, and yard coordinates for one player count.
+    """Authoritative track indices for one player count, plus fallback pixels.
 
-    The rules engine uses indexes and step counts, while the renderer needs
-    screen coordinates. This object is the translation table between those two
-    worlds. It is immutable so tests, AI, and drawing code can all share it
-    without worrying that one layer will move the board underneath another.
+    The rules engine works in indexes and step counts: where each seat starts,
+    which squares are safe, how long a lap is, and where the home lane begins.
+    This object owns those numbers. It is immutable so tests, AI, and drawing
+    code can all share it without worrying that one layer will move the board
+    underneath another.
+
+    The pixel fields (``track_positions``, ``home_lanes``, ``yard_positions``,
+    ``center``, ``radius``) describe a plain regular polygon. They are only the
+    headless fallback for code that runs without a renderer, such as the
+    shell's animation targets before a ``BoardRenderer`` exists. Every
+    on-screen coordinate the player actually sees comes from
+    ``board_render.DisplayLayout`` instead.
     """
 
     total_players: int
@@ -37,6 +51,12 @@ class BoardLayout:
         A standard four-player Ludo board has four repeated arms. The five-
         and six-player versions keep that idea by giving every player a
         13-cell segment on the outer track and a 6-cell home lane.
+
+        Seat ``p`` starts on track index ``p * SEGMENT_LENGTH``, and its star
+        safe square sits 8 cells further along the track.
+
+        Raises:
+            ValueError: For any player count other than 4, 5 or 6.
         """
 
         if total_players not in (4, 5, 6):
@@ -72,6 +92,8 @@ class BoardLayout:
             yard_positions.append(tuple(_yard_cluster(vertices[player_index], center)))
 
         start_indices = tuple(player * SEGMENT_LENGTH for player in range(total_players))
+        # ``% track_length`` wraps the last seat's star back to the beginning
+        # of the circular track if it would run past the end.
         safe_indices = tuple(
             (player * SEGMENT_LENGTH + 8) % (total_players * SEGMENT_LENGTH)
             for player in range(total_players)
@@ -95,28 +117,63 @@ class BoardLayout:
         return self.total_players * SEGMENT_LENGTH
 
     @property
-    def finish_steps(self) -> int:
-        """Relative step value that means a token is fully home."""
+    def lap_length(self) -> int:
+        """Number of shared-track cells one token visits before its home column.
 
-        return self.track_length + HOME_LENGTH - 1
+        Beginner note: a classic board has 52 shared squares, but a token
+        never lands on the square just behind its own start. It turns into
+        its home column from the square before that, so one lap is
+        ``track_length - 1`` cells (51 on the four-player board). Every rule
+        that asks "is this token still on the shared track?" uses this
+        number.
+        """
+
+        return self.track_length - 1
+
+    @property
+    def finish_steps(self) -> int:
+        """Relative step value that means a token is fully home.
+
+        Steps ``0 .. lap_length - 1`` are on the shared track and the next
+        ``HOME_LENGTH`` steps walk the home lane, so the last lane cell (the
+        finish) is ``lap_length + HOME_LENGTH - 1``.
+        """
+
+        return self.lap_length + HOME_LENGTH - 1
 
     def track_index(self, player_index: int, steps: int) -> int | None:
-        """Return the absolute main-track index for ``steps`` or ``None`` in home."""
+        """Return the absolute main-track index for ``steps`` or ``None`` off the lap.
 
-        if steps < 0 or steps >= self.track_length:
+        Beginner note: the track is a circle, so the seat's start index plus
+        its steps is wrapped with ``%`` (modulo). For example, on a 52-cell
+        track a seat starting at index 39 that has walked 20 steps is on
+        index ``(39 + 20) % 52 == 7``. Yard tokens (``steps < 0``) and tokens
+        in the home lane have no shared index, so they return ``None``.
+        """
+
+        if steps < 0 or steps >= self.lap_length:
             return None
         return (self.start_indices[player_index] + steps) % self.track_length
 
     def home_lane_index(self, steps: int) -> int | None:
-        """Return the lane cell index for home-lane progress."""
+        """Return the lane cell index for home-lane progress.
 
-        if steps < self.track_length:
+        Returns 0 for the first lane cell up to ``HOME_LENGTH - 1`` for the
+        finish, or ``None`` when ``steps`` is not in the home lane.
+        """
+
+        if steps < self.lap_length:
             return None
-        lane_index = steps - self.track_length
+        lane_index = steps - self.lap_length
         return lane_index if 0 <= lane_index < HOME_LENGTH else None
 
     def position_for(self, player_index: int, steps: int, token_index: int = 0) -> Point:
-        """Return a drawing coordinate for a token."""
+        """Return a drawing coordinate for a token.
+
+        This uses the fallback polygon pixels described on the class, not the
+        on-screen ``DisplayLayout``. ``token_index`` picks which of the yard's
+        parking spots a yard token uses; it is ignored elsewhere.
+        """
 
         if steps < 0:
             return self.yard_positions[player_index][token_index % len(self.yard_positions[player_index])]
@@ -129,9 +186,16 @@ class BoardLayout:
         return self.home_lanes[player_index][lane_index]
 
     def steps_to_reach(self, player_index: int, absolute_track_index: int) -> int:
-        """Return the owning-player-relative progress for a track index."""
+        """Return the owning-player-relative progress for a track index.
 
-        return (absolute_track_index - self.start_indices[player_index]) % self.track_length
+        Raises ``ValueError`` for the seat's skipped corner (the cell just
+        behind its own start), because that seat's lap never visits it.
+        """
+
+        steps = (absolute_track_index - self.start_indices[player_index]) % self.track_length
+        if steps >= self.lap_length:
+            raise ValueError("this seat's lap skips the cell just behind its start")
+        return steps
 
     def previous_index(self, absolute_track_index: int, distance: int) -> int:
         """Walk backward around the circular track by ``distance`` cells."""
@@ -139,7 +203,11 @@ class BoardLayout:
         return (absolute_track_index - distance) % self.track_length
 
     def is_safe_index(self, absolute_track_index: int | None) -> bool:
-        """Return True for start squares and star safe squares."""
+        """Return True for start squares and star safe squares.
+
+        ``None`` (a home-lane or yard position) is not a shared square, so it
+        is reported as not safe; callers check for ``None`` separately.
+        """
 
         if absolute_track_index is None:
             return False
@@ -147,7 +215,13 @@ class BoardLayout:
 
 
 def _regular_polygon(sides: int, center: Point, radius: float) -> list[Point]:
-    """Return screen coordinates for a regular polygon's vertices."""
+    """Return screen coordinates for a regular polygon's vertices.
+
+    Beginner note: the vertices are spaced evenly around a circle with
+    ``cos`` and ``sin``. ``math.tau`` is a full turn (2 * pi radians), so
+    vertex ``i`` sits ``i / sides`` of the way around. Screen y grows
+    downward, so increasing angles go clockwise on screen.
+    """
 
     cx, cy = center
     # Start at the top for a board that reads naturally on screen.
@@ -175,7 +249,11 @@ def _lerp(start: Point, end: Point, amount: float) -> Point:
 
 
 def _yard_cluster(vertex: Point, center: Point) -> list[Point]:
-    """Return four token parking spots outside one player's corner."""
+    """Return four token parking spots outside one player's corner.
+
+    The spots form a 2x2 square pushed 72 px outward from the polygon corner
+    (away from ``center``) and are spaced 40 px apart.
+    """
 
     vx, vy = vertex
     cx, cy = center

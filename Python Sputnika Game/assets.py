@@ -1,9 +1,12 @@
-"""Procedural art, fonts, background generation, and placeholder sounds.
+"""Procedural art, fonts, background generation, and the sound bank.
 
 The goal of this file is to keep the project self-contained:
 - no external images are required,
 - no external sound files are required,
 - the rest of the game can request ready-to-use surfaces by tier.
+
+The sounds themselves are synthesised by `audio.py` from the recipes in
+`settings.py`; this file only builds the bank the game plays them from.
 
 Beginner note:
 - "Procedural" means the game draws or generates assets in code at runtime.
@@ -15,16 +18,18 @@ from __future__ import annotations
 
 import math
 import random
-from array import array
 
 import pygame
 
+from audio import SoundBank
 from settings import (
     BACKGROUND_STAR_COUNT,
     BG_BOTTOM,
     BG_TOP,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SFX_COOLDOWNS,
+    SFX_RECIPES,
     SOFT_WHITE,
     TIERS,
     WHITE,
@@ -33,81 +38,48 @@ from settings import (
 )
 
 
-class SoundBank:
-    """Creates and stores short procedural sounds used by the game."""
+def _blend_onto(surface: pygame.Surface, draw) -> None:
+    """Call `draw(layer)` on a fresh transparent layer, then blend it onto `surface`.
 
-    def __init__(self) -> None:
-        # If the mixer failed to initialize, the game still runs silently.
-        self.enabled = pygame.mixer.get_init() is not None
-        self.sounds: dict[str, pygame.mixer.Sound] = {}
-        if not self.enabled:
-            return
-
-        try:
-            # Build a small sound palette from pure generated tones.
-            # Different frequency combinations make each event type sound distinct.
-            self.sounds["drop"] = self._make_tone([280, 420], 0.08, 0.35)
-            self.sounds["merge"] = self._make_tone([420, 560, 760], 0.14, 0.32)
-            self.sounds["big_merge"] = self._make_tone([320, 480, 720, 980], 0.22, 0.34)
-            self.sounds["button"] = self._make_tone([540, 780], 0.06, 0.28)
-            self.sounds["game_over"] = self._make_tone([300, 220, 160], 0.36, 0.34)
-            self.sounds["record"] = self._make_tone([520, 660, 880, 1200], 0.22, 0.34)
-            # A tense low double-tone used for the escalating danger warning beep.
-            self.sounds["warning"] = self._make_tone([196, 262], 0.11, 0.3)
-        except pygame.error:
-            # Any mixer/build error disables sound cleanly instead of crashing.
-            self.enabled = False
-            self.sounds.clear()
-
-    def play(self, name: str, volume: float = 1.0) -> None:
-        """Play one named sound if audio is available."""
-        if not self.enabled:
-            return
-        sound = self.sounds.get(name)
-        if sound is None:
-            return
-        sound.set_volume(max(0.0, min(1.0, volume)))
-        sound.play()
-
-    def _make_tone(self, frequencies: list[float], duration: float, volume: float) -> pygame.mixer.Sound:
-        """Synthesize a short waveform directly into a pygame Sound object."""
-        mixer_state = pygame.mixer.get_init()
-        if mixer_state is None:
-            raise pygame.error("Mixer unavailable")
-
-        sample_rate, _, channels = mixer_state
-        sample_count = int(sample_rate * duration)
-        samples = array("h")
-        for index in range(sample_count):
-            # Convert the current sample index into seconds.
-            t = index / sample_rate
-
-            # Quick attack + exponential decay keeps the tone snappy and game-like.
-            envelope = min(1.0, index / max(1, int(sample_count * 0.06)))
-            envelope *= math.exp(-3.4 * index / sample_count)
-            value = 0.0
-            for harmonic, frequency in enumerate(frequencies, start=1):
-                # Blend several sine waves; later harmonics are quieter.
-                # This is a tiny version of building a richer musical timbre.
-                value += math.sin(math.tau * frequency * t) / harmonic
-            value *= volume * envelope
-
-            # Convert from a floating-point wave in roughly [-1, 1] to a signed
-            # 16-bit integer sample pygame's mixer can store.
-            sample = int(max(-1.0, min(1.0, value)) * 32767)
-            if channels == 2:
-                # Stereo would need two samples per moment; we copy the same
-                # value into both left and right channels.
-                samples.extend((sample, sample))
-            else:
-                samples.append(sample)
-        return pygame.mixer.Sound(buffer=samples.tobytes())
+    Beginner note:
+    - `pygame.draw` on an alpha surface *replaces* pixels, alpha included. A
+      translucent highlight drawn straight onto an opaque orb therefore makes
+      that patch of the orb see-through, like punching a hole in it.
+    - Drawing on a separate layer and blitting it blends the highlight on top
+      instead, leaving the orb underneath opaque.
+    """
+    layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+    draw(layer)
+    surface.blit(layer, (0, 0))
 
 
 class AssetLibrary:
-    """Caches procedural surfaces and exposes shared fonts and sounds."""
+    """Caches procedural surfaces and exposes shared fonts and sounds.
+
+    The game creates one `AssetLibrary` after pygame starts and passes it to
+    everything that draws. Expensive images (the background gradient, the
+    vignette, each tier's orb) are drawn once and reused every frame.
+
+    Attributes:
+        body_cache: Tier index to finished orb sprite, filled lazily by
+            `get_body_surface()`.
+        background: Full-screen gradient, nebulae and distant planets.
+        stars, sparkles: Fixed-seed tuples describing the twinkling points
+            that `draw_background()` animates each frame.
+        vignette: Full-screen overlay that darkens the corners.
+        sounds: The game's `audio.SoundBank`, built from `SFX_RECIPES`.
+        title_font ... tiny_font: pygame's built-in font at several sizes.
+
+    Beginner note:
+    - A pygame `Surface` is an off-screen image you can draw on. Drawing a
+      complex picture once onto a surface and then `blit`-ing (copying) it
+      each frame is far cheaper than redrawing all its shapes every frame.
+    - This class needs `pygame.init()` (for fonts and the mixer) to have run
+      before it is constructed.
+    """
 
     def __init__(self) -> None:
+        """Pre-build the background layers, sounds and fonts; orbs are built on demand."""
         # `body_cache` avoids redrawing every tier from scratch each frame.
         # Caching is important here because these body surfaces contain several
         # layered drawing operations and would be wasteful to rebuild constantly.
@@ -118,7 +90,7 @@ class AssetLibrary:
         self.stars = self._build_stars()
         self.sparkles = self._build_sparkles()
         self.vignette = self._build_vignette()
-        self.sounds = SoundBank()
+        self.sounds = SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
 
         # pygame's default built-in font is enough for this prototype.
         # Different sizes are stored here so callers can reuse them easily.
@@ -137,7 +109,21 @@ class AssetLibrary:
         return self.body_cache[tier]
 
     def draw_background(self, target: pygame.Surface, now: float, drift: pygame.Vector2 | None = None) -> None:
-        """Draw the static background plus twinkling moving stars."""
+        """Draw the static background plus twinkling moving stars.
+
+        Layers, back to front: the pre-built `background`, the small stars,
+        the larger sparkles, then the `vignette`. Stars and sparkles twinkle
+        by a sine wave of `now`, each with its own speed and phase.
+
+        Args:
+            target: Surface to draw on (normally the whole screen).
+            now: Animation clock in seconds.
+            drift: Optional offset that follows the mouse (the game passes
+                a small fraction of the cursor's distance from the playfield
+                centre). Stars shift by it scaled by their `depth`, which gives
+                a cheap parallax; positions wrap with `%` so stars that leave
+                one edge come back on the other.
+        """
         target.blit(self.background, (0, 0))
         drift = drift or pygame.Vector2()
         for x, y, size, speed, phase, depth in self.stars:
@@ -196,7 +182,20 @@ class AssetLibrary:
         scale: float = 1.0,
         alpha: int = 255,
     ) -> None:
-        """Draw a floating preview version of a tier icon."""
+        """Draw a floating preview version of a tier icon.
+
+        Used for the launcher orb and the sidebar's current/next previews. The cached
+        sprite is copied before changing its alpha so the shared cache entry is
+        never modified.
+
+        Args:
+            target: Surface to draw on.
+            tier: Which tier's sprite to show.
+            center: Where the sprite's centre goes, before the idle bob.
+            now: Animation clock; drives a small vertical bob.
+            scale: Size multiplier (1.0 is the in-game size).
+            alpha: Opacity from 0 (invisible) to 255 (solid).
+        """
         orb = self.get_body_surface(tier)
         if alpha != 255:
             orb = orb.copy()
@@ -214,7 +213,19 @@ class AssetLibrary:
         target.blit(orb, rect)
 
     def _build_background(self) -> pygame.Surface:
-        """Create the large static nebula background once."""
+        """Create the large static nebula background once.
+
+        The result is an opaque full-screen surface made of three layers:
+        a top-to-bottom colour gradient (`BG_TOP` to `BG_BOTTOM`), a few
+        soft nebula blobs, and four large dim "distant planets". The blobs
+        and planets are drawn on a transparent `cloud` layer first and then
+        blended onto the gradient in one blit.
+
+        Beginner note:
+        - `lerp_color(a, b, t)` mixes two colours: `t=0` gives `a`, `t=1`
+          gives `b`, values between give a blend. Doing that per row makes
+          a smooth gradient.
+        """
         surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         for y in range(SCREEN_HEIGHT):
             # Draw a vertical gradient one scan line at a time.
@@ -306,7 +317,30 @@ class AssetLibrary:
         return overlay
 
     def _build_body_surface(self, tier: int) -> pygame.Surface:
-        """Draw the full orb artwork for one tier onto a transparent surface."""
+        """Draw the full orb artwork for one tier onto a transparent surface.
+
+        The sprite is `2 * radius + 58` pixels square so glows, rays and
+        decorations can poke past the sphere without being clipped. Layers are
+        drawn back to front:
+
+        1. a soft outer glow of stacked circles;
+        2. light rays for the star-like icons (flare, sun, nova, crown);
+        3. a dark offset "shadow" disc and the main coloured disc;
+        4. lighter shading bands toward the upper-left (the light source);
+        5. a darker lower band so the orb reads as round;
+        6. highlight, soft shine and a small specular dot, then the outline;
+        7. a thin rim-light arc on the upper-left edge;
+        8. the tier's own decoration from `_decorate_body()`.
+
+        Translucent layers go through `_blend_onto()` so they blend on top
+        instead of punching see-through holes in the opaque orb.
+
+        Args:
+            tier: Index into `TIERS`.
+
+        Returns:
+            A new per-pixel-alpha surface; `get_body_surface()` caches it.
+        """
         info = TIERS[tier]
         radius = info.radius
 
@@ -316,11 +350,16 @@ class AssetLibrary:
         surface = pygame.Surface((size, size), pygame.SRCALPHA)
 
         # Outer glow makes higher-tier bodies feel more magical and valuable.
+        # These circles are drawn straight onto the surface, largest first, so
+        # each smaller circle *replaces* the pixels of the larger one under it
+        # and every 5 px ring keeps its own alpha. The alpha therefore grows as
+        # the rings shrink: the glow is strongest next to the orb and fades
+        # out to a faint outer edge.
         glow_alpha = 28 if tier >= 7 else 18
         for ring in range(5, 0, -1):
             pygame.draw.circle(
                 surface,
-                (*shade(info.color, 1.06), glow_alpha * ring),
+                (*shade(info.color, 1.06), glow_alpha * (6 - ring)),
                 center,
                 radius + ring * 5,
             )
@@ -347,7 +386,10 @@ class AssetLibrary:
             band_radius = int(radius * (1.0 - band * 0.11))
             band_center = center - pygame.Vector2(radius * (0.08 + band * 0.05), radius * (0.10 + band * 0.05))
             band_color = (*shade(info.color, 1.04 + band * 0.035), max(18, 72 - band * 13))
-            pygame.draw.circle(surface, band_color, band_center, band_radius)
+            _blend_onto(
+                surface,
+                lambda layer, c=band_color, p=band_center, r=band_radius: pygame.draw.circle(layer, c, p, r),
+            )
 
         # A lower shadow band helps the orb read as round rather than flat.
         lower_shadow = pygame.Surface((size, size), pygame.SRCALPHA)
@@ -363,18 +405,29 @@ class AssetLibrary:
         highlight_center = center - pygame.Vector2(radius * 0.25, radius * 0.30)
         pygame.draw.circle(surface, shade(info.color, 1.11), highlight_center, int(radius * 0.68))
         soft_center = center - pygame.Vector2(radius * 0.40, radius * 0.44)
-        pygame.draw.circle(surface, (*SOFT_WHITE, 76), soft_center, int(radius * 0.35))
+        _blend_onto(
+            surface,
+            lambda layer: pygame.draw.circle(layer, (*SOFT_WHITE, 76), soft_center, int(radius * 0.35)),
+        )
         specular_center = center - pygame.Vector2(radius * 0.24, radius * 0.33)
-        pygame.draw.circle(surface, (*WHITE, 118), specular_center, max(3, int(radius * 0.09)))
+        _blend_onto(
+            surface,
+            lambda layer: pygame.draw.circle(layer, (*WHITE, 118), specular_center, max(3, int(radius * 0.09))),
+        )
         pygame.draw.circle(surface, shade(info.accent, 0.82), center, radius, width=3)
 
         # A thin rim light around the upper-left edge helps separate the body
         # from dark backgrounds and neighboring planets.
         rim_rect = pygame.Rect(0, 0, radius * 2 + 2, radius * 2 + 2)
         rim_rect.center = (center.x, center.y)
-        pygame.draw.arc(surface, (*WHITE, 160), rim_rect, math.pi * 0.95, math.pi * 1.62, 3)
+        _blend_onto(
+            surface,
+            lambda layer: pygame.draw.arc(layer, (*WHITE, 160), rim_rect, math.pi * 0.95, math.pi * 1.62, 3),
+        )
 
-        self._decorate_body(surface, center, radius, tier)
+        # Tier decorations include translucent details too, so they are drawn
+        # on their own layer and blended on top as one piece.
+        _blend_onto(surface, lambda layer: self._decorate_body(layer, center, radius, tier))
         return surface
 
     def _decorate_body(
@@ -384,7 +437,21 @@ class AssetLibrary:
         radius: int,
         tier: int,
     ) -> None:
-        """Add tier-specific visual details on top of the basic sphere."""
+        """Add tier-specific visual details on top of the basic sphere.
+
+        `TIERS[tier].icon` picks one recipe: specks for dust, craters for
+        rocky tiers, wave arcs for oceans, landmass blobs for continents, an
+        elliptical ring for gas giants, spiral arcs for storms, flare spots,
+        concentric sun rings, a nova diamond, or a crown star. Any icon not
+        listed gets no decoration.
+
+        Args:
+            surface: Transparent layer to draw on (blended onto the orb later).
+            center: Centre of the orb on that layer.
+            radius: Orb radius in pixels; every detail is sized from it.
+            tier: Index into `TIERS`. Random details use a fixed per-tier seed
+                so a tier always looks the same.
+        """
         info = TIERS[tier]
         accent = shade(info.accent, 1.0)
         dark = shade(info.accent, 0.78)

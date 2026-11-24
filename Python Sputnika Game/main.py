@@ -21,9 +21,12 @@ from pathlib import Path
 
 import pygame
 
+from audio import init_mixer, reserve_channels
+
 # `OrbitalOrchardGame` is the main "controller" object for the whole program.
 # It owns the window, the current scene, the list of bodies, and the game loop.
 from game import OrbitalOrchardGame
+from settings import MUSIC_CHANNEL_COUNT
 
 
 def _resource_path(name: str) -> Path:
@@ -39,21 +42,31 @@ def _resource_path(name: str) -> Path:
 
 
 def main() -> None:
-    """Create pygame, run the game loop, and clean up on exit."""
+    """Create pygame, run the game loop, and clean up on exit.
+
+    Steps: configure the audio mixer, start pygame, set the window icon if the
+    bundled PNG is present, then either run the normal game loop or, when the
+    `ORBITAL_ORCHARD_AUTOTEST` environment variable is set, play a short
+    hidden smoke-test round and return. `pygame.quit()` runs in a `finally`
+    block so pygame is shut down on every exit path, errors included.
+
+    Beginner note:
+    - `try` / `finally` guarantees the `finally` part runs whether the `try`
+      part finishes normally, returns early (as the autotest does), or
+      raises an exception.
+    """
     # pygame has a few subsystems that care about initialization order.
-    # Audio is the most sensitive one here, so we configure it first.
-    # `pre_init` asks pygame to use these audio settings when the mixer starts.
-    # Keeping this before `pygame.init()` gives more predictable sound latency.
-    #
-    # The numbers mean:
-    # - 22050: sample rate in Hz,
-    # - -16: signed 16-bit audio samples,
-    # - 1: mono audio,
-    # - 512: small-ish audio buffer for responsive sound playback.
-    pygame.mixer.pre_init(22050, -16, 1, 512)
+    # Audio is the most sensitive one here, so we configure it first:
+    # `init_mixer()` asks for the shared mixer format (22050 Hz, 16-bit,
+    # stereo, a small 512-sample buffer for responsive sound) BEFORE
+    # `pygame.init()` opens the mixer. See audio.py for the details.
+    init_mixer()
 
     # Initialize every pygame subsystem we use: display, mixer, fonts, input, etc.
     pygame.init()
+    # Now that the mixer is open, keep the music channels (calm and tense)
+    # away from effects.
+    reserve_channels(MUSIC_CHANNEL_COUNT)
     try:
         # Load the generated project icon if it is available.
         # This is optional on purpose: if the icon file is missing for any reason,
@@ -64,20 +77,24 @@ def main() -> None:
             with contextlib.suppress(pygame.error):
                 pygame.display.set_icon(pygame.image.load(str(icon_path)))
 
+        if os.environ.get("ORBITAL_ORCHARD_AUTOTEST"):
+            # Headless smoke test: play a short real round (four launches, about
+            # 120 frames) and exit. `persist=False` reads the saved progress but
+            # never writes it, so the test leaves the player's save untouched.
+            game = OrbitalOrchardGame(persist=False)
+            game.start_round()
+            for _ in range(4):
+                game.drop_current_body()
+                game.run(max_frames=30)
+            return
+
         # Build the main game object, which owns the window, world state, and loop.
         # From this point on, almost all interesting game behavior lives in that object.
         game = OrbitalOrchardGame()
 
-        # During headless verification we do not want the game to run forever,
-        # so an environment variable asks the game to stop after a few frames.
-        #
-        # In normal play this variable is not set, so `max_frames` becomes `None`
-        # and the game loop keeps running until the player closes the window.
-        max_frames = 6 if os.environ.get("ORBITAL_ORCHARD_AUTOTEST") else None
-
         # Hand control over to the game loop.
-        # `run()` will keep looping until the player quits or a test frame limit is reached.
-        game.run(max_frames=max_frames)
+        # `run()` will keep looping until the player closes the window.
+        game.run()
     finally:
         # Shut pygame down even if the loop exits because of an error.
         # This helps avoid "stuck" audio/display resources after crashes.

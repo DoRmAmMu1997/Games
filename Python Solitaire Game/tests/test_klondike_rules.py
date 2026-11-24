@@ -7,10 +7,12 @@ rules, scoring, undo snapshots, and the hint engine's judgement.
 
 from __future__ import annotations
 
+import random
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 GAME_DIR = Path(__file__).resolve().parents[1]
 if str(GAME_DIR) not in sys.path:
@@ -45,6 +47,8 @@ class DealTests(unittest.TestCase):
     """The standard Klondike opening layout."""
 
     def setUp(self) -> None:
+        """Deal a fresh game whose score file lives in a throwaway folder."""
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.game = make_game(self.tmp.name)
@@ -86,11 +90,26 @@ class DealTests(unittest.TestCase):
         self.assertEqual(self.game.waste, [])
         self.assertTrue(all(not card.face_up for card in self.game.stock))
 
+    def test_same_seed_deals_the_same_board(self) -> None:
+        """Two games given equally seeded RNGs deal identical tableaux and stocks."""
+
+        def deal(seed: int) -> tuple[list, list]:
+            """Deal one game from a seeded RNG and return its tableau and stock."""
+            game = KlondikeGame(str(Path(self.tmp.name) / "seeded.json"), rng=random.Random(seed))
+            tableau = [[(card.suit, card.rank) for card in column] for column in game.tableau]
+            stock = [(card.suit, card.rank) for card in game.stock]
+            return tableau, stock
+
+        self.assertEqual(deal(2026), deal(2026))
+        self.assertNotEqual(deal(2026), deal(2027))
+
 
 class MoveRuleTests(unittest.TestCase):
     """Tableau and foundation placement legality."""
 
     def setUp(self) -> None:
+        """Start each test from an empty board in a throwaway folder, ready to be hand-crafted."""
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.game = make_game(self.tmp.name)
@@ -139,6 +158,30 @@ class MoveRuleTests(unittest.TestCase):
             self.game.score, self.game.FOUNDATION_POINTS + self.game.REVEAL_POINTS
         )
 
+    def test_foundation_round_trips_are_score_neutral(self) -> None:
+        """Pulling a card off a foundation gives back its 10 points (D4).
+
+        Without the refund a player could farm points forever by moving the
+        same card down to the tableau and back up again.
+        """
+
+        hearts = FOUNDATION_SUITS.index("hearts")
+        self.game.foundations[hearts] = [Card("hearts", rank, True) for rank in range(1, 6)]
+        self.game.tableau[0] = [Card("spades", 6, face_up=True)]
+        self.game.score = 40
+        high_score = self.game.high_score
+
+        for _ in range(50):
+            down_move = self.game.selection_from_foundation(hearts)
+            assert down_move is not None
+            self.assertTrue(self.game.move_selection_to_tableau(down_move, 0))
+            up_move = self.game.selection_from_tableau(0, 1)
+            assert up_move is not None
+            self.assertTrue(self.game.move_selection_to_foundation(up_move, hearts))
+
+        self.assertEqual(self.game.score, 40)
+        self.assertEqual(self.game.high_score, max(high_score, 40))
+
     def test_has_won_requires_full_foundations(self) -> None:
         """The win check demands 13 cards on all four foundations."""
 
@@ -148,10 +191,102 @@ class MoveRuleTests(unittest.TestCase):
         self.assertTrue(self.game.has_won())
 
 
+class SaveFileTests(unittest.TestCase):
+    """Damaged or wrong-shaped score files load as zeros instead of crashing (D6)."""
+
+    def setUp(self) -> None:
+        """Create a temporary folder to hold the hand-written score files."""
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_wrong_shaped_saves_load_as_zeros(self) -> None:
+        """Every malformed file below loads a zero high score, wins and losses."""
+
+        bad_files = [
+            "[]",
+            "null",
+            '"abc"',
+            "7",
+            "Infinity",
+            "1e400",
+            "-Infinity",
+            "NaN",
+            "[" * 100000,
+            '{"high_score": Infinity, "wins": 1e400, "losses": -Infinity}',
+            '{"high_score": NaN, "wins": [], "losses": null}',
+        ]
+        for index, text in enumerate(bad_files):
+            with self.subTest(save=text[:40]):
+                path = Path(self.tmp.name) / f"bad_{index}.json"
+                path.write_text(text, encoding="utf-8")
+                game = KlondikeGame(str(path), rng=random.Random(index))
+                self.assertEqual((game.high_score, game.wins, game.losses), (0, 0, 0))
+
+
+class ScoreSavingTests(unittest.TestCase):
+    """The score file is rewritten only when the high score rises (D8)."""
+
+    def setUp(self) -> None:
+        """Create a game whose best score so far is 100."""
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.game = make_game(self.tmp.name)
+        self.game.high_score = 100
+        self.game.score = 0
+
+    def test_points_below_the_record_do_not_write(self) -> None:
+        """Ordinary scoring under the high score never touches the disk."""
+
+        with mock.patch.object(self.game, "save_high_score") as save:
+            for _ in range(9):
+                self.game.add_score(10)
+
+        save.assert_not_called()
+        self.assertEqual(self.game.score, 90)
+
+    def test_crossing_the_record_writes_exactly_once(self) -> None:
+        """Passing the high score saves it once, at the moment it rises."""
+
+        self.game.score = 95
+        with mock.patch.object(self.game, "save_high_score") as save:
+            self.game.add_score(10)
+            self.game.add_score(-20)
+            self.game.add_score(10)
+
+        save.assert_called_once()
+        self.assertEqual(self.game.high_score, 105)
+
+
+class ErrorLogTests(unittest.TestCase):
+    """A failed save is written to error.log beside the score file (D9)."""
+
+    def setUp(self) -> None:
+        """Create a game whose score file lives in a temporary folder."""
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.game = make_game(self.tmp.name)
+
+    def test_failed_save_is_logged_to_error_log(self) -> None:
+        """An OSError during the save lands in error.log instead of crashing."""
+
+        with mock.patch("solitaire.os.replace", side_effect=OSError("disk full")):
+            self.game.save_high_score()
+
+        log_path = Path(self.tmp.name) / "error.log"
+        self.assertTrue(log_path.exists())
+        self.assertIn("disk full", log_path.read_text(encoding="utf-8"))
+        self.assertFalse((Path(self.tmp.name) / "save_error.log").exists())
+
+
 class UndoTests(unittest.TestCase):
     """Snapshot/restore powers the undo stack."""
 
     def setUp(self) -> None:
+        """Deal a fresh game whose score file lives in a throwaway folder."""
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.game = make_game(self.tmp.name)
@@ -174,6 +309,8 @@ class HintEngineTests(unittest.TestCase):
     """The hint pipeline: generate, filter, rank."""
 
     def setUp(self) -> None:
+        """Start each test from an empty board in a throwaway folder, ready to be hand-crafted."""
+
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.game = make_game(self.tmp.name)

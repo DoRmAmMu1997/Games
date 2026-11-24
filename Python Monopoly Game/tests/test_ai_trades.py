@@ -16,13 +16,14 @@ if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
 import ai
-from game import MonopolyGame
+from game import MonopolyGame, TradeOffer
 
 # The dark-blue colour group -- exactly two members.
 DARK_BLUE_LOW, DARK_BLUE_HIGH = 37, 39
 
 
 def make_game() -> MonopolyGame:
+    """Return a seeded four-seat game: a human in seat 0, AIs in seats 1-3."""
     return MonopolyGame(
         [("Human", True), ("Knox", False), ("P3", False), ("P4", False)],
         seed=3,
@@ -30,6 +31,8 @@ def make_game() -> MonopolyGame:
 
 
 class AITradeProposalTests(unittest.TestCase):
+    """The AI never offers or values a trade that swaps within one colour group."""
+
     def test_ai_does_not_propose_a_same_group_swap(self) -> None:
         """The AI must never give away a dark-blue tile to get the other one.
 
@@ -68,7 +71,7 @@ class AITradeProposalTests(unittest.TestCase):
         game.owners[DARK_BLUE_LOW] = ai_player.index
         game.owners[DARK_BLUE_HIGH] = human.index
 
-        swap = {
+        swap: TradeOffer = {
             "from": ai_player.index, "to": human.index,
             "give": {"props": [DARK_BLUE_LOW], "cash": 0, "jail": 0},
             "get": {"props": [DARK_BLUE_HIGH], "cash": 0, "jail": 0},

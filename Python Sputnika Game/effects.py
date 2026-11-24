@@ -13,7 +13,16 @@ from dataclasses import dataclass
 
 import pygame
 
-from settings import SCREEN_HEIGHT, SCREEN_WIDTH, SOFT_WHITE, WHITE
+from settings import (
+    POPUP_FADE_SHARE,
+    POPUP_LINE_HEIGHT,
+    POPUP_OUTLINE,
+    POPUP_STACK_WIDTH,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    SOFT_WHITE,
+    WHITE,
+)
 
 
 @dataclass(slots=True)
@@ -32,6 +41,8 @@ class Particle:
         """Move the particle forward and age it out."""
         self.life -= dt
         self.velocity.y += self.gravity * dt
+        # A small per-frame slowdown (air drag) so sprays ease out instead of
+        # flying at constant speed.
         self.velocity *= 0.985
         self.position += self.velocity * dt
 
@@ -64,6 +75,14 @@ class PopupText:
     color: tuple[int, int, int]
     life: float
     scale: float = 1.0
+    # How long the popup lives in total. Filled in from `life` when the popup
+    # is created, so the fade can be measured against the popup's own lifetime.
+    duration: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Remember the popup's full lifetime for the fade-out."""
+        if self.duration <= 0.0:
+            self.duration = self.life
 
     def update(self, dt: float) -> None:
         """Move upward gently while fading over time."""
@@ -72,10 +91,44 @@ class PopupText:
         self.velocity *= 0.92
 
 
+def popup_alpha(popup: PopupText) -> int:
+    """Return a popup's opacity: fully opaque at first, then fading to zero.
+
+    The popup stays at full strength until only `POPUP_FADE_SHARE` of its own
+    lifetime is left, then fades out smoothly. (Measuring every popup against
+    one shared lifetime made short score popups start already half faded.)
+    """
+    fade_window = popup.duration * POPUP_FADE_SHARE
+    if fade_window <= 0.0:
+        return 0
+    return int(255 * max(0.0, min(1.0, popup.life / fade_window)))
+
+
 class EffectsManager:
-    """Central place for creating, updating, and drawing temporary effects."""
+    """Central place for creating, updating, and drawing temporary effects.
+
+    The game calls the spawn helpers (`impact`, `merge`, `announce`, `combo`,
+    `reward_burst`) when something happens, then `update(dt)` and `draw()`
+    once per frame. Effects are fire-and-forget: each one counts its own
+    `life` down and is dropped once it reaches zero.
+
+    Attributes:
+        particles: Live spark dots from impacts and merges.
+        rings: Live expanding outline rings.
+        popups: Live floating texts (score gains, combos, announcements).
+        overlay: One reusable full-screen transparent surface that rings and
+            particles are drawn onto before it is blitted in a single step.
+        trauma: Screen-shake strength from 0 to 1. Spawners add to it,
+            `update()` lets it decay, and `camera_offset()` turns it into a
+            random jitter that the game adds to every world position.
+
+    Beginner note:
+    - Effects use the module-level `random` rather than the game's seeded
+      generator, because they are purely cosmetic and never change gameplay.
+    """
 
     def __init__(self) -> None:
+        """Start with no effects, no shake, and one cleared overlay surface."""
         # Separate lists keep each effect type easy to manage and debug.
         self.particles: list[Particle] = []
         self.rings: list[RingPulse] = []
@@ -88,6 +141,31 @@ class EffectsManager:
         # `trauma` is a common game-dev term for shake intensity.
         # Higher trauma means stronger camera shake.
         self.trauma = 0.0
+
+    def _add_popup(self, popup: PopupText) -> None:
+        """Add a popup, nudging it upward until it no longer overlaps another.
+
+        Cascades spawn several score and combo popups at almost the same spot
+        in one frame; without this they pile up into an unreadable smear.
+        Each popup is treated as a box `POPUP_LINE_HEIGHT * scale` tall; two
+        popups closer than `POPUP_STACK_WIDTH` sideways count as one column.
+
+        Beginner note:
+        - The new popup only ever moves *up*, so once it is above a popup it
+          can never collide with that one again. That guarantees the loop ends.
+        """
+        moved = True
+        while moved:
+            moved = False
+            for other in self.popups:
+                gap = (POPUP_LINE_HEIGHT * popup.scale + POPUP_LINE_HEIGHT * other.scale) / 2
+                same_column = abs(other.position.x - popup.position.x) < POPUP_STACK_WIDTH
+                if same_column and abs(other.position.y - popup.position.y) < gap:
+                    # One extra pixel keeps a real gap and guarantees progress
+                    # even when floating-point rounding lands exactly on the edge.
+                    popup.position.y = other.position.y - gap - 1.0
+                    moved = True
+        self.popups.append(popup)
 
     def add_shake(self, amount: float) -> None:
         """Increase the camera-shake amount, clamped to a safe maximum."""
@@ -119,7 +197,19 @@ class EffectsManager:
         self.add_shake(min(0.12, strength / 2600.0))
 
     def merge(self, position: pygame.Vector2, color: tuple[int, int, int], score_gain: int, target_tier: int) -> None:
-        """Create the bigger celebration effect used for successful merges."""
+        """Create the bigger celebration effect used for successful merges.
+
+        One merge spawns three things at `position`: a ring of particles flying
+        out in every direction, one expanding `RingPulse`, and a floating
+        `+score_gain` popup. All of them, plus the screen shake, grow with
+        `target_tier` so bigger merges feel weightier.
+
+        Args:
+            position: Where the merged body appears.
+            color: Tier colour used for particles and the ring.
+            score_gain: Points to show in the popup.
+            target_tier: Tier index of the newly created body.
+        """
         # Bigger tiers produce bigger bursts.
         burst_count = 16 + target_tier * 2
         for _ in range(burst_count):
@@ -149,7 +239,7 @@ class EffectsManager:
         )
 
         # Floating score text rewards the player immediately.
-        self.popups.append(
+        self._add_popup(
             PopupText(
                 text=f"+{score_gain}",
                 position=pygame.Vector2(position.x, position.y - 10.0),
@@ -163,7 +253,7 @@ class EffectsManager:
 
     def announce(self, text: str, position: pygame.Vector2) -> None:
         """Spawn a larger text popup for milestones such as reaching the top tier."""
-        self.popups.append(
+        self._add_popup(
             PopupText(
                 text=text,
                 position=pygame.Vector2(position),
@@ -177,7 +267,7 @@ class EffectsManager:
 
     def combo(self, count: int, position: pygame.Vector2) -> None:
         """Spawn a small popup celebrating a chain of quick back-to-back merges."""
-        self.popups.append(
+        self._add_popup(
             PopupText(
                 text=f"Combo x{count}",
                 position=pygame.Vector2(position.x, position.y - 34.0),
@@ -246,12 +336,33 @@ class EffectsManager:
         if self.trauma <= 0.0:
             return pygame.Vector2()
 
-        # Squaring trauma makes small values subtle while big values still feel punchy.
+        # The camera offset is re-randomised every frame, which reads as a
+        # jitter. Squaring trauma makes small values subtle while big values still feel punchy.
         amount = self.trauma * self.trauma * 16.0
         return pygame.Vector2(random.uniform(-amount, amount), random.uniform(-amount, amount))
 
     def draw(self, target: pygame.Surface, assets, camera_offset: pygame.Vector2) -> None:
-        """Render all effects on top of the playfield."""
+        """Render all effects on top of the playfield.
+
+        Rings and particles are drawn first onto the shared transparent
+        `overlay`, which is then blitted once. Popups are drawn afterwards,
+        each on its own small surface with a dark outline, so they appear above
+        every spark. Every position is shifted by `camera_offset` so effects
+        shake together with the bodies.
+
+        Args:
+            target: Surface to draw on.
+            assets: The `AssetLibrary`, used for its `body_font`.
+            camera_offset: Current screen-shake offset.
+
+        Beginner note:
+        - Colours with four numbers `(r, g, b, alpha)` only blend when drawn on
+          a surface that has per-pixel alpha (`pygame.SRCALPHA`). That is why
+          rings and particles go onto the overlay instead of straight onto the
+          opaque screen.
+        - `Surface.set_alpha()` fades a whole surface at once, which is how
+          each popup fades out as one piece.
+        """
         # Clear the reusable transparent overlay surface first.
         self.overlay.fill((0, 0, 0, 0))
 
@@ -279,15 +390,27 @@ class EffectsManager:
         target.blit(self.overlay, (0, 0))
 
         for popup in self.popups:
-            # Text popups are rendered after the overlay so they stay crisp.
-            # If we drew them onto the big transparent overlay first, they would
-            # look blurrier and would be harder to read.
-            alpha = int(max(0.0, min(1.0, popup.life / 1.4)) * 255)
-            base = assets.body_font.render(popup.text, True, popup.color)
+            # Text popups are rendered after the overlay so they sit on top of
+            # every spark, and each one is its own surface so it can be scaled
+            # and faded as a whole without affecting anything else.
+            # Each popup is built on its own alpha surface: a dark outline (the
+            # text stamped at small offsets all around) with the coloured text
+            # on top, so it stays readable over bright, busy orbs.
+            text = assets.body_font.render(popup.text, True, popup.color)
+            outline = assets.body_font.render(popup.text, True, POPUP_OUTLINE)
+            thickness = 2
+            base = pygame.Surface(
+                (text.get_width() + thickness * 2, text.get_height() + thickness * 2), pygame.SRCALPHA
+            )
+            for dx in (-thickness, 0, thickness):
+                for dy in (-thickness, 0, thickness):
+                    if dx or dy:
+                        base.blit(outline, (thickness + dx, thickness + dy))
+            base.blit(text, (thickness, thickness))
             if abs(popup.scale - 1.0) > 0.01:
                 width = max(1, int(base.get_width() * popup.scale))
                 height = max(1, int(base.get_height() * popup.scale))
                 base = pygame.transform.smoothscale(base, (width, height))
-            base.set_alpha(alpha)
+            base.set_alpha(popup_alpha(popup))
             center = (int(popup.position.x + camera_offset.x), int(popup.position.y + camera_offset.y))
             target.blit(base, base.get_rect(center=center))

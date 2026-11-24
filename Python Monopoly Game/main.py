@@ -5,8 +5,16 @@ screen to show, turns clicks into engine actions for human players, and steps
 the AI on a timer so a person can watch its moves.
 
 A headless self-test runs when the MONOPOLY_AUTOTEST environment variable is
-set: a full four-AI game is played in a hidden window for a few hundred
-frames, which exercises the engine, the AI and all the drawing code at once.
+set: a seeded four-AI game is played for up to 4000 frames with no AI delay
+(use the SDL dummy video driver to keep the window hidden), which exercises
+the engine, the AI and all the drawing code at once. It never writes the
+player's save or stats.
+
+Sound: ``audio.py`` synthesises every effect and the music; this shell plays
+them for the engine's events (``event_sounds``), token hops and button
+clicks, loops the swing tune, and ends each game with a win or lose jingle.
+Ctrl+M, or a Sound button, switches all sound off and on; the choice is
+saved as ``"sound"`` in options.json.
 """
 
 from __future__ import annotations
@@ -19,41 +27,110 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import pygame
 
 import ai
+import audio
 import board_render
 import ui
 from board_data import THEME_ORDER
-from game import MonopolyGame
+from game import MonopolyGame, TradeOffer
 from settings import (
     AI_TURN_DELAY_MS,
     BG,
     FPS,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_LOOP_SECONDS,
+    MUSIC_VOLUME,
+    OPTIONS_PATH,
     SAVE_DIR,
     SAVEGAME_PATH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SFX_COOLDOWNS,
+    SFX_RECIPES,
     STATS_PATH,
     TOKEN_HOP_SPEED,
     WINDOW_TITLE,
+    music_notes,
 )
 
-# Action-bar button slots: two columns by four rows inside the bottom panel.
-# The prompt text now sits in its own strip ABOVE the bar (drawn by
-# `ui.draw_action_bar`), so the first row of buttons can start at the very
-# top of the bar without ever covering the prompt.
-_BAR_COLS = (892, 1086)
-_BAR_ROWS = (700, 748, 796, 844)
-_BTN_W, _BTN_H = 182, 40
+
+class TradeDraft(TradeOffer, total=False):
+    """A human's in-progress trade offer plus the dialog's scroll offsets.
+
+    The engine only reads the `TradeOffer` keys; the two scroll offsets
+    remember how far each side's title list is scrolled in the dialog.
+    """
+
+    give_scroll: int
+    get_scroll: int
 
 
-def _bar_rect(slot: int):
-    """Return the rectangle for action-bar button number `slot` (0-7)."""
-    col = _BAR_COLS[slot % 2]
-    row = _BAR_ROWS[slot // 2]
-    return pygame.Rect(col, row, _BTN_W, _BTN_H)
+# Which effect (a name in settings.SFX_RECIPES) each engine event plays; see
+# game.EVENT_KINDS. "game_over" has no entry because the end of a game is
+# answered by the game-over jingle. A few mapped events are still skipped in
+# some frames so one moment never sounds twice; `event_sounds` decides that.
+EVENT_SOUNDS = {
+    "roll": "dice",
+    "doubles": "doubles",
+    "three_doubles_jail": "three_doubles",
+    "go_salary": "cha_ching",
+    "buy": "buy",
+    "rent": "rent",
+    "tax": "tax",
+    "card_chance": "card_chance",
+    "card_chest": "card_chest",
+    "go_to_jail": "jail",
+    "leave_jail": "leave_jail",
+    "build_house": "build_house",
+    "build_hotel": "build_hotel",
+    "sell_building": "sell",
+    "mortgage": "mortgage",
+    "unmortgage": "unmortgage",
+    "auction_start": "auction_start",
+    "auction_bid": "bid",
+    "auction_won": "gavel",
+    "trade_proposed": "trade_proposed",
+    "trade_accepted": "trade_accepted",
+    "trade_rejected": "trade_rejected",
+    "raise_funds": "raise_funds",
+    "bankrupt": "bankrupt",
+}
+
+
+# The action-bar slot (bottom right) of the in-game Sound toggle. No turn
+# state uses more than seven slots, so this one is always free.
+SOUND_SLOT = 7
+
+
+def event_sounds(kinds: list[str]) -> list[str]:
+    """Return the effect names to play for one frame's engine events, oldest first.
+
+    A few events stay quiet so one moment never sounds twice: a third
+    double plays its own groan, which already ends in the jail bars (so
+    neither the doubles chime nor the jail clang repeats it), and doubles
+    rolled to escape Jail are heard as the release rather than the chime.
+
+    These checks look at the whole frame's list, not only at neighbours:
+    one `roll_dice` call queues all of its events together, so they always
+    arrive in the same frame. A Go to Jail card is not a third double, so
+    it still plays its card flip and then the clang.
+    """
+    sounds: list[str] = []
+    for kind in kinds:
+        name = EVENT_SOUNDS.get(kind)
+        if (
+            name is None
+            or (kind == "doubles" and ("three_doubles_jail" in kinds or "leave_jail" in kinds))
+            or (kind == "go_to_jail" and "three_doubles_jail" in kinds)
+        ):
+            continue
+        sounds.append(name)
+    return sounds
 
 
 def _resource_path(name: str) -> str:
@@ -89,13 +166,42 @@ def _atomic_write(path: Path, payload: dict) -> None:
 
 
 def load_stats() -> dict:
-    """Read lifetime stats, returning zeros if none are saved yet."""
+    """Read lifetime stats, returning zeros if none are saved yet.
+
+    A damaged stats file (not a JSON object, or numbers that are not
+    integers) is logged and read as zeros instead of crashing the game.
+    """
     try:
         data = json.loads(STATS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("stats.json is not a JSON object")
         return {"games": int(data.get("games", 0)),
                 "human_wins": int(data.get("human_wins", 0))}
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    except FileNotFoundError:
         return {"games": 0, "human_wins": 0}
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError) as error:
+        _log_error(error)
+        return {"games": 0, "human_wins": 0}
+
+
+def load_options() -> dict:
+    """Read the player's options, returning the defaults if none are saved yet.
+
+    Returns ``{"sound": bool}``. Sound stays on unless the file holds a
+    real JSON ``false``, so a damaged value can never silence the game; a
+    damaged file (not JSON, or not a JSON object) is logged and read as
+    the defaults instead of crashing the game.
+    """
+    try:
+        data = json.loads(OPTIONS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("options.json is not a JSON object")
+    except FileNotFoundError:
+        return {"sound": True}
+    except (OSError, ValueError) as error:
+        _log_error(error)
+        return {"sound": True}
+    return {"sound": data.get("sound", True) is not False}
 
 
 def save_game(game: MonopolyGame) -> None:
@@ -104,11 +210,23 @@ def save_game(game: MonopolyGame) -> None:
 
 
 def load_saved_game() -> MonopolyGame | None:
-    """Load the saved game, or return None if there is no valid save."""
+    """Load the saved game, or return None if there is no valid save.
+
+    A save that cannot be loaded is logged and renamed to
+    savegame.bad.json, so the Resume button disappears instead of failing
+    on every click (and the file is kept for anyone who wants to inspect it).
+    """
     try:
         data = json.loads(SAVEGAME_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("savegame.json is not a JSON object")
         return MonopolyGame.from_dict(data)
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as error:
+        _log_error(error)
+        with contextlib.suppress(OSError):
+            os.replace(SAVEGAME_PATH, SAVEGAME_PATH.with_name("savegame.bad.json"))
         return None
 
 
@@ -127,9 +245,35 @@ def _clear_saved_game() -> None:
 # The application
 # --------------------------------------------------------------------------
 class MonopolyApp:
-    """Owns the window and run loop and routes input to the game engine."""
+    """Owns the window and run loop and routes input to the game engine.
 
-    def __init__(self) -> None:
+    The app is the "thin shell" around `MonopolyGame`: it never applies a
+    rule itself. Each frame it reads input, advances animations and the AI,
+    rebuilds the buttons from the engine's state, and draws.
+
+    Key attributes:
+    - `screen`: which screen is showing ("setup", "playing" or "over").
+    - `game` / `renderer`: the engine and board renderer (None on setup).
+    - `mode`: the in-game interaction mode ("normal", "build", "sell",
+      "mortgage", "assets" or "trade"); the engine's `awaiting` says what
+      the rules need, `mode` only says which dialog a human has open.
+    - `trade`, `asset_position`, `message`: the open dialog's draft offer,
+      the selected title, and the prompt line's last notice.
+    - `token_px`, `token_route`, `token_hops`, `dice_show`, ...: animation
+      state, which only eases pixels toward what the engine already decided.
+    - `sounds`: the `audio.SoundBank` of effects (silent without a mixer).
+    - `music`: the `audio.MusicPlayer` looping the swing tune.
+    - `persist`: False in the self-test, so nothing is written to disk.
+    - `options`: the saved player options (`"sound"` on or off).
+    """
+
+    def __init__(self, persist: bool = True) -> None:
+        """Open the window and set up the setup screen.
+
+        `persist` False (the headless self-test) means the app never writes
+        or deletes the player's saved game or lifetime stats.
+        """
+        self.persist = persist
         # `SCALED` lets pygame stretch our logical 1280x880 surface to fit the
         # physical screen when we toggle into fullscreen (with letterboxing
         # for aspect-ratio mismatch). It also makes `event.pos` and
@@ -142,6 +286,14 @@ class MonopolyApp:
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
         self.running = True
+        # Every effect is synthesised once here from the recipes in settings.
+        self.sounds = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
+        # The tune renders in a background thread; it starts playing on the
+        # first frame after it is ready (``music.update`` in ``_update``).
+        # `start` only records that music is wanted, so calling it this
+        # early is safe even though nothing has been rendered yet.
+        self.music = audio.MusicPlayer(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME)
+        self.music.start(MUSIC_FADE_IN_MS)
 
         # Screen state: "setup", "playing" or "over".
         self.screen = "setup"
@@ -161,11 +313,15 @@ class MonopolyApp:
 
         # In-game interaction state.
         self.mode = "normal"   # "normal", "build", "sell", "mortgage", "assets", "trade"
-        self.trade: dict | None = None
+        self.trade: TradeDraft | None = None
         self.asset_position: int | None = None
         self.ai_timer = 0
+        self.fast_forward = False   # spectator: run the AI with no delay
         self.message = ""
         self.stats = load_stats()
+        self.options = load_options()
+        # A saved "sound": false silences the bank and the music from the first frame.
+        self._apply_sound_setting()
         self.buttons: list = []
         self._autosave_current: int | None = None   # last-seen turn marker
 
@@ -175,6 +331,9 @@ class MonopolyApp:
         self.token_px: dict = {}                 # player index -> (x, y) float pixels
         self.token_pos: dict = {}                # player index -> last-seen board space
         self.token_route: dict = {}              # player index -> pending waypoint pixels
+        # Player index -> pitch step of the token's next hop sound, or None
+        # while it slides (jail, long card jumps) instead of hopping.
+        self.token_hops: dict[int, int | None] = {}
         self.dice_show = (0, 0)                  # what the UI is currently drawing
         self.dice_anim_remaining_ms = 0          # >0 while the dice shuffle
         self.last_game_dice = (0, 0)             # used to spot a fresh roll
@@ -191,16 +350,47 @@ class MonopolyApp:
         self.mode = "normal"
         self.asset_position = None
         self.ai_timer = 0
+        self.fast_forward = False
         self.message = ""
         # Reset the visuals so the next frame places tokens / dice from scratch.
         self.token_px = {}
         self.token_pos = {}
         self.token_route = {}
+        self.token_hops = {}
         self.dice_show = (0, 0)
         self.dice_anim_remaining_ms = 0
         self.last_game_dice = (0, 0)
         # Autosave baseline: a save fires when the turn (current player) moves.
         self._autosave_current = game.current
+
+    @property
+    def sound_on(self) -> bool:
+        """True unless the player has switched sound off (Ctrl+M or a Sound button)."""
+        return bool(self.options["sound"])
+
+    def _toggle_sound(self) -> None:
+        """Switch all sound off or back on, and remember the choice in options.json.
+
+        Muting stops the music at once and blocks every effect; unmuting
+        resumes the music and plays a click so the player hears it worked.
+        A non-persisting app (the self-test) only changes it in memory: the
+        self-test must leave the player's own files exactly as it found them.
+
+        The choice lives in options.json under the save folder rather than in
+        stats.json, because the game-over screen rewrites stats.json with a
+        fixed set of keys and would drop it.
+        """
+        self.options["sound"] = not self.sound_on
+        self._apply_sound_setting()
+        if self.persist:
+            _atomic_write(OPTIONS_PATH, self.options)
+        if self.sound_on:
+            self.sounds.play("click")
+
+    def _apply_sound_setting(self) -> None:
+        """Pass the sound setting to the effects bank and the music player."""
+        self.sounds.muted = not self.sound_on
+        self.music.set_muted(not self.sound_on)
 
     def _require_game(self) -> MonopolyGame:
         """Return the active game on code paths that only run mid-game.
@@ -214,6 +404,12 @@ class MonopolyApp:
         assert game is not None, "no active game on this screen"
         return game
 
+    def _spectating(self) -> bool:
+        """True once no solvent human remains and the AIs play on alone."""
+        game = self.game
+        return (game is not None and game.phase == "playing"
+                and not any(p.is_human and not p.bankrupt for p in game.players))
+
     def _end_game(self) -> None:
         """Record the result and move to the end screen."""
         game = self._require_game()
@@ -221,14 +417,25 @@ class MonopolyApp:
         self.stats["games"] += 1
         if game.winner is not None and game.players[game.winner].is_human:
             self.stats["human_wins"] += 1
-        _atomic_write(STATS_PATH, self.stats)
-        _clear_saved_game()
+        if self.persist:
+            _atomic_write(STATS_PATH, self.stats)
+            _clear_saved_game()
 
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
     def run(self, max_frames: int | None = None) -> None:
-        """Run the game until the window is closed (or a frame limit is hit)."""
+        """Run the game until the window is closed (or a frame limit is hit).
+
+        `max_frames` is only given by the self-test; it also tells `_update`
+        to run the AI without pauses.
+
+        Beginner note:
+        - This is the classic game loop. Every pass handles all waiting input
+          events, updates the state, draws a whole new frame, and shows it
+          with `display.flip()`. `clock.tick(FPS)` sleeps just long enough
+          to hold the loop at FPS frames per second.
+        """
         frames = 0
         autotest = max_frames is not None
         while self.running:
@@ -238,18 +445,8 @@ class MonopolyApp:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self._handle_click(event.pos)
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
-                    # F11 toggles fullscreen. The SCALED flag set at startup
-                    # keeps logical coordinates intact, so we don't need to
-                    # remap anything ourselves.
-                    pygame.display.toggle_fullscreen()
-                elif event.type == pygame.KEYDOWN and self.screen == "playing":
-                    self._handle_shortcut(event.key)
-                elif (event.type == pygame.KEYDOWN and self.screen == "setup"
-                      and self.active_field is not None
-                      and not self.confirm_new_game):
-                    # Typing into a focused human-name box on the setup screen.
-                    self._type_into_name_field(event)
+                elif event.type == pygame.KEYDOWN:
+                    self._handle_keydown(event)
                 elif (event.type == pygame.MOUSEWHEEL
                       and self.mode == "trade" and self.trade is not None):
                     # Scroll whichever side of the trade dialog the cursor
@@ -263,21 +460,40 @@ class MonopolyApp:
                 break
 
     def _update(self, autotest: bool) -> None:
-        """Advance the game: animate visuals, then step the AI if it is its turn."""
+        """Advance the game: play sounds, animate visuals, then step the AI if it is its turn.
+
+        In order, once per frame: let the music player start the tune once it
+        has rendered (on every screen); play the sounds for everything the engine
+        reported since the last frame; switch to the end screen when the
+        game is over; autosave when the turn passes; move each token along
+        its queue of waypoints (tapping a hop sound at each space); run the
+        dice shuffle; then, if an AI must act, call `ai.take_action` once
+        its delay has passed. `autotest` skips the delay and the wait for
+        animations.
+        """
+        self.music.update()
         if self.screen != "playing" or self.game is None:
             return
         game = self.game
+        # Sounds first, so the move that ended the game (say, a bankruptcy)
+        # is still heard before the jingle.
+        self._play_event_sounds()
         if game.phase == "game_over":
+            # `_end_game` leaves the "playing" screen, so the early return
+            # above makes the jingle play exactly once.
             self._end_game()
+            self._play_game_over_jingle()
             return
 
         # Autosave once per completed turn: the engine advances `current` to
-        # the next player when a turn ends, for both humans and AI.
+        # the next player when a turn ends, for both humans and AI. Not while
+        # spectating: the humans are out, so there is nothing to resume.
         if game.current != self._autosave_current:
             self._autosave_current = game.current
-            save_game(game)
+            if self.persist and not self._spectating():
+                save_game(game)
 
-        elapsed = self.clock.get_time()
+        elapsed = self.clock.get_time()     # milliseconds since the last frame
 
         # Token hopping: after a roll a token visits every space it passes,
         # like a physical token counting out the dice. Jumps that are not a
@@ -295,6 +511,7 @@ class MonopolyApp:
             idx = player.index
             if player.position != self.token_pos.get(idx):
                 old = self.token_pos.get(idx, player.position)
+                # Spaces travelled clockwise; `% 40` handles passing GO.
                 forward = (player.position - old) % 40
                 if 1 <= forward <= 12:
                     # A dice roll moves at most 12 spaces, so walk them all.
@@ -302,9 +519,11 @@ class MonopolyApp:
                         board_render.token_center((old + step) % 40, idx)
                         for step in range(1, forward + 1)
                     ]
+                    self.token_hops[idx] = 0
                 else:
                     self.token_route[idx] = [
                         board_render.token_center(player.position, idx)]
+                    self.token_hops[idx] = None
                 self.token_pos[idx] = player.position
             target = board_render.token_center(player.position, idx)
             current = self.token_px[idx]
@@ -315,12 +534,15 @@ class MonopolyApp:
             while route and remaining > 0:
                 head = route[0]
                 dx, dy = head[0] - current[0], head[1] - current[1]
-                length = (dx * dx + dy * dy) ** 0.5
+                length = (dx * dx + dy * dy) ** 0.5     # straight-line distance
                 if length <= remaining:
                     current = head
                     route.pop(0)
                     remaining -= length
+                    self._play_hop(idx)
                 else:
+                    # Not reached this frame: step `remaining` pixels toward
+                    # the waypoint (dx / length is the unit direction).
                     current = (current[0] + dx / length * remaining,
                                current[1] + dy / length * remaining)
                     remaining = 0
@@ -341,19 +563,90 @@ class MonopolyApp:
             self.dice_show = game.dice
 
         # AI driver: pace it, and pause while an animation is still playing.
+        # The self-test and a spectator's fast-forward skip both waits.
         actor = game.players[game.actor()]
         if actor.is_human:
             return                       # wait for the human's clicks
-        if not autotest and (animating_tokens or self.dice_anim_remaining_ms > 0):
+        hurry = autotest or self.fast_forward
+        if not hurry and (animating_tokens or self.dice_anim_remaining_ms > 0):
             return
         self.ai_timer += elapsed
-        if autotest or self.ai_timer >= AI_TURN_DELAY_MS:
+        if hurry or self.ai_timer >= AI_TURN_DELAY_MS:
             self.ai_timer = 0
             ai.take_action(game)
+
+    def _play_event_sounds(self) -> None:
+        """Drain the engine's event queue and play each event's effect.
+
+        Draining once per frame means every event is heard exactly once,
+        whether a human click or an AI step caused it. The bank's cooldowns
+        (`SFX_COOLDOWNS`) thin out a burst of the same effect, for example
+        when the self-test runs an AI action on every frame.
+        """
+        game = self._require_game()
+        for name in event_sounds(game.drain_events()):
+            self.sounds.play(name)
+
+    def _play_game_over_jingle(self) -> None:
+        """Fade the music out and play the win or lose jingle for the finished game.
+
+        The win jingle plays when a human won, and also when no human played
+        at all (an all-AI table); a computer beating the humans, or a game
+        nobody survived, gets the gentle lose jingle.
+        """
+        game = self._require_game()
+        self.music.stop(MUSIC_GAME_OVER_FADE_MS)
+        humans = [player for player in game.players if player.is_human]
+        won = not humans or (game.winner is not None and game.players[game.winner].is_human)
+        self.sounds.play("win" if won else "lose")
+
+    def _play_hop(self, idx: int) -> None:
+        """Tap the hop sound for a token that just reached a space, one step higher each time.
+
+        Slides (to Jail, or a long card jump) are silent here: their events
+        have their own sounds.
+
+        Hop n of a move asks the bank for pitch step n, which picks the
+        pre-rendered variant "hop@n" (one F major degree higher per space;
+        see `HOP_PITCH_STEPS` in settings.py), so the player can hear the
+        count. Step 0 has no "@0" variant and plays the plain "hop".
+        """
+        step = self.token_hops.get(idx)
+        if step is not None:
+            self.sounds.play("hop", pitch_step=step)
+            self.token_hops[idx] = step + 1
 
     # ------------------------------------------------------------------
     # Input
     # ------------------------------------------------------------------
+    def _handle_keydown(self, event: pygame.event.Event) -> None:
+        """Route one key press: Ctrl+M, F11, turn shortcuts or name typing.
+
+        Ctrl+M switches sound off and on, on every screen (even while a
+        name box has focus, so plain M still types there and still means
+        Mortgage on a turn).
+
+        Beginner note:
+        - `event.mod` is a bit mask of the modifier keys held down with the
+          key. `& pygame.KMOD_CTRL` is non-zero when either Ctrl key is held,
+          so the test reads "M pressed while Ctrl is down".
+        - Ctrl+M is checked first so it wins over the screen-specific
+          handlers below, which would otherwise treat it as a plain M.
+        """
+        if event.key == pygame.K_m and event.mod & pygame.KMOD_CTRL:
+            self._toggle_sound()
+        elif event.key == pygame.K_F11:
+            # F11 toggles fullscreen. The SCALED flag set at startup
+            # keeps logical coordinates intact, so we don't need to
+            # remap anything ourselves.
+            pygame.display.toggle_fullscreen()
+        elif self.screen == "playing":
+            self._handle_shortcut(event.key)
+        elif (self.screen == "setup" and self.active_field is not None
+              and not self.confirm_new_game):
+            # Typing into a focused human-name box on the setup screen.
+            self._type_into_name_field(event)
+
     def _handle_click(self, pos: tuple[int, int]) -> None:
         """Route a left-click to the right handler for the current screen."""
         if self.screen == "setup":
@@ -363,8 +656,10 @@ class MonopolyApp:
         elif self.screen == "playing":
             game = self._require_game()
             actor = game.players[game.actor()]
-            if not actor.is_human:
-                return                   # ignore clicks during AI turns
+            if not actor.is_human and not self._spectating():
+                # During AI turns only the Sound toggle is on screen.
+                self._click_button(pos)
+                return
             if self.mode in ("build", "sell", "mortgage"):
                 if not self._click_button(pos):      # the "Done" button
                     self._click_board(pos)
@@ -376,9 +671,10 @@ class MonopolyApp:
                 self._click_button(pos)
 
     def _click_button(self, pos: tuple[int, int]) -> bool:
-        """Check the current buttons; act on the first one hit."""
+        """Check the current buttons; act on the first one hit (with a click sound)."""
         for button in self.buttons:
             if button.hit(pos):
+                self.sounds.play("click")
                 self._on_button(button.key)
                 return True
         return False
@@ -412,19 +708,25 @@ class MonopolyApp:
             self.name_fields[i] += event.unicode
 
     def _click_board(self, pos: tuple[int, int]) -> None:
-        """In build/sell/mortgage mode, act on the board space clicked."""
+        """In build/sell/mortgage mode, act on the board space clicked.
+
+        A refused click shows the engine's reason in the prompt (until the
+        next click or Done), instead of silently doing nothing.
+        """
         game = self._require_game()
         for position in range(40):
             if board_render.space_rect(position).collidepoint(pos):
+                player = game.players[game.actor()]
                 if self.mode == "build":
-                    game.build_house(position)
+                    action, done = "build", game.build_house(position)
                 elif self.mode == "sell":
-                    game.sell_house(position)
-                elif self.mode == "mortgage":
-                    if position in game.mortgaged:
-                        game.unmortgage(position)
-                    else:
-                        game.mortgage(position)
+                    action, done = "sell", game.sell_house(position)
+                elif position in game.mortgaged:
+                    action, done = "unmortgage", game.unmortgage(position)
+                else:
+                    action, done = "mortgage", game.mortgage(position)
+                self.message = "" if done else str(
+                    game.asset_actions_for(player, position)[action]["reason"])
                 return
 
     def _click_trade(self, pos: tuple[int, int]) -> None:
@@ -435,10 +737,9 @@ class MonopolyApp:
         if trade is None:
             return
         layout = ui.trade_layout(self._require_game(), trade)
-        for key, side in (("give_rows", "give"), ("get_rows", "get")):
+        for key, props in (("give_rows", trade["give"]["props"]), ("get_rows", trade["get"]["props"])):
             for row, position in layout[key]:
                 if row.collidepoint(pos):
-                    props = trade[side]["props"]
                     if position in props:
                         props.remove(position)
                     else:
@@ -450,24 +751,39 @@ class MonopolyApp:
 
         The button keys form disjoint families (setup screen, turn actions,
         the asset manager, and the trade dialog), so each family lives in its
-        own handler and the first one that recognises the key wins.
+        own handler and the first one that recognises the key wins. Quit and
+        New Game come first (after the Sound toggle, which works on every
+        screen): they also appear with no game in progress (the setup
+        screen), where the game-dependent handlers cannot run.
         """
+        if key == "toggle_sound":
+            self._toggle_sound()
+            return
+        if key == "new_game":
+            self.screen = "setup"
+            self.game = None
+            # The tune was faded out under the game-over jingle; bring it back.
+            self.music.start(MUSIC_FADE_IN_MS)
+            return
+        if key == "quit":
+            self.running = False
+            return
         if self._on_setup_button(key):
             return
         if self._on_turn_button(key):
             return
         if self._on_asset_button(key):
             return
-        if self._on_trade_button(key):
-            return
-        if key == "new_game":
-            self.screen = "setup"
-            self.game = None
-        elif key == "quit":
-            self.running = False
+        self._on_trade_button(key)
 
     def _on_setup_button(self, key: str) -> bool:
-        """Handle setup-screen controls; True if `key` belonged here."""
+        """Handle setup-screen controls; True if `key` belonged here.
+
+        The steppers wrap around their option lists (humans are clamped to
+        1-4 instead). Start asks for confirmation first when a saved game
+        exists, because starting a new game will overwrite it at the next
+        autosave. Resume loads the save, if it is still valid.
+        """
         if key == "humans_down":
             self.human_count = max(1, self.human_count - 1)
         elif key == "humans_up":
@@ -500,8 +816,19 @@ class MonopolyApp:
         return True
 
     def _on_turn_button(self, key: str) -> bool:
-        """Handle in-turn actions and auctions; True if `key` belonged here."""
+        """Handle in-turn actions and auctions; True if `key` belonged here.
+
+        Most keys call one engine action directly (roll, buy, bid, pay, ...).
+        "build", "sell" and "mortgage" only switch the board-click mode; the
+        engine is called when a space is then clicked. The rest leave the
+        game: "save_quit" saves and returns to setup, and "concede" (offered
+        once every human is bankrupt) records the result and does the same.
+        """
         game = self._require_game()
+        if key in ("roll", "jail_pay", "jail_card", "buy", "auction_decline", "end_turn",
+                   "bid", "pass", "pay_debts", "declare_bankruptcy"):
+            # A new engine action starts from a clean prompt.
+            self.message = ""
         if key == "roll":
             game.roll_dice()
         elif key == "jail_pay":
@@ -520,19 +847,34 @@ class MonopolyApp:
             self.mode = "mortgage"
         elif key == "done":
             self.mode = "normal"
+            self.message = ""
         elif key == "end_turn":
             game.end_turn()
         elif key == "save_quit":
-            save_game(game)
+            if self.persist:
+                save_game(game)
             self.screen = "setup"
             self.game = None
         elif key == "bid":
             auction = game.auction
             assert auction is not None, "bid button only exists during an auction"
+            # The same step as the AI's bids: 5% of list price, at least $10.
             step = max(10, game.board[auction["position"]].price // 20)
             game.auction_bid(auction["high_bid"] + step)
         elif key == "pass":
             game.auction_pass()
+        elif key == "pay_debts":
+            game.pay_debts()
+        elif key == "declare_bankruptcy":
+            game.declare_bankruptcy()
+        elif key == "fast_forward":
+            self.fast_forward = True
+        elif key == "concede":
+            # Leaving a game no human can win still counts as a game played
+            # (and not a human win); the save is cleared with it.
+            self._end_game()
+            self.screen = "setup"
+            self.game = None
         else:
             return False
         return True
@@ -561,7 +903,13 @@ class MonopolyApp:
         return True
 
     def _on_trade_button(self, key: str) -> bool:
-        """Handle the trade dialog; True if `key` belonged here."""
+        """Handle the trade dialog; True if `key` belonged here.
+
+        The steppers change the draft offer in `self.trade` ($50 per cash
+        step, one card per jail step). Propose hands the draft to the engine
+        and shows the engine's reason if it is refused. Accept and Reject
+        answer an incoming offer made to a human.
+        """
         game = self._require_game()
         if key == "trade":
             self._open_trade()
@@ -577,6 +925,14 @@ class MonopolyApp:
             self._adjust_trade_cash("get", 50)
         elif key == "get_cash_down":
             self._adjust_trade_cash("get", -50)
+        elif key == "give_jail_up":
+            self._adjust_trade_jail("give", 1)
+        elif key == "give_jail_down":
+            self._adjust_trade_jail("give", -1)
+        elif key == "get_jail_up":
+            self._adjust_trade_jail("get", 1)
+        elif key == "get_jail_down":
+            self._adjust_trade_jail("get", -1)
         elif key == "trade_propose":
             trade = self.trade
             assert trade is not None, "propose button only exists inside the dialog"
@@ -587,8 +943,10 @@ class MonopolyApp:
         elif key == "trade_cancel":
             self.mode = "normal"
         elif key == "trade_accept":
+            self.message = ""
             game.respond_trade(True)
         elif key == "trade_reject":
+            self.message = ""
             game.respond_trade(False)
         else:
             return False
@@ -632,9 +990,13 @@ class MonopolyApp:
         }
 
     def _open_assets(self) -> None:
-        """Open the title manager with the first owned title selected."""
+        """Open the title manager for the acting player, first title selected.
+
+        The actor is the current player, or a debtor raising funds (who may
+        not be the current player at all).
+        """
         game = self._require_game()
-        owned = sorted(game.properties_of(game.current_player))
+        owned = sorted(game.properties_of(game.players[game.actor()]))
         if not owned:
             self.message = "You do not own any titles yet."
             return
@@ -648,7 +1010,7 @@ class MonopolyApp:
             self.message = "Choose a title first."
             return
         game = self._require_game()
-        player = game.current_player
+        player = game.players[game.actor()]
         status = game.asset_actions_for(player, self.asset_position)[action]
         if not status["allowed"]:
             self.message = status["reason"]
@@ -672,12 +1034,13 @@ class MonopolyApp:
         trade["to"] = others[(current + step) % len(others)]
         trade["give"]["props"].clear()
         trade["get"]["props"].clear()
+        trade["get"]["jail"] = 0        # the new partner may hold no cards
         # A new partner usually has a different property list -- reset scroll
         # so the next dialog opens at the top of both columns.
         trade["give_scroll"] = 0
         trade["get_scroll"] = 0
 
-    def _adjust_trade_cash(self, side: str, delta: int) -> None:
+    def _adjust_trade_cash(self, side: Literal["give", "get"], delta: int) -> None:
         """Step the cash on one side of the in-progress trade offer."""
         game = self._require_game()
         trade = self.trade
@@ -686,6 +1049,19 @@ class MonopolyApp:
         idx = trade["from"] if side == "give" else trade["to"]
         cap = game.players[idx].cash
         trade[side]["cash"] = max(0, min(cap, trade[side]["cash"] + delta))
+
+    def _adjust_trade_jail(self, side: Literal["give", "get"], delta: int) -> None:
+        """Step the Get Out of Jail Free cards on one side of the offer.
+
+        The count stays between zero and the cards that side's player holds.
+        """
+        game = self._require_game()
+        trade = self.trade
+        if trade is None:
+            return
+        idx = trade["from"] if side == "give" else trade["to"]
+        cap = game.players[idx].jail_cards
+        trade[side]["jail"] = max(0, min(cap, trade[side]["jail"] + delta))
 
     def _scroll_trade(self, mouse_pos: tuple[int, int], wheel_dy: int) -> None:
         """Scroll one side of the trade dialog under the mouse cursor.
@@ -699,12 +1075,12 @@ class MonopolyApp:
             return
         game = self._require_game()
         panel = ui.trade_layout(game, trade)["panel"]
-        side = "give" if mouse_pos[0] < panel.centerx else "get"
-        owner_idx = trade["from"] if side == "give" else trade["to"]
+        on_give_side = mouse_pos[0] < panel.centerx
+        owner_idx = trade["from"] if on_give_side else trade["to"]
         owner = game.players[owner_idx]
         max_scroll = max(0, len(game.properties_of(owner))
                          - ui.TRADE_VISIBLE_ROWS)
-        key = f"{side}_scroll"
+        key: Literal["give_scroll", "get_scroll"] = "give_scroll" if on_give_side else "get_scroll"
         current = trade.get(key, 0)
         step = -1 if wheel_dy > 0 else 1
         trade[key] = max(0, min(current + step, max_scroll))
@@ -763,36 +1139,27 @@ class MonopolyApp:
             self._draw_playing(mouse)
 
     def _draw_playing(self, mouse: tuple[int, int]) -> None:
-        """Draw the board, side panel, action bar and any open dialog."""
+        """Draw the board, side panel, action bar and any open dialog.
+
+        The order matters, because later drawing covers earlier drawing:
+        the board and tokens, then the side panel, the last card, the dice
+        and the hover card, then the action bar, and finally at most one
+        modal dialog (auction, asset manager, trade builder or incoming
+        trade offer) over everything.
+        """
         game = self._require_game()
         renderer = self.renderer
         assert renderer is not None, "renderer exists whenever a game does"
         self.window.fill(BG)
 
-        # Yellow rings on the spaces the human can act on in board-click modes.
-        highlights: list = []
-        if self.mode == "build":
-            human = game.current_player
-            highlights = [pos for pos in range(40)
-                          if game.can_build(human, pos)]
-        elif self.mode == "mortgage":
-            human = game.current_player
-            highlights = [pos for pos in game.properties_of(human)
-                          if game.houses.get(pos, 0) == 0]
-        elif self.mode == "sell":
-            human = game.current_player
-            highlights = [pos for pos in game.properties_of(human)
-                          if game.can_sell_building(human, pos)]
-
         renderer.draw(self.window, game, self.fonts,
                       token_pixels=self.token_px,
-                      highlight_positions=highlights)
+                      highlight_positions=self._board_highlights())
         ui.draw_panel(self.window, self.fonts, game, mouse)
 
-        board_centre = (20 + (SCREEN_HEIGHT - 40) // 2, 20 + (SCREEN_HEIGHT - 40) // 2)
         ui.draw_center_card(self.window, self.fonts, game)
         if self.dice_show != (0, 0):
-            ui.draw_dice(self.window, self.fonts, self.dice_show, board_centre)
+            ui.draw_dice(self.window, self.fonts, self.dice_show)
         hovered = self._hovered_board_space(mouse)
         if hovered is not None:
             ui.draw_property_detail(self.window, self.fonts, game, hovered)
@@ -814,36 +1181,71 @@ class MonopolyApp:
             ui.draw_trade_response(self.window, self.fonts, game,
                                    self.buttons, mouse)
 
+    def _board_highlights(self) -> list[int]:
+        """Spaces the human can act on in the current board-click mode.
+
+        These get a yellow ring: buildable streets in build mode, titles
+        that can be mortgaged or lifted in mortgage mode, and sellable
+        streets in sell mode.
+        """
+        game = self._require_game()
+        human = game.players[game.actor()]
+        if self.mode == "build":
+            return [pos for pos in range(40) if game.can_build(human, pos)]
+        if self.mode == "mortgage":
+            return [pos for pos in game.properties_of(human)
+                    if game.can_mortgage(human, pos) or game.can_unmortgage(human, pos)]
+        if self.mode == "sell":
+            return [pos for pos in game.properties_of(human)
+                    if game.can_sell_building(human, pos)]
+        return []
+
     def _prompt(self) -> str:
-        """A short instruction line for the action bar."""
+        """A short instruction line for the action bar.
+
+        Keep these short: the strip shows ONE line, so every fixed prompt
+        here is worded to fit in full with the longest player name.
+        """
         game = self._require_game()
         actor = game.players[game.actor()]
+        if self._spectating():
+            return "You are out: watch, fast-forward or concede."
         if not actor.is_human:
             # AI player names already carry an "(AI)" suffix -- don't add it
             # again here or the prompt reads "Mira (AI) (AI) is taking...".
             return f"{actor.name} is taking their turn..."
         if self.mode == "build":
-            return "Click a property in one of your monopolies to build. Then Done."
+            return self.message or "Click a ringed street to build, then Done."
         if self.mode == "mortgage":
-            return "Click a property to mortgage it, or a mortgaged one to lift it."
+            return self.message or "Click a ringed title to mortgage or lift it."
         if self.mode == "sell":
-            return "Click a developed street to sell one building back. Then Done."
+            return self.message or "Click a ringed street to sell a building."
         if self.mode == "assets":
-            return self.message or "Manage one title with deed detail and legal actions."
+            return self.message or "Pick a title, then choose an action."
         if self.message:
             return self.message
         state = game.awaiting
         if state == "pre_roll":
             if actor.in_jail:
-                return f"{actor.name}: you are in Jail. Pay, use a card, or roll."
+                return f"{actor.name}: in Jail. Pay, use a card or roll."
             return f"{actor.name}: your turn. Roll the dice."
         if state == "buy_or_auction" and game.pending_purchase is not None:
             space = game.board[game.pending_purchase]
-            return f"You landed on {space.name} (${space.price}). Buy it or auction it."
-        if state == "auction":
-            return game.auction_context_message()
+            # The title comes last, so a very long name is what gets shortened.
+            return f"Buy or auction: {space.name} (${space.price})"
+        if state == "auction" and game.auction is not None:
+            # The dialog carries the detail; the strip only says what to do.
+            bank = game.auction.get("context") == "bankruptcy"
+            return "Bank bankruptcy auction: bid or pass." if bank else "Auction: bid or pass."
         if state == "post_roll":
             return f"{actor.name}: build, trade, or end your turn."
+        if state == "raise_funds" and game.debts:
+            owed = game.debts[0]["amount"]
+            payee = game.debts[0]["payee"]
+            to = "the Bank" if payee is None else game.players[payee].name
+            if actor.cash < owed:
+                return f"Raise ${owed - actor.cash} more to pay {to} ${owed}."
+            return f"You can now pay {to} ${owed}."
         if state == "trade_response":
             return "You have received a trade offer."
         return ""
@@ -853,7 +1255,7 @@ class MonopolyApp:
         if self.screen == "setup":
             if self.confirm_new_game:
                 return ui.confirm_buttons()
-            return ui.setup_buttons(has_saved_game())
+            return ui.setup_buttons(has_saved_game(), self.sound_on)
         if self.screen == "over":
             return [
                 ui.Button((SCREEN_WIDTH // 2 - 220, 540, 200, 52), "New Game",
@@ -868,57 +1270,84 @@ class MonopolyApp:
         """Build the in-game buttons for the current player and state.
 
         Each dialog owns a small builder; this dispatcher just picks the one
-        matching the current mode or engine state.
+        matching the current mode or engine state. The Sound toggle sits in
+        the action bar's last slot whenever the bar shows, AI turns
+        included; the trade builder and asset manager cover the panel, so
+        they leave it out (Ctrl+M still works there).
         """
         game = self._require_game()
         actor = game.players[game.actor()]
+        sound = ui.Button(ui.bar_slot_rect(SOUND_SLOT), ui.sound_label(self.sound_on), "toggle_sound")
+        if self._spectating():
+            return [
+                ui.Button(ui.bar_slot_rect(0), "Fast-forward", "fast_forward",
+                          enabled=not self.fast_forward, color=(46, 116, 78)),
+                ui.Button(ui.bar_slot_rect(1), "Concede / Main Menu", "concede",
+                          color=(150, 60, 60)),
+                sound,
+            ]
         if not actor.is_human:
-            return []
+            return [sound]
         if self.mode == "trade" and self.trade is not None:
             return self._trade_dialog_buttons()
         if self.mode == "assets":
             return self._asset_dialog_buttons(actor)
         if game.awaiting == "trade_response":
-            return self._trade_response_buttons()
+            return [*self._trade_response_buttons(), sound]
         if game.awaiting == "auction":
-            return self._auction_buttons(actor)
+            return [*self._auction_buttons(actor), sound]
         if self.mode in ("build", "sell", "mortgage"):
             # Board-click modes need only a way back out.
-            return [ui.Button(_bar_rect(0), "Done", "done", color=(46, 116, 78))]
-        return self._action_bar_buttons(actor)
+            return [ui.Button(ui.bar_slot_rect(0), "Done", "done", color=(46, 116, 78)), sound]
+        return [*self._action_bar_buttons(actor), sound]
 
     def _trade_dialog_buttons(self) -> list:
-        """Buttons for the trade-building dialog."""
+        """Buttons for the trade-building dialog.
+
+        Each side has a cash stepper pair and a Get Out of Jail Free card
+        stepper pair under its column; their rects come from
+        `ui.trade_layout`, which also places the labels beside them.
+        """
         game = self._require_game()
-        panel = ui.trade_layout(game, self.trade)["panel"]
-        return [
+        trade = self.trade
+        assert trade is not None, "trade buttons only build inside the dialog"
+        layout = ui.trade_layout(game, trade)
+        panel, steppers = layout["panel"], layout["steppers"]
+        buttons = [
             # Arrows are placed symmetrically and well clear of the
             # centred "With: NAME" label, however wide the name is.
             ui.Button((panel.centerx - 200, panel.y + 54, 30, 26), "<",
                       "trade_partner_prev"),
             ui.Button((panel.centerx + 170, panel.y + 54, 30, 26), ">",
                       "trade_partner_next"),
-            # Cash buttons sit directly under each column so the "Give"
-            # pair aligns with the give-side row list (x = panel.x + 30)
-            # and the "Get" pair aligns with the get-side rows
-            # (x = panel.x + 420 in the widened panel).
-            ui.Button((panel.x + 30, panel.bottom - 104, 130, 30), "Give -$50",
-                      "give_cash_down"),
-            ui.Button((panel.x + 170, panel.bottom - 104, 130, 30), "Give +$50",
-                      "give_cash_up"),
-            ui.Button((panel.x + 420, panel.bottom - 104, 130, 30), "Get -$50",
-                      "get_cash_down"),
-            ui.Button((panel.x + 560, panel.bottom - 104, 130, 30), "Get +$50",
-                      "get_cash_up"),
+        ]
+        for side, chosen, holder in (("give", trade["give"]["jail"], game.players[trade["from"]]),
+                                     ("get", trade["get"]["jail"], game.players[trade["to"]])):
+            buttons += [
+                ui.Button(steppers[f"{side}_cash_down"], "-$50", f"{side}_cash_down"),
+                ui.Button(steppers[f"{side}_cash_up"], "+$50", f"{side}_cash_up"),
+                # A side can offer no more jail cards than its player holds.
+                ui.Button(steppers[f"{side}_jail_down"], "-1", f"{side}_jail_down",
+                          enabled=chosen > 0),
+                ui.Button(steppers[f"{side}_jail_up"], "+1", f"{side}_jail_up",
+                          enabled=chosen < holder.jail_cards),
+            ]
+        buttons += [
             ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
                       "Propose", "trade_propose", color=(46, 116, 78)),
             ui.Button((panel.centerx + 20, panel.bottom - 56, 190, 40),
                       "Cancel", "trade_cancel"),
         ]
+        return buttons
 
     def _asset_dialog_buttons(self, actor) -> list:
-        """Asset-manager buttons: every title row selects a deed; the action
-        buttons use engine-provided availability and blocker reasons."""
+        """Build the asset-manager buttons for `actor`.
+
+        Every owned title gets a row button that selects it (the selected row
+        is tinted). The Build, Sell, Mortgage and Lift Mortgage buttons are
+        enabled from the engine's `asset_actions_for`, so they always match
+        what the rules allow. A Close button sits at the top right.
+        """
         game = self._require_game()
         layout = ui.asset_layout(game, actor)
         buttons = []
@@ -948,13 +1377,10 @@ class MonopolyApp:
 
     def _trade_response_buttons(self) -> list:
         """Accept/Reject buttons for an incoming trade offer."""
-        panel = pygame.Rect(0, 0, 560, 360)
-        panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+        layout = ui.trade_response_layout()
         return [
-            ui.Button((panel.centerx - 210, panel.bottom - 56, 190, 40),
-                      "Accept", "trade_accept", color=(46, 116, 78)),
-            ui.Button((panel.centerx + 20, panel.bottom - 56, 190, 40),
-                      "Reject", "trade_reject", color=(150, 60, 60)),
+            ui.Button(layout["accept"], "Accept", "trade_accept", color=(46, 116, 78)),
+            ui.Button(layout["reject"], "Reject", "trade_reject", color=(150, 60, 60)),
         ]
 
     def _auction_buttons(self, actor) -> list:
@@ -962,20 +1388,24 @@ class MonopolyApp:
         game = self._require_game()
         auction = game.auction
         assert auction is not None, "auction buttons only build during an auction"
-        panel = pygame.Rect(0, 0, 460, 280)
-        panel.center = (SCREEN_HEIGHT // 2, SCREEN_HEIGHT // 2)
+        layout = ui.auction_layout()
         step = max(10, game.board[auction["position"]].price // 20)
         can_bid = (auction["high_bid"] + step) <= actor.cash
         return [
-            ui.Button((panel.centerx - 200, panel.bottom - 52, 190, 40),
-                      f"Bid +${step}", "bid", enabled=can_bid,
+            ui.Button(layout["bid"], f"Bid +${step}", "bid", enabled=can_bid,
                       color=(46, 116, 78)),
-            ui.Button((panel.centerx + 10, panel.bottom - 52, 190, 40),
-                      "Pass", "pass", color=(150, 60, 60)),
+            ui.Button(layout["pass"], "Pass", "pass", color=(150, 60, 60)),
         ]
 
     def _action_bar_buttons(self, actor) -> list:
-        """The normal action bar for pre-roll, buy-or-auction, and post-roll."""
+        """The normal action bar for pre-roll, buy-or-auction, post-roll and raising funds.
+
+        The buttons depend on the engine state: rolling (with the jail
+        choices instead of building while in Jail), Buy or Auction after
+        landing on an unowned title, End Turn plus building and trading
+        after the roll, and Pay / Assets / Declare Bankruptcy while a debt
+        is open. A button whose action cannot work yet is shown disabled.
+        """
         game = self._require_game()
         buttons = []
         state = game.awaiting
@@ -983,37 +1413,51 @@ class MonopolyApp:
                        for pos in game.properties_of(actor))
         if state == "pre_roll":
             if actor.in_jail:
-                buttons.append(ui.Button(_bar_rect(0), "Roll Dice", "roll",
+                buttons.append(ui.Button(ui.bar_slot_rect(0), "Roll Dice", "roll",
                                          color=(46, 116, 78)))
-                buttons.append(ui.Button(_bar_rect(1), "Pay $50", "jail_pay",
+                buttons.append(ui.Button(ui.bar_slot_rect(1), "Pay $50", "jail_pay",
                                          enabled=actor.cash >= 50))
-                buttons.append(ui.Button(_bar_rect(2), "Use Jail Card", "jail_card",
+                buttons.append(ui.Button(ui.bar_slot_rect(2), "Use Jail Card", "jail_card",
                                          enabled=actor.jail_cards > 0))
+                # Jail only stops movement: the engine still allows asset
+                # management and trading before the roll.
+                buttons.append(ui.Button(ui.bar_slot_rect(3), "Mortgage", "mortgage"))
+                buttons.append(ui.Button(ui.bar_slot_rect(4), "Trade", "trade"))
+                buttons.append(ui.Button(ui.bar_slot_rect(5), "Assets", "assets"))
             else:
-                buttons.append(ui.Button(_bar_rect(0), "Roll Dice", "roll",
+                buttons.append(ui.Button(ui.bar_slot_rect(0), "Roll Dice", "roll",
                                          color=(46, 116, 78)))
-                buttons.append(ui.Button(_bar_rect(1), "Build Houses", "build"))
-                buttons.append(ui.Button(_bar_rect(2), "Sell Buildings", "sell",
+                buttons.append(ui.Button(ui.bar_slot_rect(1), "Build Houses", "build"))
+                buttons.append(ui.Button(ui.bar_slot_rect(2), "Sell Buildings", "sell",
                                          enabled=can_sell))
-                buttons.append(ui.Button(_bar_rect(3), "Mortgage", "mortgage"))
-                buttons.append(ui.Button(_bar_rect(4), "Trade", "trade"))
-                buttons.append(ui.Button(_bar_rect(5), "Save & Quit", "save_quit"))
-                buttons.append(ui.Button(_bar_rect(6), "Assets", "assets"))
+                buttons.append(ui.Button(ui.bar_slot_rect(3), "Mortgage", "mortgage"))
+                buttons.append(ui.Button(ui.bar_slot_rect(4), "Trade", "trade"))
+                buttons.append(ui.Button(ui.bar_slot_rect(5), "Save & Quit", "save_quit"))
+                buttons.append(ui.Button(ui.bar_slot_rect(6), "Assets", "assets"))
         elif state == "buy_or_auction" and game.pending_purchase is not None:
             space = game.board[game.pending_purchase]
-            buttons.append(ui.Button(_bar_rect(0), f"Buy (${space.price})", "buy",
+            buttons.append(ui.Button(ui.bar_slot_rect(0), f"Buy (${space.price})", "buy",
                                      enabled=actor.cash >= space.price,
                                      color=(46, 116, 78)))
-            buttons.append(ui.Button(_bar_rect(1), "Auction", "auction_decline"))
+            buttons.append(ui.Button(ui.bar_slot_rect(1), "Auction", "auction_decline"))
         elif state == "post_roll":
-            buttons.append(ui.Button(_bar_rect(0), "End Turn", "end_turn",
+            buttons.append(ui.Button(ui.bar_slot_rect(0), "End Turn", "end_turn",
                                      color=(46, 116, 78)))
-            buttons.append(ui.Button(_bar_rect(1), "Build Houses", "build"))
-            buttons.append(ui.Button(_bar_rect(2), "Sell Buildings", "sell",
+            buttons.append(ui.Button(ui.bar_slot_rect(1), "Build Houses", "build"))
+            buttons.append(ui.Button(ui.bar_slot_rect(2), "Sell Buildings", "sell",
                                      enabled=can_sell))
-            buttons.append(ui.Button(_bar_rect(3), "Mortgage", "mortgage"))
-            buttons.append(ui.Button(_bar_rect(4), "Trade", "trade"))
-            buttons.append(ui.Button(_bar_rect(5), "Assets", "assets"))
+            buttons.append(ui.Button(ui.bar_slot_rect(3), "Mortgage", "mortgage"))
+            buttons.append(ui.Button(ui.bar_slot_rect(4), "Trade", "trade"))
+            buttons.append(ui.Button(ui.bar_slot_rect(5), "Assets", "assets"))
+        elif state == "raise_funds" and game.debts:
+            # The debtor sells and mortgages in the asset manager, then pays
+            # (once their cash covers the oldest debt) or concedes.
+            owed = game.debts[0]["amount"]
+            buttons.append(ui.Button(ui.bar_slot_rect(0), f"Pay ${owed}", "pay_debts",
+                                     enabled=actor.cash >= owed, color=(46, 116, 78)))
+            buttons.append(ui.Button(ui.bar_slot_rect(1), "Assets", "assets"))
+            buttons.append(ui.Button(ui.bar_slot_rect(2), "Declare Bankruptcy",
+                                     "declare_bankruptcy", color=(150, 60, 60)))
         return buttons
 
 
@@ -1021,16 +1465,29 @@ class MonopolyApp:
 # Entry point
 # --------------------------------------------------------------------------
 def main() -> None:
-    """Initialise pygame, run the app, and shut down cleanly."""
+    """Initialise pygame, run the app, and shut down cleanly.
+
+    The mixer format is requested before ``pygame.init()`` opens the mixer,
+    and the music channel is reserved right after.
+
+    Beginner note:
+    - ``pygame.init()`` opens the mixer with whatever format was requested
+      beforehand, so the request has to come first. Reserving a channel
+      stops `find_channel` from handing it to a sound effect, so an effect
+      can never cut off the music.
+    """
+    audio.init_mixer()
     pygame.init()
+    audio.reserve_channels()
     try:
         icon_path = _resource_path("monopoly_icon.png")
         if os.path.exists(icon_path):
             with contextlib.suppress(pygame.error):
                 pygame.display.set_icon(pygame.image.load(icon_path))
 
-        app = MonopolyApp()
         autotest = os.environ.get("MONOPOLY_AUTOTEST")
+        # The self-test must never overwrite or delete a player's save/stats.
+        app = MonopolyApp(persist=not autotest)
         if autotest:
             # Headless self-test: jump straight into an all-AI game.
             specs = [(f"AI {i + 1}", False) for i in range(4)]

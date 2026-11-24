@@ -24,6 +24,7 @@ import pygame
 
 from settings import (
     AIR_DRAG,
+    BROAD_PHASE_SLOP,
     CENTER_PULL,
     CONTAINER_RADIUS,
     FRICTION,
@@ -52,7 +53,20 @@ EPSILON = 1e-6
 
 @dataclass(slots=True)
 class CollisionEvent:
-    """Information about one impactful contact that the rest of the game can react to."""
+    """Information about one impactful contact that the rest of the game can react to.
+
+    The physics solver creates these only for contacts faster than
+    `IMPACT_EVENT_SPEED`, so gentle resting contacts never spam effects.
+
+    Attributes:
+        body_a: The body that was hit (for wall hits, the only body involved).
+        body_b: The other body, or `None` when `body_a` hit the bubble wall.
+        point: Approximate contact point in screen pixels, on `body_a`'s rim.
+        normal: Unit vector of the contact direction (from `body_a` toward
+            `body_b`, or outward toward the wall).
+        impact_speed: Closing speed along `normal` in pixels per second;
+            the game scales squash, sparks and shake by it.
+    """
 
     # `body_b` is optional because wall hits have only one real body involved.
     body_a: CelestialBody
@@ -63,9 +77,28 @@ class CollisionEvent:
 
 
 class PhysicsWorld:
-    """Owns world-level physics settings and collision helpers."""
+    """Owns world-level physics settings and collision helpers.
+
+    The game keeps one `PhysicsWorld` and calls `step()` once per frame with
+    the live list of bodies. The world itself stores no bodies; it only knows
+    the container shape and its own clock, and it mutates the positions and
+    velocities of whatever bodies it is handed.
+
+    Attributes:
+        center: Centre of the circular container, in screen pixels.
+        radius: Radius of the container (`CONTAINER_RADIUS`).
+        time: Simulated seconds since the world was created. It drives the
+            slow sine wave in the sideways "orbital" drift.
+
+    Beginner note:
+    - Every body must stay inside the circle of radius `radius - body.radius`
+      around `center` (minus a small margin). Several helpers below share
+      that "legal circle" idea: `keep_inside`, `spawn_point`,
+      `preview_trajectory` and `_solve_boundaries`.
+    """
 
     def __init__(self) -> None:
+        """Create the world around the fixed playfield centre with its clock at zero."""
         # Store the circular container once so every body can measure against it.
         # Converting the center to a `Vector2` makes later vector math simpler.
         self.center = pygame.Vector2(PLAYFIELD_CENTER)
@@ -104,7 +137,8 @@ class PhysicsWorld:
             # settle instead of trembling forever.
             #
             # The threshold is intentionally small; we only want to calm bodies
-            # that are basically at rest, not visibly moving ones.
+            # that are basically at rest, not visibly moving ones. The value
+            # 4.0 is a squared speed, so it means "slower than 2 px/s".
             if body.velocity.length_squared() < 4.0:
                 body.velocity *= 0.985
 
@@ -137,13 +171,22 @@ class PhysicsWorld:
             body.position += body.velocity * dt
             body.velocity *= damping
 
+        # Broad phase: find the pairs that are close enough to possibly touch
+        # during this slice, once, instead of testing every pair in every
+        # solver iteration. The margin covers the biggest body present, the
+        # furthest any body can travel in one slice, and a little slop, so no
+        # pair that the solver would have pushed apart is ever left out.
+        largest_radius = max((body.radius for body in bodies), default=0.0)
+        margin = largest_radius + MAX_SPEED * dt + BROAD_PHASE_SLOP
+        pairs = self._broad_phase_pairs(bodies, margin)
+
         for iteration in range(SOLVER_ITERATIONS):
             # We only emit impact events from the first solver pass.
             # Later passes are just cleanup corrections and would otherwise
             # create duplicate effects for the same collision.
             emit_events = iteration == 0
             events.extend(self._solve_boundaries(bodies, emit_events))
-            events.extend(self._solve_pairs(bodies, emit_events))
+            events.extend(self._solve_pairs(bodies, pairs, emit_events))
 
         return events
 
@@ -158,6 +201,24 @@ class PhysicsWorld:
             # `normal` points from the center outward toward the body's position.
             normal = offset.normalize() if distance > EPSILON else pygame.Vector2(0.0, -1.0)
             body.position = self.center + normal * limit
+
+    def spawn_point(self, x: float, radius: float) -> pygame.Vector2:
+        """Return the launch point for a body of `radius` aimed from column `x`.
+
+        The launcher sits on the fixed `SPAWN_Y` line, but near the top of a
+        circular bubble that line can poke outside the legal circle for larger
+        bodies. The point is therefore pulled back inside `R - r - 3`, the same
+        legal circle that `keep_inside`, the wall solver, and the trajectory
+        preview all use, so a fresh body never "snaps" on its first frame.
+        """
+        point = pygame.Vector2(x, SPAWN_Y)
+        offset = point - self.center
+        distance = offset.length()
+        limit = self.radius - radius - 3.0
+        if distance > limit:
+            normal = offset.normalize() if distance > EPSILON else pygame.Vector2(0.0, -1.0)
+            point = self.center + normal * limit
+        return point
 
     def allowed_spawn_x(self, radius: float) -> tuple[float, float]:
         """Return the left/right spawn limits for a body at the spawn height.
@@ -264,7 +325,29 @@ class PhysicsWorld:
         return acceleration
 
     def _solve_boundaries(self, bodies: list[CelestialBody], emit_events: bool) -> list[CollisionEvent]:
-        """Resolve collisions between bodies and the circular wall."""
+        """Resolve collisions between bodies and the circular wall.
+
+        Any body whose centre has drifted past the legal circle
+        (`radius - body.radius - 2`) is moved straight back onto it along the
+        line from the container centre. If it was still moving outward, the
+        outward part of its velocity is reflected (scaled by `WALL_BOUNCE`)
+        and its sliding along the wall is damped by `WALL_FRICTION`.
+
+        Args:
+            bodies: Every live body; positions and velocities are mutated.
+            emit_events: When true, hard wall hits are reported as
+                `CollisionEvent`s with `body_b=None`.
+
+        Returns:
+            The wall impact events from this pass (possibly empty).
+
+        Beginner note:
+        - A velocity can be split into a part along the wall's `normal`
+          (pointing outward) and a part along the `tangent` (sliding along
+          the wall). `velocity.dot(normal)` measures the first part. Subtracting
+          `(1 + bounce) * outward_speed * normal` cancels the outward motion
+          and then adds back a smaller inward bounce.
+        """
         events: list[CollisionEvent] = []
         for body in bodies:
             offset = body.position - self.center
@@ -300,74 +383,145 @@ class PhysicsWorld:
                     )
         return events
 
-    def _solve_pairs(self, bodies: list[CelestialBody], emit_events: bool) -> list[CollisionEvent]:
-        """Resolve body-vs-body overlaps and collision impulses."""
-        events: list[CollisionEvent] = []
+    def _broad_phase_pairs(self, bodies: list[CelestialBody], margin: float) -> list[tuple[int, int]]:
+        """Return the index pairs `(i, j)`, `i < j`, whose circles come within `margin`.
+
+        A pair is a candidate when the distance between centres is at most
+        `radius_i + radius_j + margin`. The result is sorted, so the solver
+        visits contacts in exactly the same order as a plain all-pairs loop.
+
+        Beginner note:
+        - Checking every body against every other body costs about n*n/2
+          tests, which grows fast as the bubble fills up.
+        - A *uniform grid* drops each body into a square cell. Cells are as
+          wide as the longest possible candidate distance, so a body only
+          needs to look at its own cell and the eight cells around it.
+        """
         count = len(bodies)
-        for index in range(count):
+        if count < 2:
+            return []
+        largest_radius = max(body.radius for body in bodies)
+        cell_size = 2.0 * largest_radius + margin
+        cells: dict[tuple[int, int], list[int]] = {}
+        keys: list[tuple[int, int]] = []
+        for index, body in enumerate(bodies):
+            key = (math.floor(body.position.x / cell_size), math.floor(body.position.y / cell_size))
+            keys.append(key)
+            cells.setdefault(key, []).append(index)
+
+        pairs: list[tuple[int, int]] = []
+        for index, body in enumerate(bodies):
+            cell_x, cell_y = keys[index]
+            for neighbour_x in (cell_x - 1, cell_x, cell_x + 1):
+                for neighbour_y in (cell_y - 1, cell_y, cell_y + 1):
+                    for other_index in cells.get((neighbour_x, neighbour_y), ()):
+                        # Keep each pair once, with the lower index first.
+                        if other_index <= index:
+                            continue
+                        other = bodies[other_index]
+                        reach = body.radius + other.radius + margin
+                        if (other.position - body.position).length_squared() <= reach * reach:
+                            pairs.append((index, other_index))
+        pairs.sort()
+        return pairs
+
+    def _solve_pairs(
+        self,
+        bodies: list[CelestialBody],
+        pairs: list[tuple[int, int]],
+        emit_events: bool,
+    ) -> list[CollisionEvent]:
+        """Resolve body-vs-body overlaps and collision impulses for the candidate `pairs`.
+
+        For every candidate pair that actually overlaps, this does two things:
+
+        1. Position correction: push the two circles apart along the line
+           between their centres, sharing the push by inverse mass so the
+           lighter body moves further.
+        2. Velocity impulse: if the bodies are still moving toward each other,
+           apply an equal-and-opposite bounce (`RESTITUTION`) plus a little
+           sideways friction (`FRICTION`).
+
+        Args:
+            bodies: Every live body; positions and velocities are mutated.
+            pairs: Index pairs from `_broad_phase_pairs`, lower index first.
+            emit_events: When true, hard contacts become `CollisionEvent`s.
+
+        Returns:
+            The body-vs-body impact events from this pass (possibly empty).
+
+        Beginner note:
+        - `inv_mass` is `1 / mass`. Working with inverse mass makes the
+          "share the push" rule a simple multiplication, and an infinitely
+          heavy object would just have `inv_mass == 0`.
+        - An *impulse* is an instant change of momentum. Dividing it by the
+          summed inverse masses and multiplying back per body is the standard
+          formula that conserves momentum between the two bodies.
+        """
+        events: list[CollisionEvent] = []
+        for index, other_index in pairs:
+            # Each candidate pair appears only once, lower index first.
             first = bodies[index]
-            for other_index in range(index + 1, count):
-                # We compare each pair only once.
-                second = bodies[other_index]
-                delta = second.position - first.position
-                distance_sq = delta.length_squared()
-                min_distance = first.radius + second.radius
+            second = bodies[other_index]
+            delta = second.position - first.position
+            distance_sq = delta.length_squared()
+            min_distance = first.radius + second.radius
 
-                # Skip pairs that are not overlapping.
-                if distance_sq >= min_distance * min_distance:
-                    continue
+            # Skip pairs that are not overlapping.
+            if distance_sq >= min_distance * min_distance:
+                continue
 
-                if distance_sq > EPSILON:
-                    distance = math.sqrt(distance_sq)
-                    normal = delta / distance
-                else:
-                    # If the centers are identical, pick an arbitrary direction
-                    # to avoid dividing by zero.
-                    distance = 0.0
-                    normal = pygame.Vector2(1.0, 0.0)
+            if distance_sq > EPSILON:
+                distance = math.sqrt(distance_sq)
+                normal = delta / distance
+            else:
+                # If the centers are identical, pick an arbitrary direction
+                # to avoid dividing by zero.
+                distance = 0.0
+                normal = pygame.Vector2(1.0, 0.0)
 
-                penetration = min_distance - distance
-                total_inv_mass = first.inv_mass + second.inv_mass
-                if total_inv_mass <= EPSILON:
-                    continue
+            penetration = min_distance - distance
+            total_inv_mass = first.inv_mass + second.inv_mass
+            if total_inv_mass <= EPSILON:
+                continue
 
-                # Move both bodies apart proportionally to their inverse masses.
-                # Lighter bodies move more than heavier bodies. The softness
-                # factor is explained where it is defined in settings.py.
-                correction = normal * (penetration / total_inv_mass) * POSITION_CORRECTION_SOFTNESS
-                first.position -= correction * first.inv_mass
-                second.position += correction * second.inv_mass
+            # Move both bodies apart proportionally to their inverse masses.
+            # Lighter bodies move more than heavier bodies. The softness
+            # factor is explained where it is defined in settings.py.
+            correction = normal * (penetration / total_inv_mass) * POSITION_CORRECTION_SOFTNESS
+            first.position -= correction * first.inv_mass
+            second.position += correction * second.inv_mass
 
-                relative_velocity = second.velocity - first.velocity
-                velocity_along_normal = relative_velocity.dot(normal)
-                if velocity_along_normal < 0.0:
-                    # Calculate and apply the bounce impulse along the collision normal.
-                    # If the value were positive, the bodies would already be separating.
-                    impulse_strength = -(1.0 + RESTITUTION) * velocity_along_normal
-                    impulse_strength /= total_inv_mass
-                    impulse = normal * impulse_strength
-                    first.velocity -= impulse * first.inv_mass
-                    second.velocity += impulse * second.inv_mass
+            relative_velocity = second.velocity - first.velocity
+            velocity_along_normal = relative_velocity.dot(normal)
+            if velocity_along_normal < 0.0:
+                # Calculate and apply the bounce impulse along the collision normal.
+                # If the value were positive, the bodies would already be separating.
+                impulse_strength = -(1.0 + RESTITUTION) * velocity_along_normal
+                impulse_strength /= total_inv_mass
+                impulse = normal * impulse_strength
+                first.velocity -= impulse * first.inv_mass
+                second.velocity += impulse * second.inv_mass
 
-                    # Tangential friction reduces side-sliding after impact.
-                    tangent = relative_velocity - normal * velocity_along_normal
-                    if tangent.length_squared() > EPSILON:
-                        # Normalize tangent so friction is based on direction, not length.
-                        tangent = tangent.normalize()
-                        friction_strength = -relative_velocity.dot(tangent) / total_inv_mass
-                        friction_impulse = tangent * friction_strength * FRICTION
-                        first.velocity -= friction_impulse * first.inv_mass
-                        second.velocity += friction_impulse * second.inv_mass
+                # Tangential friction reduces side-sliding after impact.
+                tangent = relative_velocity - normal * velocity_along_normal
+                if tangent.length_squared() > EPSILON:
+                    # Normalize tangent so friction is based on direction, not length.
+                    tangent = tangent.normalize()
+                    friction_strength = -relative_velocity.dot(tangent) / total_inv_mass
+                    friction_impulse = tangent * friction_strength * FRICTION
+                    first.velocity -= friction_impulse * first.inv_mass
+                    second.velocity += friction_impulse * second.inv_mass
 
-                impact_speed = abs(velocity_along_normal)
-                if emit_events and impact_speed > IMPACT_EVENT_SPEED:
-                    events.append(
-                        CollisionEvent(
-                            body_a=first,
-                            body_b=second,
-                            point=first.position + normal * first.radius,
-                            normal=normal,
-                            impact_speed=impact_speed,
-                        )
+            impact_speed = abs(velocity_along_normal)
+            if emit_events and impact_speed > IMPACT_EVENT_SPEED:
+                events.append(
+                    CollisionEvent(
+                        body_a=first,
+                        body_b=second,
+                        point=first.position + normal * first.radius,
+                        normal=normal,
+                        impact_speed=impact_speed,
                     )
+                )
         return events

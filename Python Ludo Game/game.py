@@ -1,4 +1,17 @@
-"""UI-free Ludo rules engine."""
+"""UI-free Ludo rules engine.
+
+This module holds every rule of the game: rolling, legal moves, captures,
+bonus turns, the three-sixes penalty, optional blockades, winning, and
+save/load. It never imports Pygame, so the window (``main.py``), the computer
+players (``ai.py``), the tests, and the batch simulator all drive the very
+same ``LudoGame`` methods.
+
+Beginner note: positions are stored as *steps* relative to each player's own
+start square, not as screen coordinates. ``-1`` means "in the yard", ``0`` is
+the start square, and ``layout.finish_steps`` is the final home cell.
+``board.BoardLayout`` converts steps into shared track indices when two
+players' tokens need to be compared (for captures and blockades).
+"""
 
 from __future__ import annotations
 
@@ -10,10 +23,60 @@ from board import BoardLayout
 from models import Move, MoveResult, PlayerState
 from settings import TOKENS_PER_PLAYER, seat_colors
 
+# Saves without this field were written before the classic 51-cell lap, when a
+# token also walked the cell just behind its start (so every home-lane and
+# finish step was one higher). Version 2 is the 51-cell lap; ``from_dict``
+# shifts version-1 steps down and refuses versions it does not know.
+LAP_VERSION = 2
+
+# The event kinds ``LudoGame`` queues for the window's sounds (see
+# ``drain_events``), one per sound-worthy moment:
+# - roll: any die roll, even one equal to the previous roll;
+# - rolled_six: the roll was a 6 (queued right after its roll);
+# - three_sixes: a third 6 in a row forfeited the roll;
+# - leave_yard / move: a token entered the board / moved along it;
+# - capture: the move sent opponent tokens back to their yard;
+# - home: the move brought a token home;
+# - bonus_turn: the same player rolls again;
+# - no_move: the roll had no legal move;
+# - turn_change: the turn passed to the next player;
+# - game_won: the game ended.
+# One action can queue several kinds, in order: a 6 that captures queues
+# roll, rolled_six, then (on the move) move, capture and bonus_turn.
+#
+# Why a queue instead of playing sounds here: the engine must stay free of
+# pygame, so it only *reports* what happened and the window decides what to
+# play. Because humans, the AI, tests and simulations all drive the game
+# through the same methods, an AI turn queues exactly the events a human turn
+# would, and so is heard the same way. The queue is presentation data, not
+# game state, so it is never saved: a resumed game should not replay old sounds.
+EVENT_KINDS = (
+    "roll",
+    "rolled_six",
+    "three_sixes",
+    "leave_yard",
+    "move",
+    "capture",
+    "home",
+    "bonus_turn",
+    "no_move",
+    "turn_change",
+    "game_won",
+)
+
 
 @dataclass(frozen=True)
 class LudoRules:
     """Configurable rules for one game.
+
+    Attributes:
+        total_players: How many seats the board has (4, 5 or 6).
+        blockades: When True, two tokens of one player on the same shared
+            square form a wall that opponents cannot pass or land on.
+        bonus_on_capture: When True, capturing an opponent earns another roll.
+        bonus_on_home: When True, bringing a token home earns another roll.
+        three_sixes_penalty: When True, a third 6 in a row forfeits that roll
+            and passes the turn.
 
     These values are captured in save files so a resumed game keeps the same
     house-rule choices it started with. The defaults match the classic
@@ -39,6 +102,26 @@ class LudoGame:
     This class intentionally imports no Pygame. Humans, AI, tests, and future
     interfaces all use the same methods, which keeps the official rules in one
     place instead of duplicating them across UI click handlers.
+
+    A turn always follows the same pattern: while ``awaiting`` is
+    ``"pre_roll"`` the caller rolls (``roll_die`` or ``record_roll``); that
+    switches ``awaiting`` to ``"choose_move"``; the caller then either applies
+    one of ``legal_moves`` with ``apply_move`` or, when the list is empty,
+    calls ``note_no_move``. Once someone wins, ``phase`` and ``awaiting`` both
+    become ``"game_over"``.
+
+    Key attributes:
+        rules: The ``LudoRules`` chosen for this game.
+        layout: The ``BoardLayout`` (track indices, safe squares, lap length).
+        players: One ``PlayerState`` per seat, in turn order.
+        current: Index of the player whose turn it is.
+        last_roll: The die value of the current turn, or ``None`` before a roll.
+        consecutive_sixes: Sixes rolled in a row this turn (for the penalty).
+        ranking: Final standings, filled in when the game ends.
+        event_log: The last few human-readable messages for the HUD.
+        events: Sound-worthy moments since the shell last called
+            ``drain_events``, as short kind strings in the order they
+            happened (see ``EVENT_KINDS``). Never saved.
     """
 
     def __init__(
@@ -48,7 +131,25 @@ class LudoGame:
         seed: int | None = None,
         ai_profile: str = "tactical",
     ) -> None:
-        """Create a game from player names or already restored player states."""
+        """Create a game from player names or already restored player states.
+
+        Args:
+            players: One entry per seat. A ``(name, is_human)`` tuple starts a
+                fresh player with all tokens in the yard; a ``PlayerState``
+                (from ``from_dict``) is kept as-is so a resumed game keeps its
+                token positions and counters.
+            rules: The rule set; its ``total_players`` must equal
+                ``len(players)``.
+            seed: Seed for the game's private ``random.Random``. The same seed
+                and the same choices replay the same dice, which keeps tests
+                and simulations reproducible. ``None`` means unpredictable.
+            ai_profile: Key into ``ai.AI_PROFILES`` used for computer seats.
+
+        Raises:
+            ValueError: If the number of players does not match the rules.
+
+        The new game starts with player 0 waiting to roll.
+        """
 
         if len(players) != rules.total_players:
             raise ValueError("players length must match rules.total_players")
@@ -92,6 +193,9 @@ class LudoGame:
         self.winner: int | None = None
         self.ranking: list[int] = []
         self.event_log: list[str] = ["Choose players and start rolling."]
+        # Not part of the game state: ``to_dict`` leaves it out, so a loaded
+        # game always starts with an empty queue.
+        self.events: list[str] = []
         self._mark_finished_tokens()
 
     @property
@@ -116,14 +220,18 @@ class LudoGame:
 
         if self.phase == "game_over":
             return False
+        # ``record_roll`` is public so tests and replays can inject a chosen
+        # die; validate it because it did not come from our own RNG.
         if not 1 <= die <= 6:
             raise ValueError("die must be between 1 and 6")
 
         self.last_roll = die
         self.total_rolls += 1
+        self._emit("roll")
         if die == 6:
             self.current_player.sixes_rolled += 1
             self.consecutive_sixes += 1
+            self._emit("rolled_six")
         else:
             self.consecutive_sixes = 0
 
@@ -133,6 +241,7 @@ class LudoGame:
             and self.consecutive_sixes >= 3
         ):
             self._note(f"{self.current_player.name} rolled a third 6 and loses the roll.")
+            self._emit("three_sixes")
             self.consecutive_sixes = 0
             self._advance_turn()
             return True
@@ -189,11 +298,14 @@ class LudoGame:
 
         The method validates the move against the current legal-move list
         before mutating anything. That keeps tests and UI clicks honest: they
-        must pass a move the engine itself already approved.
+        must pass a move the engine itself already approved, for the die that
+        was actually rolled this turn.
         """
 
         if self.phase == "game_over":
             raise ValueError("game is already over")
+        if self.awaiting != "choose_move" or move.die != self.last_roll:
+            raise ValueError("move does not match the die rolled this turn")
         if move.player_index != self.current:
             raise ValueError("move does not belong to the current player")
         legal = self.legal_moves(move.die, move.player_index)
@@ -203,13 +315,19 @@ class LudoGame:
         player = self.players[move.player_index]
         token = player.tokens[move.token_index]
         token.steps = move.to_steps
+        self._emit("leave_yard" if move.enters_board else "move")
 
+        # Order matters: the mover's token is placed first, then anything else
+        # on the landing square is captured (``_capture_at`` skips the mover's
+        # own tokens, so they are never sent home by their own move).
         captured = self._capture_at(move)
         if captured:
             player.captures += len(captured)
+            self._emit("capture")
 
         home = move.reaches_home
         if home:
+            self._emit("home")
             self._note(f"{player.name} brought token {move.token_index + 1} home.")
         elif captured:
             targets = ", ".join(self.players[p].name for p, _ in captured)
@@ -229,6 +347,8 @@ class LudoGame:
                 message=f"{player.name} wins!",
             )
 
+        # Three ways to earn another roll: any 6, a capture, or a token reaching
+        # home (the last two can be switched off in ``LudoRules``).
         extra_turn = (
             move.die == 6
             or (captured and self.rules.bonus_on_capture)
@@ -243,7 +363,10 @@ class LudoGame:
             message=self.event_log[-1],
         )
         if extra_turn:
+            # Same player rolls again; ``consecutive_sixes`` is kept so a run
+            # of three sixes can still trigger the penalty.
             self.awaiting = "pre_roll"
+            self._emit("bonus_turn")
         else:
             self.consecutive_sixes = 0
             self._advance_turn()
@@ -253,7 +376,10 @@ class LudoGame:
         """Handle a roll with no legal moves."""
 
         self._note(f"{self.current_player.name} rolled {die} and has no legal move.")
-        if die == 6 and self.consecutive_sixes < 3:
+        self._emit("no_move")
+        if die == 6:
+            # A 6 always earns another roll, exactly as in apply_move; the
+            # three-sixes penalty (when enabled) is enforced earlier in record_roll.
             self.awaiting = "pre_roll"
         else:
             self.consecutive_sixes = 0
@@ -283,9 +409,16 @@ class LudoGame:
         return matches
 
     def to_dict(self) -> dict:
-        """Serialize the current game to plain JSON-compatible data."""
+        """Serialize the current game to plain JSON-compatible data.
+
+        The result contains only dicts, lists, strings, numbers, booleans and
+        ``None``, so ``json.dump`` can write it directly. ``lap_version`` is
+        stamped in so ``from_dict`` can migrate older saves. Only the last 12
+        event-log lines are kept, matching what the HUD can show.
+        """
 
         return {
+            "lap_version": LAP_VERSION,
             "rules": asdict(self.rules),
             "players": [player.to_dict() for player in self.players],
             "current": self.current,
@@ -304,26 +437,77 @@ class LudoGame:
 
     @classmethod
     def from_dict(cls, data: dict) -> LudoGame:
-        """Rebuild a game from save-file data."""
+        """Rebuild a game from save-file data.
 
+        Saves written before the classic 51-cell lap (``lap_version`` 1, or no
+        key at all) counted one extra shared cell, the corner just behind each
+        token's start. Loading one moves every step at or beyond the new lap
+        length down by one:
+
+        - Tokens in the home column or at home keep their cell and their
+          distance (old lane step 52 is new lane step 51, the same cell).
+        - A token on the old corner steps back one cell to its column
+          entrance and keeps its distance to home.
+        - Tokens on the shared track keep their cell and end up one cell
+          closer to home, because the lap is one cell shorter.
+
+        Raises ``ValueError`` for a ``lap_version`` this code does not know,
+        and for damaged data that would crash or wedge a resumed game: a top
+        level that is not a JSON object, an out-of-range current player, a
+        turn state that cannot be resumed, a missing die roll, or token
+        counts and steps outside the board.
+        """
+
+        if not isinstance(data, dict):
+            raise ValueError("Save data must be a JSON object.")
+        lap_version = int(data.get("lap_version", 1))
+        if lap_version not in (1, LAP_VERSION):
+            raise ValueError(f"Unsupported Ludo lap version: {lap_version}")
         rules = LudoRules(**data["rules"])
         players = [PlayerState.from_dict(item) for item in data["players"]]
         game = cls(players, rules, seed=data.get("seed"), ai_profile=data.get("ai_profile", "tactical"))
+        # Migrate version-1 saves (see the docstring) before validating, so
+        # the range checks below run against the current board size.
+        if lap_version == 1:
+            lap_length = game.layout.lap_length
+            for player in game.players:
+                for token in player.tokens:
+                    if token.steps >= lap_length:
+                        token.steps -= 1
         game.current = int(data.get("current", 0))
         game.phase = str(data.get("phase", "playing"))
         game.awaiting = str(data.get("awaiting", "pre_roll"))
-        game.last_roll = data.get("last_roll")
+        game.last_roll = None if data.get("last_roll") is None else int(data["last_roll"])
         game.consecutive_sixes = int(data.get("consecutive_sixes", 0))
         game.turns_taken = int(data.get("turns_taken", 0))
         game.total_rolls = int(data.get("total_rolls", 0))
         game.winner = data.get("winner")
         game.ranking = [int(item) for item in data.get("ranking", [])]
         game.event_log = [str(item) for item in data.get("event_log", [])] or ["Game resumed."]
+        if not 0 <= game.current < len(game.players):
+            raise ValueError("Saved current player is out of range.")
+        if game.phase != "playing" or game.awaiting not in ("pre_roll", "choose_move"):
+            raise ValueError("Saved turn state cannot be resumed.")
+        if game.awaiting == "choose_move" and not (game.last_roll is not None and 1 <= game.last_roll <= 6):
+            raise ValueError("Saved die roll is invalid.")
+        for player in game.players:
+            if len(player.tokens) != TOKENS_PER_PLAYER or any(
+                    not -1 <= token.steps <= game.layout.finish_steps for token in player.tokens):
+                raise ValueError("Saved token data is invalid.")
         game._mark_finished_tokens()
         return game
 
     def _capture_at(self, move: Move) -> list[tuple[int, int]]:
-        """Send opponent tokens on the landing cell back to their yards."""
+        """Send opponent tokens on the landing cell back to their yards.
+
+        Nothing is captured on a home-lane move (``landing_index`` is
+        ``None``) or on a safe square (start squares and stars), where tokens
+        of different colours may share a cell. Every opponent token on the
+        cell is captured, so landing on an opponent pair sends both home.
+
+        Returns:
+            The ``(player_index, token_index)`` of each captured token.
+        """
 
         if move.landing_index is None or self.layout.is_safe_index(move.landing_index):
             return []
@@ -336,14 +520,22 @@ class LudoGame:
         return captured
 
     def _blocked_by_blockade(self, player_index: int, from_steps: int, to_steps: int) -> bool:
-        """Return True if optional blockade rules stop this path."""
+        """Return True if optional blockade rules stop this path.
 
-        if not self.rules.blockades or from_steps < 0:
+        A yard entry (``from_steps`` -1 to 0) checks just the start square,
+        so an opponent pair sitting there keeps the yard shut.
+        """
+
+        if not self.rules.blockades:
             return False
         blocked_indices = self._opponent_blockades(player_index)
         if not blocked_indices:
             return False
-        for step in range(from_steps + 1, min(to_steps, self.layout.track_length - 1) + 1):
+        # Check every cell the token would pass over *and* the landing cell
+        # (``from_steps + 1`` up to ``to_steps``). Steps past the last shared
+        # cell are in the private home lane, where no opponent can stand, so
+        # the range is capped at ``lap_length - 1``.
+        for step in range(from_steps + 1, min(to_steps, self.layout.lap_length - 1) + 1):
             if self.layout.track_index(player_index, step) in blocked_indices:
                 return True
         return False
@@ -364,7 +556,12 @@ class LudoGame:
         return blockades
 
     def _advance_turn(self) -> None:
-        """Move turn control to the next player who has not finished."""
+        """Move turn control to the next player who has not finished.
+
+        Seats are tried in turn order, wrapping around with ``%``. Players with
+        all four tokens home are skipped. If nobody is left to play, the game
+        ends with the current player recorded as the winner.
+        """
 
         self.turns_taken += 1
         for offset in range(1, len(self.players) + 1):
@@ -372,15 +569,23 @@ class LudoGame:
             if self.players[candidate].finished_count(self.layout.finish_steps) < TOKENS_PER_PLAYER:
                 self.current = candidate
                 self.awaiting = "pre_roll"
+                self._emit("turn_change")
                 return
         self._finish_game(self.current)
 
     def _finish_game(self, winner_index: int) -> None:
-        """Mark the game over and compute a final ranking."""
+        """Mark the game over and compute a final ranking.
+
+        Everyone is ranked by tokens home, then total progress, then captures
+        (all descending). Because the game ends as soon as one player brings
+        all four tokens home, the winner is the only player with four tokens
+        home and therefore always ranks first.
+        """
 
         self.phase = "game_over"
         self.awaiting = "game_over"
         self.winner = winner_index
+        self._emit("game_won")
         if winner_index not in self.ranking:
             self.ranking.append(winner_index)
         ordered = sorted(
@@ -399,14 +604,36 @@ class LudoGame:
         self._note(f"{self.players[winner_index].name} wins the game!")
 
     def _mark_finished_tokens(self) -> None:
-        """Teach token helper properties what this layout's finish step is."""
+        """Teach token helper properties what this layout's finish step is.
+
+        ``TokenState.finished`` needs the finish step, which depends on the
+        player count, so it is stamped onto every token here. This runs after
+        construction, after every move, and after loading a save.
+        """
 
         for player_state in self.players:
             for token in player_state.tokens:
                 token._finished_steps = self.layout.finish_steps
 
+    def drain_events(self) -> list[str]:
+        """Return every queued event, oldest first, and empty the queue.
+
+        The window calls this once per frame and turns each kind into a
+        sound. Humans, the AI, tests and simulations all change the game
+        through the same methods, so their actions queue the same events.
+        """
+
+        events, self.events = self.events, []
+        return events
+
+    def _emit(self, kind: str) -> None:
+        """Queue one event kind (one of ``EVENT_KINDS``) for ``drain_events``."""
+
+        self.events.append(kind)
+
     def _note(self, message: str) -> None:
         """Append a short message to the on-screen event log."""
 
         self.event_log.append(message)
+        # Keep only the newest 12 messages so the log cannot grow forever.
         del self.event_log[:-12]

@@ -26,6 +26,64 @@ from settings import (
     shade,
 )
 
+# Sidebar panels: score on top, the drop queue, then controls and progress.
+SCORE_PANEL = pygame.Rect(SIDEBAR_X, 42, SIDEBAR_WIDTH, 190)
+QUEUE_PANEL = pygame.Rect(SIDEBAR_X, 252, SIDEBAR_WIDTH, 316)
+INFO_PANEL = pygame.Rect(SIDEBAR_X, 588, SIDEBAR_WIDTH, 356)
+
+# The "Danger line" label: white text on a translucent dark pill.
+DANGER_LABEL_TEXT = WHITE
+DANGER_LABEL_BACKING = (8, 12, 26, 200)
+# The pill is this much wider/taller than its text.
+DANGER_LABEL_PAD = (18, 8)
+# Vertical gap below the danger line (and between fallback rows), how far the
+# label stays in from the bubble wall, how much room it keeps around the
+# launcher orb and aim line, and how many rows down it may move to find room.
+DANGER_LABEL_GAP = 10
+DANGER_LABEL_WALL_INSET = 26
+DANGER_LABEL_CLEARANCE = 8
+DANGER_LABEL_ROWS = 4
+
+# The main menu dims the scene behind it a little less than pause does.
+MENU_VEIL = (4, 8, 16, 120)
+
+# Overlay modals. Every button and text line is placed relative to these.
+# The main menu has no sidebar beside it, so it is centred on the screen. The
+# pause and game-over modals appear mid-run, so they are centred over the
+# bubble and stay clear of the sidebar HUD.
+MENU_MODAL = pygame.Rect(188, 236, 648, 584)
+PAUSE_MODAL = pygame.Rect(0, 316, 520, 430)
+PAUSE_MODAL.centerx = PLAYFIELD_CENTER[0]
+GAME_OVER_MODAL = pygame.Rect(0, 300, 594, 460)
+GAME_OVER_MODAL.centerx = PLAYFIELD_CENTER[0]
+
+# The sound on/off toggle. In a run it sits in the sidebar below the Pause and
+# Restart buttons; on the main menu it sits centred below the menu modal.
+# Its keyboard shortcut is written just below the button.
+SOUND_BUTTON_HUD = pygame.Rect(790, 1116, 188, 58)
+SOUND_BUTTON_MENU = pygame.Rect(0, MENU_MODAL.bottom + 52, 220, 56)
+SOUND_BUTTON_MENU.centerx = MENU_MODAL.centerx
+SOUND_HINT = "Ctrl+M"
+# Gap between the button's glow and the hint below it.
+SOUND_HINT_GAP = 16
+
+# Largest visible radius (glow included) of the current and next queue previews.
+CURRENT_SLOT_RADIUS = 46
+NEXT_SLOT_RADIUS = 24
+
+# Spare pixels around a preview backplate so its outermost halo ring is never clipped.
+BACKPLATE_PADDING = 8
+
+# The controls reference: (keys, action) per row.
+CONTROL_ROWS = (
+    ("Mouse / A, D", "Move"),
+    ("Right drag / W, S", "Angle"),
+    ("Wheel / Up, Dn", "Fine aim"),
+    ("Click / Space", "Launch"),
+    ("Esc / P", "Pause"),
+    ("R / M", "Restart / Menu"),
+)
+
 
 def draw_panel(
     target: pygame.Surface,
@@ -47,40 +105,65 @@ def draw_panel(
             border_radius=radius + 14,
         )
     target.blit(glow, (rect.x - 14, rect.y - 14))
+    target.blit(panel_surface(rect.size, fill, border, radius), rect.topleft)
 
+
+def panel_surface(
+    size: tuple[int, int],
+    fill: tuple[int, int, int, int],
+    border: tuple[int, int, int],
+    radius: int,
+) -> pygame.Surface:
+    """Build the rounded, glossy glass body of one panel on an alpha surface.
+
+    Beginner note:
+    - The gloss and shadow ellipses are wider than the panel, so on their own
+      they would also tint the empty corners outside the rounded shape and
+      leave square-looking patches there.
+    - They are therefore drawn on a separate layer that is multiplied by a
+      rounded-rectangle mask, which wipes out everything outside the corners.
+    """
     # Draw onto a temporary alpha surface so the caller can get soft transparency.
     # This makes the panel feel like tinted glass instead of a flat opaque box.
-    panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+    width, height = size
+    panel = pygame.Surface(size, pygame.SRCALPHA)
     panel_rect = panel.get_rect()
     pygame.draw.rect(panel, fill, panel_rect, border_radius=radius)
 
     # A glossy ellipse across the top acts like reflected light on curved glass.
-    gloss = pygame.Surface(rect.size, pygame.SRCALPHA)
+    gloss = pygame.Surface(size, pygame.SRCALPHA)
     pygame.draw.ellipse(
         gloss,
         (255, 255, 255, 26),
         pygame.Rect(
-            -int(rect.w * 0.14),
-            -int(rect.h * 0.44),
-            int(rect.w * 1.28),
-            int(rect.h * 0.88),
+            -int(width * 0.14),
+            -int(height * 0.44),
+            int(width * 1.28),
+            int(height * 0.88),
         ),
     )
-    panel.blit(gloss, (0, 0))
 
     # A darker ellipse near the bottom adds depth so the panel does not feel flat.
-    lower_shadow = pygame.Surface(rect.size, pygame.SRCALPHA)
+    lower_shadow = pygame.Surface(size, pygame.SRCALPHA)
     pygame.draw.ellipse(
         lower_shadow,
         (0, 0, 0, 34),
         pygame.Rect(
-            int(rect.w * 0.06),
-            int(rect.h * 0.68),
-            int(rect.w * 0.88),
-            int(rect.h * 0.34),
+            int(width * 0.06),
+            int(height * 0.68),
+            int(width * 0.88),
+            int(height * 0.34),
         ),
     )
-    panel.blit(lower_shadow, (0, 0))
+    gloss.blit(lower_shadow, (0, 0))
+
+    # Keep the gloss and shadow inside the rounded shape: multiplying by a
+    # white rounded rectangle leaves pixels inside untouched and zeroes the
+    # alpha of everything outside the corners.
+    mask = pygame.Surface(size, pygame.SRCALPHA)
+    pygame.draw.rect(mask, (255, 255, 255, 255), panel_rect, border_radius=radius)
+    gloss.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    panel.blit(gloss, (0, 0))
 
     # The outer border and inner highlight give the panel a layered rim.
     pygame.draw.rect(panel, (*border, 220), panel_rect, width=2, border_radius=radius)
@@ -91,7 +174,7 @@ def draw_panel(
         width=1,
         border_radius=max(8, radius - 10),
     )
-    target.blit(panel, rect.topleft)
+    return panel
 
 
 def draw_section_rule(
@@ -120,17 +203,111 @@ def draw_preview_backplate(
     The previews are important gameplay information, so this helper gives them a
     visual stage of their own. That makes the queue easier to scan at a glance.
     """
-    halo = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-    halo_center = pygame.Vector2(halo.get_width() / 2, halo.get_height() / 2)
+    # The widest halo ring is drawn out to `radius + 6`, so the surface gets
+    # `BACKPLATE_PADDING` spare pixels beyond `radius` on every side; a surface
+    # only `radius` wide would clip the halo into a square.
+    half = radius + BACKPLATE_PADDING
+    halo = pygame.Surface((half * 2, half * 2), pygame.SRCALPHA)
+    halo_center = pygame.Vector2(half, half)
     for ring, alpha in ((0, 36), (8, 20), (16, 10)):
         pygame.draw.circle(halo, (*color, alpha), halo_center, radius - 10 + ring, width=10 if ring else 0)
     pygame.draw.circle(halo, (255, 255, 255, 26), halo_center, radius - 18, width=2)
     target.blit(halo, halo.get_rect(center=center))
 
 
+def preview_scale(orb: pygame.Surface, slot_radius: float, max_scale: float) -> float:
+    """Return how much to scale a preview orb so its visible art fits its slot.
+
+    `orb` is the tier's full orb art (glow included). Small tiers keep the
+    friendly `max_scale`; larger tiers shrink so their glow never spills over
+    the labels around the slot.
+    """
+    visible = orb.get_bounding_rect()
+    half_extent = max(visible.w, visible.h) / 2.0
+    return min(max_scale, slot_radius / half_extent) if half_extent > 0 else max_scale
+
+
+@dataclass(slots=True)
+class PreviewSlot:
+    """Where and how big one drop-queue preview orb is drawn.
+
+    Attributes:
+        tier: Which tier's sprite to show.
+        center: Canvas position of the orb and its backplate.
+        scale: Sprite scale from `preview_scale()`.
+        alpha: Sprite opacity (the "next" orb is slightly faded).
+        backplate_radius, backplate_color: Size and tint of the halo behind it.
+    """
+
+    tier: int
+    center: tuple[int, int]
+    scale: float
+    alpha: int
+    backplate_radius: int
+    backplate_color: tuple[int, int, int]
+
+
+def queue_layout(
+    assets, game, queue_rect: pygame.Rect
+) -> tuple[list[tuple[pygame.Surface, pygame.Rect]], list[PreviewSlot]]:
+    """Lay out the Drop Queue panel: its text items and its two preview slots.
+
+    Returning the layout (instead of drawing straight away) lets the tests
+    check that previews never cover the labels, using the real fonts.
+    """
+    left, top, middle = queue_rect.x, queue_rect.y, queue_rect.centerx
+    texts: list[tuple[pygame.Surface, pygame.Rect]] = []
+
+    def add_text(surface: pygame.Surface, **anchor: tuple[int, int]) -> None:
+        """Record one rendered label at its anchored position."""
+        texts.append((surface, surface.get_rect(**anchor)))
+
+    add_text(assets.small_font.render("Drop Queue", True, SOFT_WHITE), topleft=(left + 20, top + 16))
+    add_text(assets.body_font.render(game.current_body_name, True, WHITE), center=(middle, top + 172))
+    add_text(assets.tiny_font.render("Current", True, GLOW), center=(middle, top + 198))
+    # The next body's caption and name share one line, centred as a pair.
+    next_hint = assets.tiny_font.render("Next", True, GLOW)
+    next_name = assets.small_font.render(game.next_body_name, True, SOFT_WHITE)
+    pair_left = middle - (next_hint.get_width() + 8 + next_name.get_width()) // 2
+    add_text(next_hint, midleft=(pair_left, top + 288))
+    add_text(next_name, midleft=(pair_left + next_hint.get_width() + 8, top + 288))
+
+    current_scale = preview_scale(assets.get_body_surface(game.current_tier), CURRENT_SLOT_RADIUS, 1.12)
+    next_scale = preview_scale(assets.get_body_surface(game.next_tier), NEXT_SLOT_RADIUS, 0.82)
+    slots = [
+        PreviewSlot(game.current_tier, (middle, top + 104), current_scale, 255, CURRENT_SLOT_RADIUS + 6, GLOW),
+        PreviewSlot(game.next_tier, (middle, top + 244), next_scale, 215, NEXT_SLOT_RADIUS + 6, shade(GLOW, 0.88)),
+    ]
+    return texts, slots
+
+
+def control_rows(assets, info_rect: pygame.Rect) -> list[tuple[pygame.Surface, pygame.Rect]]:
+    """Lay out the controls reference as two columns: keys left, action right."""
+    items: list[tuple[pygame.Surface, pygame.Rect]] = []
+    for index, (keys, action) in enumerate(CONTROL_ROWS):
+        color = WHITE if index < 2 else SOFT_WHITE
+        y = info_rect.y + 56 + index * 28
+        keys_text = assets.tiny_font.render(keys, True, color)
+        action_text = assets.tiny_font.render(action, True, GLOW)
+        items.append((keys_text, keys_text.get_rect(topleft=(info_rect.x + 20, y))))
+        items.append((action_text, action_text.get_rect(topright=(info_rect.right - 20, y))))
+    return items
+
+
 @dataclass(slots=True)
 class Button:
-    """Simple clickable UI button with hover styling."""
+    """Simple clickable UI button with hover styling.
+
+    A `Button` only knows its rectangle, label and accent colour. It never acts
+    on a click itself: `game.py` asks `contains()` whether a click landed on it
+    and decides what to do. The overlay `place_*_buttons` helpers move and
+    resize the rectangle so it sits inside its modal.
+
+    Attributes:
+        rect: Position and size in canvas coordinates (also the click area).
+        label: Text drawn in the middle of the button.
+        accent: Border colour; it brightens a little while hovered.
+    """
 
     # `rect` stores both the button's size and screen position.
     rect: pygame.Rect
@@ -148,18 +325,62 @@ class Button:
         fill = (20, 34, 68, 235) if hovered else (12, 24, 50, 220)
         outline = shade(self.accent, 1.18 if hovered else 1.0)
         draw_panel(target, self.rect, fill, outline, radius=22)
-        shine_y = self.rect.y + 10
-        pygame.draw.line(target, (255, 255, 255, 42), (self.rect.x + 24, shine_y), (self.rect.right - 24, shine_y), 2)
+        # The shine bar is a faint (alpha 42) reflection. Drawing an alpha
+        # colour straight onto the opaque canvas would ignore the alpha and
+        # paint solid white, so it goes on its own small alpha strip first.
+        shine = pygame.Surface((self.rect.w - 48, 2), pygame.SRCALPHA)
+        shine.fill((255, 255, 255, 42))
+        target.blit(shine, (self.rect.x + 24, self.rect.y + 10))
         shadow = assets.ui_font.render(self.label, True, (8, 12, 24))
         target.blit(shadow, shadow.get_rect(center=(self.rect.centerx, self.rect.centery + 2)))
         label = assets.ui_font.render(self.label, True, WHITE if hovered else SOFT_WHITE)
         target.blit(label, label.get_rect(center=self.rect.center))
 
 
-def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, warning_active: bool) -> None:
-    """Draw the bubble container and its danger line."""
+def sound_label(muted: bool) -> str:
+    """Return the sound toggle's label for the current mute state."""
+    return "Sound: Off" if muted else "Sound: On"
+
+
+def sound_hint_layout(assets, button: Button) -> tuple[pygame.Surface, pygame.Rect]:
+    """Render the toggle's shortcut hint and place it centred below `button`.
+
+    The hint starts below the button's 14 px glow, plus `SOUND_HINT_GAP`.
+    """
+    hint = assets.tiny_font.render(SOUND_HINT, True, SOFT_WHITE)
+    return hint, hint.get_rect(midtop=(button.rect.centerx, button.rect.bottom + 14 + SOUND_HINT_GAP))
+
+
+def draw_sound_toggle(
+    surface: pygame.Surface,
+    assets,
+    button: Button,
+    muted: bool,
+    mouse_pos: tuple[int, int],
+) -> None:
+    """Draw the sound toggle, labelled with the current state, and its shortcut hint.
+
+    The label is refreshed from `muted` every frame, so it can never show a
+    stale state.
+    """
+    button.label = sound_label(muted)
+    button.draw(surface, assets, mouse_pos)
+    hint, rect = sound_hint_layout(assets, button)
+    surface.blit(hint, rect)
+
+
+def draw_playfield(surface: pygame.Surface, danger_ratio: float) -> None:
+    """Draw the bubble container and its danger line.
+
+    The "Danger line" label is drawn separately by `draw_danger_label`, on top
+    of the bodies and the launcher, at a spot `danger_label_rect` keeps clear.
+    """
     center = pygame.Vector2(PLAYFIELD_CENTER)
-    bubble_rect = pygame.Rect(0, 0, CONTAINER_RADIUS * 2 + 28, CONTAINER_RADIUS * 2 + 28)
+    # The outer glow rings reach 30 px past the rim, so the glow surface needs
+    # that much room (plus a little spare) on every side; a smaller surface
+    # would cut the round glow off in flat edges.
+    glow_reach = 30 + 4
+    bubble_rect = pygame.Rect(0, 0, (CONTAINER_RADIUS + glow_reach) * 2, (CONTAINER_RADIUS + glow_reach) * 2)
     bubble_rect.center = (int(center.x), int(center.y))
 
     # The outer glow gives the glass bubble a soft luminous edge.
@@ -216,7 +437,9 @@ def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, war
     surface.blit(bubble, bubble.get_rect(center=(int(center.x), int(center.y))))
 
     # The fail line is actually a chord across the circle, so we compute its span
-    # from the circle equation instead of guessing a fixed width.
+    # from the circle equation instead of guessing a fixed width: at vertical
+    # offset `dy` from the centre, the circle is `sqrt(R^2 - dy^2)` wide on
+    # each side. The line stops 18 px short of the wall at both ends.
     # The danger line colour walks a calm -> yellow -> orange -> red gradient so
     # rising risk is obvious well before the line actually turns red.
     line_color = danger_gradient(danger_ratio)
@@ -225,7 +448,6 @@ def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, war
     half_span = math.sqrt(max(0.0, CONTAINER_RADIUS * CONTAINER_RADIUS - dy * dy)) - 18.0
     left = int(center.x - half_span)
     right = int(center.x + half_span)
-    pulse = 1.0 + math.sin(now * 9.0) * 0.2 * danger_ratio
     width = 3 + int(3 * danger_ratio)
     if danger_ratio > 0.0:
         warning_glow = pygame.Surface((right - left + 40, 40), pygame.SRCALPHA)
@@ -238,19 +460,82 @@ def draw_playfield(surface: pygame.Surface, now: float, danger_ratio: float, war
         )
         surface.blit(warning_glow, (left - 20, chord_y - warning_glow.get_height() // 2))
     pygame.draw.line(surface, line_color, (left, chord_y), (right, chord_y), width)
-    if warning_active:
-        # Show a floating label only when the player is actually in danger.
-        hint = pygame.font.Font(None, 28).render("Danger line", True, WHITE)
-        hint_rect = hint.get_rect(midbottom=(int(center.x), int(chord_y - 10 - pulse * 4)))
-        surface.blit(hint, hint_rect)
+
+
+def danger_label_rect(
+    text_size: tuple[int, int],
+    launcher: pygame.Vector2,
+    launcher_radius: float,
+    aim_back: pygame.Vector2,
+    aim_front: pygame.Vector2,
+) -> pygame.Rect:
+    """Choose where the "Danger line" label goes so it never hides the launcher.
+
+    The label sits just below the danger line, tucked toward the left or right
+    end of it. The side away from the launcher is tried first; a side is used
+    only if the label keeps clear of the launcher orb and the aim line
+    (`aim_back` to `aim_front`). If neither side is clear on the first row, the
+    next row down is tried. Every spot stays well inside the bubble wall.
+    """
+    pill = pygame.Rect(0, 0, text_size[0] + DANGER_LABEL_PAD[0], text_size[1] + DANGER_LABEL_PAD[1])
+    center_x, center_y = PLAYFIELD_CENTER
+    orb = pygame.Rect(0, 0, round(launcher_radius * 2), round(launcher_radius * 2))
+    orb.center = (round(launcher.x), round(launcher.y))
+    sides = ("left", "right") if launcher.x >= center_x else ("right", "left")
+    candidate = pill
+    for row in range(DANGER_LABEL_ROWS):
+        top = FAIL_LINE_Y + DANGER_LABEL_GAP + row * (pill.h + DANGER_LABEL_GAP)
+        # Half-width of the bubble at the row's top edge (the narrower edge).
+        half_width = math.sqrt(max(0.0, CONTAINER_RADIUS**2 - (top - center_y) ** 2))
+        for side in sides:
+            candidate = pill.copy()
+            candidate.top = top
+            if side == "left":
+                candidate.left = int(center_x - half_width + DANGER_LABEL_WALL_INSET)
+            else:
+                candidate.right = int(center_x + half_width - DANGER_LABEL_WALL_INSET)
+            clearance = candidate.inflate(DANGER_LABEL_CLEARANCE * 2, DANGER_LABEL_CLEARANCE * 2)
+            if not clearance.colliderect(orb) and not clearance.clipline(aim_back, aim_front):
+                return candidate
+    return candidate
+
+
+def draw_danger_label(surface: pygame.Surface, font: pygame.font.Font, center: tuple[int, int]) -> pygame.Rect:
+    """Draw the "Danger line" label on a dark pill and return the pill's rect.
+
+    The label usually floats over a crowded, colourful stack, so plain white
+    text was hard to read; the translucent dark backing keeps it legible.
+    """
+    text = font.render("Danger line", True, DANGER_LABEL_TEXT)
+    pill_rect = text.get_rect().inflate(*DANGER_LABEL_PAD)
+    pill_rect.center = center
+    pill = pygame.Surface(pill_rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(pill, DANGER_LABEL_BACKING, pill.get_rect(), border_radius=pill_rect.h // 2)
+    surface.blit(pill, pill_rect)
+    surface.blit(text, text.get_rect(center=center))
+    return pill_rect
 
 
 def draw_hud(surface: pygame.Surface, game, assets) -> None:
-    """Draw the sidebar HUD with score, queue, controls, and warning meter."""
+    """Draw the sidebar HUD with score, queue, controls, and warning meter.
+
+    The sidebar is three panels, top to bottom:
+
+    - Score: the live score, the high score and the number of bodies.
+    - Drop Queue: the current and next bodies, laid out by `queue_layout`.
+    - Controls and progress: the key reference, the best body reached this
+      run (green once the top tier is reached), and the "Container stress"
+      bar filled from `game.container_stress`.
+
+    Args:
+        surface: The canvas to draw on.
+        game: The running `OrbitalOrchardGame`; only read, never changed.
+        assets: The `AssetLibrary` with fonts and orb sprites.
+    """
     # These panels divide the sidebar into clear chunks of information.
-    score_rect = pygame.Rect(SIDEBAR_X, 42, SIDEBAR_WIDTH, 190)
-    queue_rect = pygame.Rect(SIDEBAR_X, 252, SIDEBAR_WIDTH, 292)
-    info_rect = pygame.Rect(SIDEBAR_X, 564, SIDEBAR_WIDTH, 380)
+    score_rect = SCORE_PANEL
+    queue_rect = QUEUE_PANEL
+    info_rect = INFO_PANEL
 
     draw_panel(surface, score_rect)
     draw_panel(surface, queue_rect)
@@ -271,54 +556,35 @@ def draw_hud(surface: pygame.Surface, game, assets) -> None:
     surface.blit(body_count, (score_rect.x + 20, score_rect.y + 156))
 
     # Current and next drop previews.
-    # The current preview is slightly larger so the player's next action is obvious.
-    queue_title = assets.small_font.render("Drop Queue", True, SOFT_WHITE)
-    surface.blit(queue_title, (queue_rect.x + 20, queue_rect.y + 16))
+    # The current preview is larger so the player's next action is obvious.
+    # Each preview is scaled to fit its slot (see `queue_layout`), so big
+    # tiers never cover the panel title or the labels around them.
+    texts, slots = queue_layout(assets, game, queue_rect)
     draw_section_rule(surface, queue_rect.x + 20, queue_rect.y + 40, queue_rect.w - 40, GLOW)
+    for slot in slots:
+        draw_preview_backplate(surface, slot.center, slot.backplate_radius, slot.backplate_color)
+        assets.draw_preview_orb(surface, slot.tier, slot.center, game.now, scale=slot.scale, alpha=slot.alpha)
+    for text, rect in texts:
+        surface.blit(text, rect)
 
-    draw_preview_backplate(surface, (queue_rect.centerx, queue_rect.y + 96), 72, GLOW)
-    assets.draw_preview_orb(surface, game.current_tier, (queue_rect.centerx, queue_rect.y + 96), game.now, scale=1.12)
-    current_name = assets.body_font.render(game.current_body_name, True, WHITE)
-    surface.blit(current_name, current_name.get_rect(center=(queue_rect.centerx, queue_rect.y + 168)))
-    current_hint = assets.tiny_font.render("Current", True, GLOW)
-    surface.blit(current_hint, current_hint.get_rect(center=(queue_rect.centerx, queue_rect.y + 196)))
-
-    next_orb_center = (queue_rect.centerx, queue_rect.y + 228)
-    draw_preview_backplate(surface, next_orb_center, 54, shade(GLOW, 0.88))
-    assets.draw_preview_orb(surface, game.next_tier, next_orb_center, game.now, scale=0.82, alpha=215)
-    next_name = assets.small_font.render(game.next_body_name, True, SOFT_WHITE)
-    surface.blit(next_name, next_name.get_rect(center=(queue_rect.centerx, queue_rect.y + 264)))
-    next_hint = assets.tiny_font.render("Next", True, GLOW)
-    surface.blit(next_hint, next_hint.get_rect(center=(queue_rect.centerx, queue_rect.y + 286)))
-
-    # Compact controls reference for the player.
-    # Keeping these strings here makes the HUD easy to tweak without changing
-    # the input logic itself.
+    # Compact controls reference for the player: keys on the left, the action
+    # they perform right-aligned, so long key lists can never run off the panel.
     controls_title = assets.small_font.render("Controls", True, SOFT_WHITE)
     surface.blit(controls_title, (info_rect.x + 20, info_rect.y + 16))
     draw_section_rule(surface, info_rect.x + 20, info_rect.y + 40, info_rect.w - 40, GLOW)
-    controls = [
-        "Mouse near top / A,D   Move",
-        "Right drag / W,S       Angle",
-        "Wheel / Up,Down        Fine aim",
-        "Left click / Space     Launch",
-        "Esc/P pause  R restart",
-        "M menu",
-    ]
-    for index, line in enumerate(controls):
-        text = assets.tiny_font.render(line, True, WHITE if index < 2 else SOFT_WHITE)
-        surface.blit(text, (info_rect.x + 20, info_rect.y + 58 + index * 32))
+    for text, rect in control_rows(assets, info_rect):
+        surface.blit(text, rect)
 
     # Progress summary: best body reached this run.
     best_tier = assets.small_font.render("Best body", True, SOFT_WHITE)
-    surface.blit(best_tier, (info_rect.x + 20, info_rect.y + 252))
+    surface.blit(best_tier, (info_rect.x + 20, info_rect.y + 232))
     unlocked = assets.ui_font.render(game.best_tier_name, True, SUCCESS if game.goal_reached else WHITE)
-    surface.blit(unlocked, (info_rect.x + 20, info_rect.y + 286))
+    surface.blit(unlocked, (info_rect.x + 20, info_rect.y + 258))
 
     # The stress meter updates continuously based on stack height, then fills the
     # final segment from the actual fail countdown while the player is in danger.
     danger = min(1.0, game.container_stress)
-    bar_rect = pygame.Rect(info_rect.x + 20, info_rect.y + 344, info_rect.w - 40, 18)
+    bar_rect = pygame.Rect(info_rect.x + 20, info_rect.y + 318, info_rect.w - 40, 18)
     pygame.draw.rect(surface, (18, 28, 52), bar_rect, border_radius=10)
     fill_width = max(8, int(bar_rect.w * danger)) if danger > 0.0 else 0
     if fill_width > 0:
@@ -332,6 +598,36 @@ def draw_hud(surface: pygame.Surface, game, assets) -> None:
     surface.blit(warning_text, (bar_rect.x, bar_rect.y - 24))
 
 
+def place_menu_buttons(buttons: list[Button]) -> None:
+    """Centre the menu buttons along the bottom of the menu modal."""
+    for index, button in enumerate(reversed(buttons)):
+        button.rect.size = (260, 64)
+        button.rect.centerx = MENU_MODAL.centerx
+        button.rect.bottom = MENU_MODAL.bottom - 24 - index * 78
+
+
+def menu_texts(
+    assets, high_score: int, games_played: int, best_tier_name: str
+) -> list[tuple[pygame.Surface, pygame.Rect]]:
+    """Render and place every text line of the main menu modal."""
+    modal = MENU_MODAL
+    lines = [
+        (assets.title_font, "Orbital", WHITE, 84),
+        (assets.title_font, "Orchard", WHITE, 168),
+        (assets.small_font, "Drop, bounce, and merge celestial cuties into a Quasar Crown.", SOFT_WHITE, 228),
+        (assets.ui_font, "Stack bodies inside the bubble.", WHITE, 286),
+        (assets.ui_font, "Touch two matching tiers to evolve them.", WHITE, 332),
+        (assets.ui_font, "Keep old bodies under the danger line.", WHITE, 378),
+        (assets.small_font, f"Local high score: {high_score:,}", GLOW, 424),
+        (assets.tiny_font, f"Games played: {games_played:,}    Best body: {best_tier_name}", SOFT_WHITE, 458),
+    ]
+    texts = []
+    for font, text, color, offset in lines:
+        surface = font.render(text, True, color)
+        texts.append((surface, surface.get_rect(center=(modal.centerx, modal.y + offset))))
+    return texts
+
+
 def draw_menu_overlay(
     surface: pygame.Surface,
     assets,
@@ -341,40 +637,54 @@ def draw_menu_overlay(
     best_tier_name: str,
     mouse_pos: tuple[int, int],
 ) -> None:
-    """Draw the main menu overlay."""
-    modal = pygame.Rect(188, 244, 648, 520)
+    """Draw the main menu overlay.
+
+    A translucent veil dims the scene behind, then the menu modal is drawn
+    with the title, a short how-to-play, the lifetime stats, and the buttons.
+
+    Args:
+        surface: The canvas to draw on.
+        assets: The `AssetLibrary` with fonts.
+        buttons: Menu buttons owned by the game (placed inside the modal here).
+        high_score, games_played, best_tier_name: Lifetime stats to show.
+        mouse_pos: Canvas mouse position, for hover highlighting.
+    """
+    # Dim whatever is behind the menu (the bubble, a stack left over from a
+    # previous run, the danger line) so none of it reads as part of the menu.
+    veil = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+    veil.fill(MENU_VEIL)
+    surface.blit(veil, (0, 0))
 
     # Menus are just overlays drawn on top of the existing background.
     # The main loop decides *when* to draw them, this function decides *how*.
-    draw_panel(surface, modal, (10, 18, 42, 230), (108, 148, 238), radius=34)
+    draw_panel(surface, MENU_MODAL, (10, 18, 42, 230), (108, 148, 238), radius=34)
+    for text, rect in menu_texts(assets, high_score, games_played, best_tier_name):
+        surface.blit(text, rect)
 
-    title = assets.title_font.render("Orbital", True, WHITE)
-    title2 = assets.title_font.render("Orchard", True, WHITE)
-    surface.blit(title, title.get_rect(center=(modal.centerx, modal.y + 88)))
-    surface.blit(title2, title2.get_rect(center=(modal.centerx, modal.y + 164)))
-
-    subtitle_text = "Drop, bounce, and merge celestial cuties into a Quasar Crown."
-    subtitle = assets.small_font.render(subtitle_text, True, SOFT_WHITE)
-    surface.blit(subtitle, subtitle.get_rect(center=(modal.centerx, modal.y + 228)))
-
-    tips = [
-        "Stack bodies inside the bubble.",
-        "Touch two matching tiers to evolve them.",
-        "Keep old bodies under the red danger line.",
-    ]
-    for index, line in enumerate(tips):
-        text = assets.ui_font.render(line, True, WHITE)
-        surface.blit(text, text.get_rect(center=(modal.centerx, modal.y + 286 + index * 46)))
-
-    best = assets.small_font.render(f"Local high score: {high_score:,}", True, GLOW)
-    surface.blit(best, best.get_rect(center=(modal.centerx, modal.y + 420)))
-    stats_line = f"Games played: {games_played:,}    Best body: {best_tier_name}"
-    stats = assets.tiny_font.render(stats_line, True, SOFT_WHITE)
-    surface.blit(stats, stats.get_rect(center=(modal.centerx, modal.y + 456)))
-
-    # Buttons are passed in from the game object so click handling stays there.
+    # Buttons are passed in from the game object so click handling stays there;
+    # they are placed inside the modal here so the layout lives in one place.
+    place_menu_buttons(buttons)
     for button in buttons:
         button.draw(surface, assets, mouse_pos)
+
+
+def place_pause_buttons(buttons: list[Button]) -> None:
+    """Stack the pause buttons inside the pause modal."""
+    for index, button in enumerate(buttons):
+        button.rect.size = (310, 60)
+        button.rect.centerx = PAUSE_MODAL.centerx
+        button.rect.y = PAUSE_MODAL.y + 184 + index * 74
+
+
+def pause_texts(assets) -> list[tuple[pygame.Surface, pygame.Rect]]:
+    """Render and place the pause modal's title and hint."""
+    modal = PAUSE_MODAL
+    title = assets.header_font.render("Paused", True, WHITE)
+    hint = assets.small_font.render("Take a breath. Your orchard is waiting.", True, SOFT_WHITE)
+    return [
+        (title, title.get_rect(center=(modal.centerx, modal.y + 74))),
+        (hint, hint.get_rect(center=(modal.centerx, modal.y + 134))),
+    ]
 
 
 def draw_pause_overlay(
@@ -389,24 +699,48 @@ def draw_pause_overlay(
     # The dark veil dims gameplay behind the modal so the pause state is readable.
     veil.fill((4, 8, 16, 150))
     surface.blit(veil, (0, 0))
-    modal = pygame.Rect(252, 316, 520, 430)
-    draw_panel(surface, modal, (10, 18, 42, 236), (108, 148, 238), radius=34)
-    title = assets.header_font.render("Paused", True, WHITE)
-    surface.blit(title, title.get_rect(center=(modal.centerx, modal.y + 74)))
-    hint = assets.small_font.render("Take a breath. Your orchard is waiting.", True, SOFT_WHITE)
-    surface.blit(hint, hint.get_rect(center=(modal.centerx, modal.y + 134)))
+    draw_panel(surface, PAUSE_MODAL, (10, 18, 42, 236), (108, 148, 238), radius=34)
+    for text, rect in pause_texts(assets):
+        surface.blit(text, rect)
 
     # Reposition buttons every frame relative to the modal so the layout stays
     # consistent even if button objects are reused elsewhere.
-    # Doing this here also means the pause menu can be resized/reframed later
-    # without manually updating three separate button rectangles in `game.py`.
-    for index, button in enumerate(buttons):
-        button.rect.size = (310, 60)
-        button.rect.centerx = modal.centerx
-        button.rect.y = modal.y + 184 + index * 74
-
+    place_pause_buttons(buttons)
     for button in buttons:
         button.draw(surface, assets, mouse_pos)
+
+
+def place_game_over_buttons(buttons: list[Button]) -> None:
+    """Stack the game-over buttons inside the bottom of the game-over modal."""
+    for index, button in enumerate(buttons):
+        button.rect.size = (320, 60)
+        button.rect.centerx = GAME_OVER_MODAL.centerx
+        button.rect.y = GAME_OVER_MODAL.y + 296 + index * 74
+
+
+def game_over_texts(
+    assets,
+    score: int,
+    high_score: int,
+    new_record: bool,
+    games_played: int,
+    best_tier_name: str,
+) -> list[tuple[pygame.Surface, pygame.Rect]]:
+    """Render and place every text line of the game-over modal."""
+    modal = GAME_OVER_MODAL
+    status = "New high score!" if new_record else f"Best: {high_score:,}"
+    lines = [
+        (assets.header_font, "Orbit Lost", WHITE, 70),
+        (assets.score_font, f"{score:,}", WHITE, 148),
+        (assets.small_font, "Final score", SOFT_WHITE, 192),
+        (assets.small_font, status, SUCCESS if new_record else GLOW, 228),
+        (assets.tiny_font, f"Games played: {games_played:,}    Best ever: {best_tier_name}", SOFT_WHITE, 262),
+    ]
+    texts = []
+    for font, text, color, offset in lines:
+        surface = font.render(text, True, color)
+        texts.append((surface, surface.get_rect(center=(modal.centerx, modal.y + offset))))
+    return texts
 
 
 def draw_game_over_overlay(
@@ -424,30 +758,11 @@ def draw_game_over_overlay(
     veil = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     veil.fill((6, 10, 18, 165))
     surface.blit(veil, (0, 0))
-    modal = pygame.Rect(220, 300, 594, 436)
-    draw_panel(surface, modal, (10, 18, 42, 240), (255, 140, 140), radius=34)
-
-    title = assets.header_font.render("Orbit Lost", True, WHITE)
-    surface.blit(title, title.get_rect(center=(modal.centerx, modal.y + 70)))
-    score_text = assets.score_font.render(f"{score:,}", True, WHITE)
-    surface.blit(score_text, score_text.get_rect(center=(modal.centerx, modal.y + 148)))
-    label = assets.small_font.render("Final score", True, SOFT_WHITE)
-    surface.blit(label, label.get_rect(center=(modal.centerx, modal.y + 190)))
-
-    status = "New high score!" if new_record else f"Best: {high_score:,}"
-    status_color = SUCCESS if new_record else GLOW
-    status_text = assets.small_font.render(status, True, status_color)
-    surface.blit(status_text, status_text.get_rect(center=(modal.centerx, modal.y + 228)))
-
-    stats_line = f"Games played: {games_played:,}    Best ever: {best_tier_name}"
-    stats_text = assets.tiny_font.render(stats_line, True, SOFT_WHITE)
-    surface.blit(stats_text, stats_text.get_rect(center=(modal.centerx, modal.y + 264)))
+    draw_panel(surface, GAME_OVER_MODAL, (10, 18, 42, 240), (255, 140, 140), radius=34)
+    for text, rect in game_over_texts(assets, score, high_score, new_record, games_played, best_tier_name):
+        surface.blit(text, rect)
 
     # Place the retry buttons relative to the modal, matching the pause overlay.
-    for index, button in enumerate(buttons):
-        button.rect.size = (320, 60)
-        button.rect.centerx = modal.centerx
-        button.rect.y = modal.y + 300 + index * 74
-
+    place_game_over_buttons(buttons)
     for button in buttons:
         button.draw(surface, assets, mouse_pos)

@@ -1,4 +1,11 @@
-"""Seeded all-AI Ludo simulations for tuning heuristic profiles."""
+"""Seeded all-AI Ludo simulations for tuning heuristic profiles.
+
+Run it from this folder, for example ``python simulation.py --games 20
+--players 6 --profile defensive``. Every seat is a computer player, nothing is
+drawn, and each game is seeded, so the same command always prints the same
+results. That makes it easy to see whether a change to ``ai.AI_PROFILES`` or
+to the rules actually helps.
+"""
 
 from __future__ import annotations
 
@@ -15,17 +22,36 @@ def run_ai_game(
     profile_key: str = "tactical",
     seed: int = 1,
     max_actions: int = 6000,
+    rules: LudoRules | None = None,
 ) -> dict:
-    """Run one headless AI game and return summary metrics."""
+    """Run one headless AI game and return summary metrics.
 
-    players = [(f"AI {index + 1}", False) for index in range(total_players)]
-    game = LudoGame(players, LudoRules(total_players=total_players), seed=seed, ai_profile=profile_key)
+    ``rules`` overrides the classic defaults (and then decides the player
+    count); without it the game uses ``LudoRules(total_players)``.
+
+    The loop follows the engine's turn state machine exactly as the window
+    does: roll while ``awaiting`` is ``"pre_roll"``, then let the AI pick a
+    move (or report that none exists). ``max_actions`` is a safety cap so a
+    bug can never loop forever; ``"completed"`` in the result says whether
+    the game really ended.
+
+    Returns:
+        A dict with ``completed``, ``actions``, ``turns``, ``rolls``,
+        ``winner``, total ``captures`` and the final ``ranking``.
+    """
+
+    if rules is None:
+        rules = LudoRules(total_players=total_players)
+    players = [(f"AI {index + 1}", False) for index in range(rules.total_players)]
+    game = LudoGame(players, rules, seed=seed, ai_profile=profile_key)
     actions = 0
     while game.phase != "game_over" and actions < max_actions:
         actions += 1
         if game.awaiting == "pre_roll":
+            # Rolling with the game's own seeded RNG keeps runs reproducible.
             forfeited = game.record_roll(game.rng.randint(1, 6))
             if forfeited:
+                # A third 6 already passed the turn; start the next action.
                 continue
         if game.awaiting == "choose_move" and game.last_roll is not None:
             move = ai.choose_move(game, profile_key, game.last_roll)
@@ -45,15 +71,51 @@ def run_ai_game(
     }
 
 
-def main() -> None:
-    """Parse command-line options and print aggregate AI results."""
+def build_parser() -> argparse.ArgumentParser:
+    """Return the command-line parser, including the house-rule flags."""
 
     parser = argparse.ArgumentParser(description="Run seeded Ludo AI simulations.")
     parser.add_argument("--games", type=int, default=5)
     parser.add_argument("--players", type=int, choices=(4, 5, 6), default=4)
     parser.add_argument("--profile", choices=tuple(ai.AI_PROFILES), default="tactical")
     parser.add_argument("--seed", type=int, default=1)
-    args = parser.parse_args()
+    # The four house rules mirror the setup screen's toggles. Each flag
+    # flips its rule away from the classic default.
+    parser.add_argument("--blockades", action="store_true", help="two same-colour tokens block a square")
+    parser.add_argument("--no-capture-bonus", action="store_true", help="captures do not earn a bonus roll")
+    parser.add_argument("--no-home-bonus", action="store_true", help="reaching home does not earn a bonus roll")
+    parser.add_argument("--no-three-sixes", action="store_true", help="a third consecutive 6 is not forfeited")
+    return parser
+
+
+def rules_from_args(args: argparse.Namespace) -> LudoRules:
+    """Build the LudoRules a batch should use from parsed command-line flags."""
+
+    return LudoRules(
+        total_players=args.players,
+        blockades=args.blockades,
+        bonus_on_capture=not args.no_capture_bonus,
+        bonus_on_home=not args.no_home_bonus,
+        three_sixes_penalty=not args.no_three_sixes,
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse command-line options and print aggregate AI results.
+
+    Args:
+        argv: Command-line arguments without the program name. ``None`` means
+            "use ``sys.argv``", which is what a normal run does; tests pass a
+            list instead.
+
+    Plays ``--games`` games with seeds ``--seed``, ``--seed + 1``, and so on,
+    prints one line of metrics per game, then prints the number of completed
+    games, the average turns and captures per game, and how often each seat
+    won.
+    """
+
+    args = build_parser().parse_args(argv)
+    rules = rules_from_args(args)
 
     winners: Counter[int] = Counter()
     completed = 0
@@ -63,9 +125,9 @@ def main() -> None:
         # Incrementing the seed gives reproducible but different games within
         # one batch, which is useful when comparing AI profile tweaks.
         metrics = run_ai_game(
-            total_players=args.players,
             profile_key=args.profile,
             seed=args.seed + offset,
+            rules=rules,
         )
         print(f"game {offset + 1}: {metrics}")
         if metrics["completed"]:

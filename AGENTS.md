@@ -12,13 +12,15 @@ shipping as a single Windows `.exe` via PyInstaller:
 | Folder | Game | Stack |
 |---|---|---|
 | `Python Sputnika Game/` | **Orbital Orchard** — Suika-style merge puzzle in a circular bubble | pygame-ce |
-| `Python Solitaire Game/` | **Klondike Solitaire** — hints, auto-solve, undo | tkinter (stdlib only) |
+| `Python Solitaire Game/` | **Klondike Solitaire** — hints, auto-solve, undo | tkinter + pygame-ce (audio only) |
 | `Python Monopoly Game/` | **Monopoly** — full standard rules, AI seats, trading, auctions | pygame-ce |
 | `Python Ludo Game/` | **Ludo** — 4-6 players, clockwise movement, classic 4P cross + radial 5P/6P boards | pygame-ce |
 
 These are hobby games, but they are maintained to production hygiene: typed,
-linted, security-scanned, and tested in CI. All art and sound is procedural —
-there are no image/audio assets except the window-icon `.ico` files.
+linted, security-scanned, and tested in CI. All art, sound effects and music
+are procedural — there are no image/audio assets except the window icons (an
+`.ico` for the exe, plus a `.png` copy that the pygame games load for the
+window).
 
 ## 2. Mandatory workflow skills
 
@@ -31,6 +33,7 @@ them) the skills the owner uses everywhere:
 | Writing/reviewing/refactoring code | `karpathy-guidelines` (surgical changes, no speculative complexity) |
 | Any feature or bugfix | `test-driven-development` |
 | Before claiming something works | `verification-before-completion` (run the gates; evidence before assertions) |
+| Job complete (before the final report or PR hand-off) | `/code-review` and `/security-review` of the whole diff, one final time (see §10) |
 
 The Karpathy rules matter here specifically: each game deliberately duplicates
 small helpers instead of sharing a package (see §5) — do not "helpfully"
@@ -42,23 +45,30 @@ deduplicate across game folders.
 Games/
 ├── AGENTS.md / CLAUDE.md        -- this guide (CLAUDE.md just imports it)
 ├── README.md                    -- player-facing overview
+├── LICENSE                      -- MIT license
 ├── pyproject.toml               -- ruff + mypy + bandit config (repo-wide)
 ├── requirements-dev.txt         -- exact-pinned dev/CI toolchain
 ├── .pre-commit-config.yaml      -- check-only hooks (never rewrite files)
 ├── .github/workflows/quality-and-security.yml
+├── .github/dependabot.yaml      -- weekly version-update PRs (pip, pre-commit, actions)
 └── Python <Name> Game/          -- one self-contained game per folder
     ├── main.py                  -- entry point (Solitaire: solitaire.py)
     ├── game.py                  -- UI-free rules engine (pygame games)
     ├── settings.py              -- ALL tuning knobs and constants
+    ├── audio.py                 -- procedural synth, SoundBank, MusicPlayer (shared core)
     ├── tests/                   -- headless test suite
-    ├── requirements.txt         -- runtime deps (pygame-ce or nothing)
+    ├── requirements.txt         -- runtime deps (pygame-ce)
     └── <Name>.spec              -- PyInstaller build recipe
 ```
 
 Per-game module patterns (pygame games): `models.py` (dataclasses),
 `ai.py` (heuristics), `board_render.py`/`ui.py`/`visual_theme.py`/`assets.py`
-(drawing), `simulation.py` (seeded all-AI batches for tuning). Solitaire is a
-single file: `KlondikeGame` (rules) + `SolitaireApp` (tkinter shell).
+(drawing), `simulation.py` (seeded all-AI batches for tuning). Orbital
+Orchard also keeps its pure scoring and fail-timer rules in a pygame-free
+`rules.py`. Solitaire is `solitaire.py` (`KlondikeGame` rules + `SolitaireApp`
+tkinter shell, with its sound recipes in the constants block because it has
+no `settings.py`) plus its copy of `audio.py`; it uses pygame-ce for the mixer
+only and never opens a pygame window.
 
 ## 4. Architecture pattern (all four games)
 
@@ -78,17 +88,36 @@ animation state, and persistence. Keep it that way:
   ordering of `DisplayLayout.track_positions` alone decides movement
   direction (clockwise). `tests/test_board_geometry.py` locks continuity,
   clockwise winding, and start/yard/home alignment — change geometry only
-  with those tests green and a headless PNG render inspected.
+  with those tests green and a headless PNG render inspected. The shared lap
+  is the classic 51 cells (`layout.lap_length`); saves carry `lap_version`
+  (now 2), and `LudoGame.from_dict` migrates older saves.
+- Monopoly specifics: a human who cannot pay a debt enters the
+  `"raise_funds"` state instead of going bankrupt at once. Debts queue
+  first-in, first-out; the player sells or mortgages, then calls
+  `pay_debts()` or `declare_bankruptcy()`, and play resumes through
+  `_continue_after_landing()`. Debts are never saved.
+- Audio: every game plays procedural sound effects and a looping track
+  through its `audio.py`. The Ludo and Monopoly engines push event names
+  (`roll`, `capture`, `go_salary`, ...) onto an unsaved `events` queue; the
+  shell drains it once per frame and maps events to sounds, so AI turns are
+  heard too. Ctrl+M toggles sound in every game, and the choice is saved
+  (Ludo `stats.json`, Monopoly `options.json`, Orbital `save_data.json`,
+  Solitaire's score file); `persist=False` never writes it.
 
 ## 5. Coding conventions
 
-- Python 3.11+; `from __future__ import annotations`; modern typing
+- Python 3.12+; `from __future__ import annotations`; modern typing
   (`X | None`, pep585 builtins). Line length 120 (ruff enforces).
 - **Self-contained games.** Never import across game folders and never
   create a shared package. Small helpers (`_atomic_write`, `_log_error`,
   `_resource_path`, window scaling) are deliberately duplicated per game so
   each folder builds into a standalone exe; keep the copies textually
-  consistent when you touch one.
+  consistent when you touch one. (Solitaire's `_log_error(error, save_dir)`
+  takes its folder as a parameter, because `KlondikeGame`'s save path is
+  injectable; otherwise it matches the others.) The block between
+  `# ---- shared audio core ----` and `# ---- end shared audio core ----` in
+  each `audio.py` must stay byte-identical across all four games; recipes
+  and tuning live in each game's `settings.py` (Solitaire: `solitaire.py`).
 - The folder names contain spaces — always quote paths in commands, specs,
   and CI.
 - Flat module layout: game code does `from game import ...`; tests insert
@@ -115,21 +144,22 @@ animation state, and persistence. Keep it that way:
 ## 6. Quality gates (run before claiming done)
 
 Install once: `pip install -r requirements-dev.txt` plus
-`pip install -r "Python Ludo Game/requirements.txt"` (any one pygame game's
-requirements file provides pygame-ce for all three).
+`pip install -r "Python Ludo Game/requirements.txt"` (any one game's
+requirements file provides pygame-ce for all four; Solitaire uses it for
+audio only).
 
 From the repo root, all of these must pass — CI runs exactly this set on
-Python 3.11 and 3.13:
+Python 3.12, 3.13 and 3.14:
 
 ```powershell
 # Headless env for the pygame games (PowerShell syntax)
 $env:SDL_VIDEODRIVER = 'dummy'; $env:SDL_AUDIODRIVER = 'dummy'
 
 # Tests with coverage floors, run FROM INSIDE each game folder
-cd "Python Ludo Game";     python -m pytest tests -q --cov=game --cov=board --cov=ai --cov=models --cov-fail-under=75; cd ..
-cd "Python Monopoly Game"; python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=80; cd ..
-cd "Python Sputnika Game"; python -m pytest tests -q --cov=merge_logic --cov=physics --cov-fail-under=90; cd ..
-cd "Python Solitaire Game"; python -m pytest tests -q --cov=solitaire --cov-fail-under=32; cd ..
+cd "Python Ludo Game";     python -m pytest tests -q --cov=game --cov=board --cov=ai --cov=models --cov-fail-under=95; cd ..
+cd "Python Monopoly Game"; python -m pytest tests -q --cov=game --cov=ai --cov=cards --cov=board_data --cov=player --cov-fail-under=95; cd ..
+cd "Python Sputnika Game"; python -m pytest tests -q --cov=merge_logic --cov=physics --cov=rules --cov-fail-under=97; cd ..
+cd "Python Solitaire Game"; python -m pytest tests -q --cov=solitaire --cov-fail-under=88; cd ..
 
 # Static gates (repo root)
 python -m compileall -q .
@@ -147,7 +177,9 @@ Hard rules:
 - If you change a CI command, change the identical command here in §6 in the
   same commit.
 - Tool versions are pinned in `requirements-dev.txt` and mirrored in
-  `.pre-commit-config.yaml` (the ruff rev) — bump them together.
+  `.pre-commit-config.yaml` (the ruff rev) — bump them together. Dependabot's
+  `dev-toolchain` multi-ecosystem group already does this in one PR; keep
+  both entries in that group if you edit `.github/dependabot.yaml`.
 - Pre-commit hooks are check-only; never add hooks that rewrite files.
 
 ## 7. Windows / PowerShell gotchas
@@ -169,11 +201,20 @@ The owner develops on Windows 11 with PowerShell 5.1:
   `python -m unittest discover -s tests` (both work). Every test module,
   class, and test carries a docstring stating the behaviour under test.
 - Tests are engine-first and fully headless: pygame under the SDL dummy
-  driver; Solitaire tests exercise only the Tk-free `KlondikeGame` (never
-  instantiate `Tk()` in a test).
+  driver. Solitaire tests never instantiate `Tk()`: they test `KlondikeGame`
+  directly, and build `SolitaireApp` with `object.__new__` and a mocked
+  root, canvas and messagebox to test its handlers and drawing.
+- Audio tests set `SDL_AUDIODRIVER=dummy` (as well as the video driver)
+  before importing pygame, and assert on requested sound names and
+  rendered buffers, never on audible output.
 - Full-app smoke tests: `LUDO_AUTOTEST=1`, `MONOPOLY_AUTOTEST=1`, and
   `ORBITAL_ORCHARD_AUTOTEST=1` each play a short hidden-window session of
-  `main.py` and exit 0.
+  `main.py` and exit 0. They run the app with `persist=False`, so existing
+  saves are read but never written.
+- Layout and text-fit tests must hold under other fonts too: CI runners
+  resolve font names differently (DejaVu Sans, Liberation Sans, or pygame's
+  default). Leave real margin instead of asserting a 1-px fit, and check
+  colour contrast on the chosen colours, never on antialiased pixels.
 - Visual changes to the Ludo board: render each mode headless to a PNG and
   inspect it (create a small scratch script that calls
   `BoardRenderer.draw`/`draw_static` and `pygame.image.save`), in addition
@@ -208,3 +249,10 @@ Bundled read-only resources (window icons) are declared in the spec's
   before pushing; the `Quality & Security` workflow must be green before
   merging.
 - Do not amend or force-push shared history; add follow-up commits instead.
+- **Final review on completion.** When a job is done, before the final
+  report or PR hand-off, run `/code-review` and `/security-review` one final
+  time over the job's whole diff (for a stacked PR, against its base
+  branch). Verify each finding: fix real bugs test-first in follow-up
+  commits with the §6 gates green, and report intentional behaviour,
+  out-of-scope items and anything left unfixed to the owner instead of
+  silently dropping it.

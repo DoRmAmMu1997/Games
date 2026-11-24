@@ -1,4 +1,9 @@
-"""Pygame UI helpers for buttons, text labels, and log colors."""
+"""Pygame UI helpers for buttons, text labels, and log colors.
+
+These helpers know nothing about Ludo rules. ``main.py`` builds ``Button``
+objects each frame from the game state and uses the text helpers to draw
+labels that always fit their space.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +14,14 @@ import pygame
 from settings import (
     DANGER,
     DISABLED,
+    DISABLED_FILL,
     GOLD,
     INK,
     PANEL_CARD,
     PANEL_EDGE,
     SOFT,
+    STEPPER_SYMBOL_HALF,
+    STEPPER_SYMBOL_THICKNESS,
     SUCCESS,
     WHITE,
 )
@@ -26,6 +34,13 @@ class Button:
     The ``key`` is the value the app receives when the button is clicked. That
     lets drawing code stay generic while ``main.py`` decides what each button
     actually does.
+
+    Attributes:
+        rect: Where the button sits, in window pixels.
+        text: The label; "-", "+", "<" and ">" are drawn as shapes instead.
+        key: The action name ``main.py`` receives on a click.
+        enabled: Disabled buttons are drawn muted and ignore clicks.
+        accent: Fill colour while the mouse hovers over the button.
     """
 
     rect: pygame.Rect
@@ -40,20 +55,67 @@ class Button:
         return self.enabled and self.rect.collidepoint(pos)
 
     def draw(self, surface: pygame.Surface, fonts: dict[str, pygame.font.Font], mouse: tuple[int, int]) -> None:
-        """Render the button, including disabled and hover states."""
+        """Render the button, including disabled and hover states.
+
+        A disabled button is drawn darker than an idle one, with a muted
+        border and label, so it reads as switched off rather than lit up.
+        """
 
         hovered = self.contains(mouse)
-        fill = self.accent if hovered else PANEL_CARD
         if not self.enabled:
-            fill = DISABLED
+            fill, border, color = DISABLED_FILL, DISABLED, DISABLED
+        elif hovered:
+            fill, border, color = self.accent, PANEL_EDGE, INK
+        else:
+            fill, border, color = PANEL_CARD, PANEL_EDGE, WHITE
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
-        pygame.draw.rect(surface, PANEL_EDGE if self.enabled else INK, self.rect, 2, border_radius=8)
-        color = INK if hovered and self.enabled else WHITE
-        draw_text(surface, fonts["button"], self.text, self.rect.center, color, center=True)
+        pygame.draw.rect(surface, border, self.rect, 2, border_radius=8)
+        if self.text in STEPPER_SYMBOLS:
+            draw_stepper_symbol(surface, self.text, self.rect.center, color)
+        else:
+            draw_text(surface, fonts["button"], self.text, self.rect.center, color, center=True)
+
+
+# Button labels drawn as shapes by draw_stepper_symbol instead of as text.
+STEPPER_SYMBOLS = frozenset({"-", "+", "<", ">"})
+
+
+def draw_stepper_symbol(
+    surface: pygame.Surface,
+    symbol: str,
+    center: tuple[int, int],
+    color: tuple[int, int, int],
+) -> None:
+    """Draw a stepper's -, +, < or > as a shape centred exactly on ``center``.
+
+    Beginner note: a font glyph such as "+" sits wherever the font designer
+    put it inside its line box, so centring the text box does not centre the
+    symbol. Plain bars and triangles have no such offset, and their size
+    does not depend on the installed font.
+    """
+
+    cx, cy = center
+    half = STEPPER_SYMBOL_HALF
+    thick = STEPPER_SYMBOL_THICKNESS
+    if symbol in ("-", "+"):
+        pygame.draw.rect(surface, color, (cx - half, cy - thick // 2, 2 * half, thick))
+    if symbol == "+":
+        pygame.draw.rect(surface, color, (cx - thick // 2, cy - half, thick, 2 * half))
+    if symbol in ("<", ">"):
+        # A play-style triangle three quarters as wide as it is tall.
+        reach = half * 3 // 4
+        back, tip = (cx - reach, cx + reach - 1) if symbol == ">" else (cx + reach - 1, cx - reach)
+        pygame.draw.polygon(surface, color, [(back, cy - half), (tip, cy), (back, cy + half - 1)])
 
 
 def make_fonts() -> dict[str, pygame.font.Font]:
-    """Create the small set of fonts used by the whole app."""
+    """Create the small set of fonts used by the whole app.
+
+    Must be called after ``pygame.init()``. ``SysFont`` asks the operating
+    system for Arial and silently falls back to another font when it is
+    missing, which is why layout tests leave margin rather than assume exact
+    text widths.
+    """
 
     return {
         "huge": pygame.font.SysFont("arial", 58, bold=True),
@@ -99,14 +161,29 @@ def draw_wrapped(
 
     This helper is intentionally small and predictable. It is good enough for
     short UI prompts and avoids pulling in a larger text layout dependency.
+    Lines that would spill below ``rect`` are not drawn.
     """
 
-    words = text.split()
+    y = rect.y
+    for line in wrap_lines(font, text, rect.width):
+        if y + font.get_height() > rect.bottom:
+            break
+        draw_text(surface, font, line, (rect.x, y), color)
+        y += font.get_height() + line_gap
+
+
+def wrap_lines(font: pygame.font.Font, text: str, width: int) -> list[str]:
+    """Split ``text`` into word-wrapped lines no wider than ``width`` pixels.
+
+    A single word wider than ``width`` still gets its own line, because there
+    is nowhere better to break it.
+    """
+
     lines: list[str] = []
     current = ""
-    for word in words:
+    for word in text.split():
         candidate = word if not current else f"{current} {word}"
-        if font.size(candidate)[0] <= rect.width:
+        if font.size(candidate)[0] <= width:
             current = candidate
         else:
             # Once adding the next word would overflow, commit the line we
@@ -116,17 +193,33 @@ def draw_wrapped(
             current = word
     if current:
         lines.append(current)
+    return lines
 
-    y = rect.y
-    for line in lines:
-        if y + font.get_height() > rect.bottom:
-            break
-        draw_text(surface, font, line, (rect.x, y), color)
-        y += font.get_height() + line_gap
+
+def ellipsize(font: pygame.font.Font, text: str, max_width: int) -> str:
+    """Return ``text``, shortened with "..." if needed, so it renders within ``max_width``.
+
+    Beginner note: characters have different widths ("W" is much wider than
+    "i"), so cutting a string to a fixed number of characters cannot promise
+    it fits. Measuring with ``font.size`` can.
+    """
+
+    if font.size(text)[0] <= max_width:
+        return text
+    ellipsis = "..."
+    # Drop one character at a time until the shortened text plus "..." fits.
+    while text and font.size(text + ellipsis)[0] > max_width:
+        text = text[:-1]
+    return text.rstrip() + ellipsis
 
 
 def status_color(text: str) -> tuple[int, int, int]:
-    """Choose an event-log text color from a short message."""
+    """Choose an event-log text color from a short message.
+
+    This is a simple keyword match on the engine's log wording: wins and
+    tokens reaching home are green, captures and the three-sixes penalty
+    ("loses the roll") are red, and everything else is soft grey.
+    """
 
     lowered = text.lower()
     if "wins" in lowered or "home" in lowered:

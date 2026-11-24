@@ -7,7 +7,7 @@ tokens travel. These tests lock in the authentic-Ludo properties:
 - the shared track is one connected loop (no teleporting cells),
 - tokens travel CLOCKWISE around the board,
 - every seat's start square sits beside its own yard,
-- every seat's final loop cell hands over cleanly to its home column,
+- every seat's final loop cell leads straight into its home column,
 - home columns run inward and finish at the board center,
 - Player 1 (seat 0) sits at the bottom and seats continue clockwise.
 """
@@ -28,7 +28,7 @@ if str(GAME_DIR) not in sys.path:
 
 from board import BoardLayout
 from board_render import BoardRenderer
-from settings import SEAT_COLORS
+from settings import HOME_LENGTH, SEAT_COLORS
 
 # Player counts whose display layout follows the authentic clockwise rules.
 SUPPORTED_COUNTS = (4, 5, 6)
@@ -37,6 +37,12 @@ SUPPORTED_COUNTS = (4, 5, 6)
 # occasional corner turn, which measures sqrt(2) cells. 1.6 gives headroom for
 # rounding without letting real gaps slip through.
 ADJACENT_CELLS = 1.6
+
+# The hop from the last shared cell into the home column must be one lane
+# pitch long (5% slack for rounding) and point along the column. A cosine above
+# 0.99 allows about 8 degrees of drift; a sideways hop scores 0.
+STRAIGHT_HANDOFF_SLACK = 1.05
+STRAIGHT_HANDOFF_COSINE = 0.99
 
 
 def make_display(total_players: int):
@@ -111,19 +117,32 @@ class SeatAlignmentTests(unittest.TestCase):
                     self.assertEqual(nearest, seat)
                     self.assertLessEqual(distance(start, yard_centroids[seat]), 5 * display.cell_size)
 
-    def test_final_loop_cell_reaches_the_home_column(self) -> None:
-        """The last shared cell is adjacent to that seat's first home cell."""
+    def test_final_loop_cell_leads_straight_into_the_home_column(self) -> None:
+        """The last shared cell sits one lane pitch outside the column, in line with it.
+
+        A token leaving the lap must hop straight into its first home cell,
+        exactly like the next hop up the column: no sideways or diagonal
+        hand-off. The pitch is measured from the lane itself, so the check
+        works on the square grid and on the rotated radial arms alike.
+        """
 
         for count in SUPPORTED_COUNTS:
             display = make_display(count)
             layout = BoardLayout.for_player_count(count)
-            limit = ADJACENT_CELLS * display.cell_size
-            for seat, start_index in enumerate(layout.start_indices):
+            for seat in range(count):
                 with self.subTest(total_players=count, seat=seat):
-                    final_index = (start_index - 1) % layout.track_length
+                    last_shared_steps = layout.finish_steps - HOME_LENGTH
+                    final_index = layout.track_index(seat, last_shared_steps)
+                    self.assertIsNotNone(final_index, "the last shared step is not on the track")
+                    assert final_index is not None
                     final_cell = display.track_positions[final_index]
-                    home_entry = display.home_lanes[seat][0]
-                    self.assertLessEqual(distance(final_cell, home_entry), limit)
+                    lane = display.home_lanes[seat]
+                    pitch = distance(lane[0], lane[1])
+                    self.assertLessEqual(distance(final_cell, lane[0]), STRAIGHT_HANDOFF_SLACK * pitch)
+                    hop = (lane[0][0] - final_cell[0], lane[0][1] - final_cell[1])
+                    column = (lane[1][0] - lane[0][0], lane[1][1] - lane[0][1])
+                    cosine = (hop[0] * column[0] + hop[1] * column[1]) / (math.hypot(*hop) * math.hypot(*column))
+                    self.assertGreater(cosine, STRAIGHT_HANDOFF_COSINE, "the hand-off into the column is not straight")
 
     def test_home_lanes_march_inward_to_the_center(self) -> None:
         """Home cells get strictly closer to the center and end beside it."""

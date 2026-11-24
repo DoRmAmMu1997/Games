@@ -22,7 +22,7 @@ import pygame
 
 from entities import CelestialBody
 from merge_logic import find_merge_events
-from settings import MERGE_VELOCITY_DAMP, TIERS
+from settings import MERGE_ARM_TIME, MERGE_VELOCITY_DAMP, TIERS
 
 NOW = 100.0
 
@@ -106,6 +106,26 @@ class MergeDetectionTests(unittest.TestCase):
         events = find_merge_events(bodies, NOW)
 
         self.assertEqual(len(events), 1)
+
+
+class MergeArmingTests(unittest.TestCase):
+    """Only the arm time decides when a fresh body may merge."""
+
+    def test_body_arms_exactly_at_merge_arm_time(self) -> None:
+        """A body cannot merge just before ``MERGE_ARM_TIME`` and can at it."""
+
+        body = make_body(1, 0, 0.0, 0.0, age=0.0)
+        self.assertFalse(body.can_merge(NOW + MERGE_ARM_TIME - 0.001))
+        self.assertTrue(body.can_merge(NOW + MERGE_ARM_TIME))
+
+    def test_dead_post_merge_lock_is_gone(self) -> None:
+        """The post-merge lock was always shorter than the arm time, so it was removed."""
+
+        import settings
+
+        self.assertFalse(hasattr(settings, "POST_MERGE_LOCK"))
+        self.assertFalse(hasattr(CelestialBody, "lock_merge"))
+        self.assertFalse(hasattr(CelestialBody, "merge_locked_until"))
 
 
 class MergeResultTests(unittest.TestCase):

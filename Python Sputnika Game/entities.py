@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import pygame
 
-from settings import FAIL_LINE_Y, MERGE_ARM_TIME, POST_MERGE_LOCK, TIERS, WHITE, shade
+from settings import FAIL_LINE_Y, MERGE_ARM_TIME, TIERS, WHITE, shade
 
 
 def _random_phase() -> float:
@@ -29,7 +29,35 @@ def _random_phase() -> float:
 
 @dataclass(slots=True)
 class CelestialBody:
-    """One round object inside the playfield."""
+    """One round object inside the playfield.
+
+    A body is created by the launcher (a fresh drop) or by a merge (the new,
+    bigger tier), and it is removed again when it merges. The physics world
+    moves it through `position`/`velocity`; the rest of the fields only feed
+    the cartoon presentation.
+
+    Key attributes:
+        body_id: Unique, ever-increasing number. The merge code uses it to
+            tell bodies apart and to keep pair order stable.
+        tier: Index into `settings.TIERS`; it fixes the body's size, colours
+            and mood for its whole life.
+        position, velocity: Pixel position and pixels-per-second velocity.
+        created_at: Game clock time of creation; `age()` and `can_merge()`
+            are measured from it.
+        seed, hover_phase: Random per-body values that desynchronise idle
+            animation and the sideways gravity drift.
+        pulse, flash, birth_pop: Short animation amounts that decay to zero
+            in `update()` (squash, glow halo, and merge scale-in).
+        blink_cooldown, blink_time: Timers for the idle blink cycle.
+        radius, mass, inv_mass: Cached from the tier in `__post_init__`.
+
+    Beginner note:
+    - `@dataclass(slots=True)` writes `__init__` for us from the annotated
+      fields, and `slots=True` stores the fields in a fixed layout, which
+      saves memory and stops typos from silently creating new attributes.
+    - `field(default_factory=...)` runs the function once per new body, so
+      each body gets its own random value instead of sharing one.
+    """
 
     # Core identity/state.
     # These values answer "what is this body and where is it right now?"
@@ -44,8 +72,7 @@ class CelestialBody:
     seed: float = field(default_factory=random.random)
     hover_phase: float = field(default_factory=_random_phase)
 
-    # Merge/impact timers prevent repeated triggers from happening too fast.
-    merge_locked_until: float = 0.0
+    # The impact timer prevents repeated squash triggers from happening too fast.
     impact_cooldown_until: float = 0.0
 
     # Short-lived animation values.
@@ -57,12 +84,26 @@ class CelestialBody:
     # it starts at 1.0 and decays to 0.0, growing the body from small to full.
     birth_pop: float = 0.0
 
-    def __post_init__(self) -> None:
-        # Fresh bodies are briefly prevented from merging instantly.
-        # Dataclasses call `__post_init__` right after the generated `__init__`.
-        if self.merge_locked_until == 0.0:
-            self.merge_locked_until = self.created_at + POST_MERGE_LOCK
+    # Size and mass, filled in once by `__post_init__` (see there for why).
+    radius: float = field(init=False, default=0.0)
+    mass: float = field(init=False, default=0.0)
+    inv_mass: float = field(init=False, default=0.0)
 
+    def __post_init__(self) -> None:
+        """Fill in cached size/mass values and per-body timers after creation."""
+        # A body's tier never changes (a merge creates a brand-new body), so
+        # its radius and mass are worked out once here instead of being looked
+        # up in TIERS on every one of the solver's many pair checks per frame.
+        #
+        # Beginner note:
+        # - Mass grows with area (radius squared), with a small minimum so the
+        #   tiniest bodies are not pushed around unrealistically hard.
+        # - `inv_mass` (1 / mass) is what the collision maths actually uses.
+        self.radius = TIERS[self.tier].radius
+        self.mass = max(4.0, (self.radius * self.radius) * 0.018)
+        self.inv_mass = 1.0 / self.mass
+
+        # Dataclasses call `__post_init__` right after the generated `__init__`.
         # Each body also gets a different blink rhythm so they feel less robotic.
         if self.blink_cooldown == 0.0:
             self.blink_cooldown = 1.0 + random.random() * 2.6
@@ -71,21 +112,6 @@ class CelestialBody:
     def info(self):
         """Shortcut to the tier data for this body."""
         return TIERS[self.tier]
-
-    @property
-    def radius(self) -> float:
-        """Expose radius directly so the rest of the code reads cleanly."""
-        return self.info.radius
-
-    @property
-    def mass(self) -> float:
-        """Approximate mass from area, with a small minimum for stability."""
-        return max(4.0, (self.radius * self.radius) * 0.018)
-
-    @property
-    def inv_mass(self) -> float:
-        """Inverse mass is used often in collision math, so we precompute it on demand."""
-        return 1.0 / self.mass
 
     @property
     def top(self) -> float:
@@ -97,15 +123,17 @@ class CelestialBody:
         return now - self.created_at
 
     def can_merge(self, now: float) -> bool:
-        """Return True only when the body is old enough and not merge-locked."""
-        return now >= self.merge_locked_until and self.age(now) >= MERGE_ARM_TIME
-
-    def lock_merge(self, now: float, delay: float = POST_MERGE_LOCK) -> None:
-        """Push the merge lock into the future by `delay` seconds."""
-        self.merge_locked_until = now + delay
+        """Return True once the body is old enough to merge (`MERGE_ARM_TIME`)."""
+        return self.age(now) >= MERGE_ARM_TIME
 
     def register_impact(self, now: float, strength: float) -> bool:
         """Trigger squash/flash feedback for a noticeable impact.
+
+        `strength` is the impact speed in pixels per second; it is mapped onto
+        0..1 (460 px/s or faster counts as a full-strength hit) and then sets
+        `pulse` and `flash`, never lowering a stronger effect already running.
+        A 0.055 s cooldown stops one rattling contact from re-triggering every
+        substep.
 
         Returns `True` if a new impact was accepted and `False` if it was
         ignored because another impact was registered too recently.
@@ -145,7 +173,25 @@ class CelestialBody:
         camera_offset: pygame.Vector2,
         now: float,
     ) -> None:
-        """Draw the orb art plus its animated face."""
+        """Draw the orb art plus its animated face.
+
+        Drawing happens in layers, back to front: a soft drop shadow, an
+        optional flash halo, the pre-rendered orb sprite from `assets`, and
+        finally the face (eyes, brows, mouth, cheeks) drawn live on top.
+
+        Args:
+            target: Surface to draw on (normally the game's world surface).
+            assets: The `AssetLibrary` that caches each tier's orb sprite.
+            camera_offset: Screen-shake offset added to every position.
+            now: Game clock time, used for idle bobbing and breathing.
+
+        Beginner note:
+        - The sprite is cached at its natural size, so any squash or pop is
+          done by rescaling a copy each frame rather than re-rendering it.
+        - Shadows and halos are drawn on small temporary surfaces created
+          with `pygame.SRCALPHA` (a per-pixel alpha channel). That lets them
+          be partly transparent when blitted onto the scene.
+        """
         # The body art itself comes from `assets.py`.
         # This function mainly decides *where* to draw it and *which extra face
         # animation state* should appear on top of it.
@@ -153,6 +199,7 @@ class CelestialBody:
         breathe = 0.0
         # Bodies that are almost resting gently float and "breathe" so a
         # settled stack still feels alive instead of completely frozen.
+        # 2500 is a squared speed: "slower than 50 px/s".
         if self.velocity.length_squared() < 2500.0:
             bob = math.sin(now * 1.4 + self.hover_phase) * 1.35
             breathe = math.sin(now * 1.1 + self.hover_phase) * 0.018
@@ -212,7 +259,32 @@ class CelestialBody:
         radius: float,
         now: float,
     ) -> None:
-        """Draw simple cartoon eyes, mouth, and cheeks on top of the orb."""
+        """Draw simple cartoon eyes, mouth, and cheeks on top of the orb.
+
+        Every measurement is a fraction of `radius`, so one recipe scales from
+        the smallest tier to the largest. The face first asks
+        `_expression_state()` for the current mood flags, then draws:
+
+        - eyes: closed lines while blinking, otherwise white ellipses with
+          pupils that glance in the direction of travel;
+        - brows (via `_draw_brows`), tilted per expression;
+        - a mouth: a dynamic expression (startled, worried, delighted) wins;
+          otherwise the tier's fixed `mood` picks the shape;
+        - translucent cheeks, plus a sweat drop when the body is worried.
+
+        Args:
+            target: Surface to draw on.
+            center: Pixel centre of the drawn orb (already shaken and bobbed).
+            radius: Drawn radius after scaling, so the face squashes with it.
+            now: Game clock time, used for idle gaze and the wiggling mouth.
+
+        Beginner note:
+        - `pygame.draw.arc` angles are in radians and run counter-clockwise
+          *as seen on screen*, starting from the right-hand side. So an arc
+          from `0` to `pi` is the upper half of its rectangle (an arch, like
+          the letter n), and an arc from `pi` to `tau` is the lower half
+          (a cup, like the letter u).
+        """
         info = self.info
         cx, cy = center
 
@@ -273,27 +345,32 @@ class CelestialBody:
         mouth_color = shade(info.accent, 0.55)
 
         mood = info.mood
+        # A smile is the lower half of an ellipse (a cup, angles pi..tau) and a
+        # frown is the upper half (an arch, angles 0..pi); see the Beginner note
+        # above. Each half fills only half its rectangle, so the smile's
+        # rectangle is lifted (and the frown's lowered) by half its height to
+        # keep every mouth in the same band of the face.
+        smile_rect = mouth_rect.move(0, -mouth_rect.height // 2)
 
         # Dynamic expressions override the default mood when the game state
         # makes the body look more surprised, worried, or delighted.
         if expression["startled"]:
             pygame.draw.circle(target, mouth_color, (cx, int(cy + radius * 0.22)), max(2, int(radius * 0.07)), 2)
         elif expression["worried"]:
-            worried_rect = mouth_rect.copy()
-            worried_rect.y += int(radius * 0.03)
-            pygame.draw.arc(target, mouth_color, worried_rect, math.pi + 0.18, math.tau - 0.18, 3)
+            worried_rect = mouth_rect.move(0, mouth_rect.height // 2 + int(radius * 0.03))
+            pygame.draw.arc(target, mouth_color, worried_rect, 0.18, math.pi - 0.18, 3)
         elif expression["delighted"]:
-            happy_rect = mouth_rect.inflate(int(radius * 0.08), int(radius * 0.06))
-            pygame.draw.arc(target, mouth_color, happy_rect, 0.0, math.pi, 3)
+            happy_rect = smile_rect.inflate(int(radius * 0.08), int(radius * 0.06))
+            pygame.draw.arc(target, mouth_color, happy_rect, math.pi, math.tau, 3)
             sparkle_center = (int(cx - radius * 0.08), int(cy + radius * 0.2))
             pygame.draw.circle(target, (*WHITE, 90), sparkle_center, max(1, int(radius * 0.035)))
         # Different tiers use different mouth shapes so they feel like distinct characters.
         elif mood in {"cheery", "smile", "spark", "bright"}:
-            pygame.draw.arc(target, mouth_color, mouth_rect, 0.1, math.pi - 0.1, 3)
+            pygame.draw.arc(target, mouth_color, smile_rect, math.pi + 0.1, math.tau - 0.1, 3)
         elif mood == "curious":
             pygame.draw.circle(target, mouth_color, (cx, int(cy + radius * 0.2)), max(2, int(radius * 0.05)), 2)
         elif mood == "calm":
-            pygame.draw.arc(target, mouth_color, mouth_rect, 0.35, math.pi - 0.35, 2)
+            pygame.draw.arc(target, mouth_color, smile_rect, math.pi + 0.35, math.tau - 0.35, 2)
         elif mood == "wry":
             start = (int(cx - radius * 0.16), int(cy + radius * 0.2))
             end = (int(cx + radius * 0.16), int(cy + radius * 0.14))
@@ -307,7 +384,7 @@ class CelestialBody:
                 2,
             )
         elif mood == "proud":
-            pygame.draw.arc(target, mouth_color, mouth_rect, 0.0, math.pi, 2)
+            pygame.draw.arc(target, mouth_color, smile_rect, math.pi, math.tau, 2)
             pygame.draw.line(target, mouth_color, (cx, int(cy + radius * 0.08)), (cx, int(cy + radius * 0.18)), 2)
         else:
             # The fallback "cosmic" mouth gently wiggles over time.
@@ -315,9 +392,9 @@ class CelestialBody:
             pygame.draw.arc(
                 target,
                 mouth_color,
-                mouth_rect.move(0, wobble),
-                0.1,
-                math.pi - 0.1,
+                smile_rect.move(0, wobble),
+                math.pi + 0.1,
+                math.tau - 0.1,
                 3,
             )
 
