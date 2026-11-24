@@ -10,7 +10,8 @@ The code is split into:
 
 Small dataclasses (`Card`, `Selection`, `HintMove`, `AnimationState`) carry
 data between the two halves, and the constants at the top of the file hold
-every layout size, colour and timing value.
+every layout size, colour and timing value, plus the sound recipes that
+``audio.py`` (the game's small synthesizer) turns into effects.
 
 Beginner note: Klondike vocabulary used throughout the code.
 - Stock: the face-down pile at top left. Clicking it turns one card over
@@ -34,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from tkinter import messagebox
 from typing import Any
+
+from audio import Note, midi
 
 # Card size in pixels.
 CARD_WIDTH = 88
@@ -149,6 +152,161 @@ FOUNDATION_COUNT = 4
 # width left over, split evenly, so the board sits centred in the window.
 BOARD_WIDTH = TABLEAU_COLUMNS * CARD_WIDTH + (TABLEAU_COLUMNS - 1) * COLUMN_GAP
 MARGIN_X = (WINDOW_WIDTH - BOARD_WIDTH) // 2
+
+# --------------------------------------------------------------------------
+# Sound
+# --------------------------------------------------------------------------
+# Every sound is a recipe: a list of `Note`s that audio.py renders into
+# samples when the app starts (no audio files ship with the game). Pitches
+# are MIDI note numbers through `midi()`: 69 is A4 (440 Hz), +12 is one octave
+# up. The palette is soft felt and paper: quiet noise ticks for cards sliding
+# and landing, and a gentle piano-like chime in C major, the key of the music.
+#
+# Beginner note:
+# - A "strike" note below has no sustain: it rises over a few milliseconds
+#   and then rings down over `ring` seconds, like a hammer hitting a string.
+# - A "paper" note is a burst of noise. Its rate (new random values per
+#   second) sets the colour: a low rate is a dull felt thud, a high one a
+#   crisp paper tick.
+# - Volumes stay well under 1.0 on purpose: auto-solve fires a chime every
+#   few frames, and overlapping sounds add up.
+SFX_STRIKE_ATTACK = 0.006  # A struck note reaches full volume this fast (s).
+SFX_STRIKE_RELEASE = 0.03  # Tail after a strike's ring, so it never ends abruptly (s).
+SFX_ROOT_NOTE = 60  # C4: the Ace's chime; every higher rank climbs the C major ladder.
+C_MAJOR_STEPS = (0, 2, 4, 5, 7, 9, 11)  # Semitones above C for each degree of the scale.
+# One foundation chime per rank, Ace to King: the chime climbs one degree of
+# the ladder per rank, so a foundation filling up sounds like a rising scale.
+FOUNDATION_CHIME_STEPS = 13
+CHIME_OVERTONE_LEVEL = 0.22  # The bright octave overtone, as a share of the chime's volume.
+CHIME_OVERTONE_RING = 0.4  # The overtone rings for this share of the chime's ring, then fades.
+# The new-game deal: a cascade of soft paper ticks, one per card dealt to the
+# top of a column, alternating two noise rates so it sounds like real cards.
+DEAL_TICKS = 10
+DEAL_TICK_SPACING = 0.045  # Seconds between two dealt cards.
+# Recycling the waste: a quick riffle of ticks under a falling paper sweep.
+RECYCLE_TICKS = 8
+RECYCLE_TICK_SPACING = 0.03
+
+
+def strike(pitch: float, start: float, ring: float, volume: float, voice: str = "sine", glide: float = 0.0) -> Note:
+    """Return a struck note: a near-instant attack, then a ring down to silence."""
+    return Note(
+        midi(pitch),
+        start,
+        SFX_STRIKE_ATTACK + ring,
+        voice,
+        volume,
+        glide=glide,
+        attack=SFX_STRIKE_ATTACK,
+        decay=ring,
+        sustain=0.0,
+        release=SFX_STRIKE_RELEASE,
+    )
+
+
+def chime(pitch: float, start: float, ring: float, volume: float) -> list[Note]:
+    """Return one soft piano-like note: a round sine body plus a brief bright overtone an octave up.
+
+    Beginner note:
+    - A real piano string sounds mostly at its own pitch, with a short burst
+      of brighter overtones as the hammer strikes. Two notes played together,
+      one short and quiet an octave higher, imitate that without samples.
+    """
+    return [
+        strike(pitch, start, ring, volume),
+        strike(pitch + 12, start, ring * CHIME_OVERTONE_RING, volume * CHIME_OVERTONE_LEVEL, "pluck"),
+    ]
+
+
+def paper(start: float, rate: float, volume: float, ring: float = 0.03, glide: float = 0.0) -> Note:
+    """Return a short noise burst: a card tick, a slide or a soft thud on the felt."""
+    return Note(rate, start, 0.004, "noise", volume, glide=glide, attack=0.001, decay=ring, sustain=0.0,
+                release=0.01)
+
+
+def scale_note(degree: int) -> int:
+    """Return the MIDI note `degree` steps up the C major ladder from SFX_ROOT_NOTE."""
+    octave, step = divmod(degree, len(C_MAJOR_STEPS))
+    return SFX_ROOT_NOTE + 12 * octave + C_MAJOR_STEPS[step]
+
+
+def foundation_chime(rank: int) -> list[Note]:
+    """Return the chime for a card of `rank` landing on its foundation, with a soft landing tick."""
+    return [*chime(scale_note(rank - 1), 0.0, 0.35, 0.16), paper(0.0, 2400.0, 0.06, 0.02)]
+
+
+def auto_step_chime(rank: int) -> list[Note]:
+    """Return auto-solve's quicker, lighter version of the foundation chime."""
+    return chime(scale_note(rank - 1), 0.0, 0.14, 0.12)
+
+
+SFX_RECIPES: dict[str, list[Note]] = {
+    # Picking a card up: a light paper tick with a faint high glint.
+    "select": [paper(0.0, 5000.0, 0.12, 0.03), strike(84, 0.0, 0.04, 0.05)],
+    # Setting cards down on a tableau column: a soft felt thud.
+    "place": [
+        paper(0.0, 1200.0, 0.18, 0.05),
+        strike(48, 0.0, 0.06, 0.1, "triangle"),
+        paper(0.012, 3000.0, 0.06, 0.02),
+    ],
+    # A card reaching its foundation: a chime that climbs with the rank
+    # ("foundation@1" for an Ace up to "foundation@13" for a King).
+    "foundation": foundation_chime(1),
+    **{f"foundation@{rank}": foundation_chime(rank) for rank in range(1, FOUNDATION_CHIME_STEPS + 1)},
+    # Auto-solve sending a card home: the same ladder, quicker and lighter.
+    "auto_step": auto_step_chime(1),
+    **{f"auto_step@{rank}": auto_step_chime(rank) for rank in range(1, FOUNDATION_CHIME_STEPS + 1)},
+    # A hidden card turning face up: a quick upward paper flip and a tick.
+    "flip": [
+        Note(3500.0, 0.0, 0.05, "noise", 0.1, glide=9000.0, attack=0.008, decay=0.05, sustain=0.2, release=0.02),
+        paper(0.05, 6000.0, 0.06, 0.02),
+    ],
+    # Drawing from the stock: a card sliding off the pile, landing with a tick.
+    "draw": [
+        Note(2500.0, 0.0, 0.08, "noise", 0.1, glide=-6000.0, attack=0.01, decay=0.07, sustain=0.2, release=0.02),
+        paper(0.08, 4000.0, 0.08, 0.02),
+    ],
+    # Recycling the waste into the stock: a quick riffle under a falling
+    # sweep, settling with a soft low note.
+    "recycle": [
+        *(paper(index * RECYCLE_TICK_SPACING, 3000.0 + 600.0 * (index % 3), 0.08, 0.02)
+          for index in range(RECYCLE_TICKS)),
+        Note(4000.0, 0.0, 0.25, "noise", 0.05, glide=-3000.0, attack=0.03, decay=0.2, sustain=0.4, release=0.05),
+        strike(48, RECYCLE_TICKS * RECYCLE_TICK_SPACING, 0.1, 0.1, "triangle"),
+    ],
+    # Clicking an empty stock with no waste left: two dull knocks.
+    "empty": [paper(0.0, 700.0, 0.14, 0.05), paper(0.09, 650.0, 0.12, 0.05), strike(45, 0.0, 0.08, 0.08, "triangle")],
+    # A move the rules do not allow: a soft falling "uh-uh", never harsh.
+    "invalid": [strike(62, 0.0, 0.1, 0.16, "triangle"), strike(59, 0.11, 0.16, 0.16, "triangle")],
+    # Undo: a short rewind, a falling glide over a falling paper sweep.
+    "undo": [
+        Note(midi(76), 0.0, 0.12, "sine", 0.12, glide=-900.0, attack=0.01, decay=0.1, sustain=0.3, release=0.04),
+        Note(4000.0, 0.0, 0.1, "noise", 0.06, glide=-15000.0, attack=0.01, decay=0.09, sustain=0.2, release=0.02),
+    ],
+    # A hint: a gentle two-note sparkle rising a fifth (E5 to B5).
+    "hint": [*chime(76, 0.0, 0.2, 0.12), *chime(83, 0.09, 0.3, 0.11)],
+    # A new deal: a cascade of soft paper ticks, then a settling thud.
+    "deal": [
+        *(paper(index * DEAL_TICK_SPACING, 4200.0 if index % 2 else 3400.0, 0.1, 0.025) for index in range(DEAL_TICKS)),
+        paper(DEAL_TICKS * DEAL_TICK_SPACING, 1200.0, 0.12, 0.05),
+    ],
+    # A short, soft two-note click for the Help and Sound buttons.
+    "click": [strike(84, 0.0, 0.05, 0.18), strike(91, 0.012, 0.04, 0.06)],
+}
+# The fewest seconds between two plays of the same effect (variants share
+# their base name's cooldown). Auto-solve can land a card and click the stock
+# within a few frames; these keep such bursts a gentle patter.
+SFX_COOLDOWNS: dict[str, float] = {
+    "select": 0.04,
+    "place": 0.04,
+    "foundation": 0.03,
+    "auto_step": 0.06,
+    "flip": 0.05,
+    "draw": 0.05,
+    "recycle": 0.2,
+    "invalid": 0.15,
+    "click": 0.04,
+}
 
 
 def _user_save_dir() -> str:
