@@ -7,6 +7,7 @@ under SDL's dummy audio driver.
 
 from __future__ import annotations
 
+import array
 import ast
 import json
 import os
@@ -212,8 +213,8 @@ class SoundBankTests(unittest.TestCase):
         pygame.mixer.init()
         self.addCleanup(pygame.mixer.quit)
         self.channel = mock.Mock()
-        patcher = mock.patch.object(pygame.mixer, "find_channel", return_value=self.channel)
-        self.find_channel = patcher.start()
+        patcher = mock.patch.object(SoundBank, "_effect_channel", return_value=self.channel)
+        self.effect_channel = patcher.start()
         self.addCleanup(patcher.stop)
         self.clock = FakeClock()
         self.bank = SoundBank(self.RECIPES, {"beep": 0.05}, clock=self.clock)
@@ -240,7 +241,7 @@ class SoundBankTests(unittest.TestCase):
         """``play`` asks for any free channel and clamps the volume to 0..1."""
 
         self.bank.play("beep", 1.7)
-        self.find_channel.assert_called_once_with(True)
+        self.effect_channel.assert_called_once_with()
         self.channel.set_volume.assert_called_once_with(1.0)
         self.assertEqual(self.played(), [self.bank.sounds["beep"]])
 
@@ -291,12 +292,12 @@ class SoundBankTests(unittest.TestCase):
         """An unknown sound name is ignored."""
 
         self.bank.play("nope")
-        self.find_channel.assert_not_called()
+        self.effect_channel.assert_not_called()
 
     def test_no_free_channel_is_silent(self) -> None:
         """When no channel is free the sound is skipped without error."""
 
-        self.find_channel.return_value = None
+        self.effect_channel.return_value = None
         self.bank.play("tick")
         self.assertEqual(self.played(), [])
 
@@ -308,7 +309,7 @@ class SoundBankTests(unittest.TestCase):
         bank.play("beep")
         self.assertFalse(bank.enabled)
         self.assertEqual(bank.sounds, {})
-        self.find_channel.assert_not_called()
+        self.effect_channel.assert_not_called()
 
     def test_bank_is_disabled_when_a_sound_fails_to_build(self) -> None:
         """A mixer error while building disables the whole bank."""
@@ -317,6 +318,60 @@ class SoundBankTests(unittest.TestCase):
             bank = SoundBank(self.RECIPES)
         self.assertFalse(bank.enabled)
         self.assertEqual(bank.sounds, {})
+
+
+class EffectChannelTests(unittest.TestCase):
+    """Effects never take the reserved music channel, and muting silences them at once.
+
+    pygame's ``find_channel`` ignores reserved channels (it can return the
+    music channel when it is the only one free, or steal it as the longest
+    playing when every channel is busy), so the bank picks channels itself.
+    These tests use the real dummy mixer, with long silent sounds standing in
+    for the music and for effects already playing.
+    """
+
+    def setUp(self) -> None:
+        """Start the dummy mixer with 16 channels, the first one reserved for music."""
+
+        pygame.mixer.init()
+        self.addCleanup(pygame.mixer.quit)
+        audio.reserve_channels(1)
+        self.long = pygame.mixer.Sound(buffer=array.array("h", [0] * RATE * 2 * 10).tobytes())
+        self.music = pygame.mixer.Channel(0)
+        self.music.play(self.long, loops=-1)
+        self.bank = SoundBank({"beep": [Note(440.0, 0.0, 0.05, "sine", 0.3)]})
+
+    def effect_channels(self) -> list[pygame.mixer.Channel]:
+        """Return every channel the bank may use for effects."""
+
+        return [pygame.mixer.Channel(index) for index in range(1, pygame.mixer.get_num_channels())]
+
+    def test_a_busy_mixer_never_steals_the_music_channel(self) -> None:
+        """With every effect channel busy, a new effect replaces an effect, not the music."""
+
+        for channel in self.effect_channels():
+            channel.play(self.long)
+        self.bank.play("beep")
+        self.assertIs(self.music.get_sound(), self.long)
+        self.assertIn(self.bank.sounds["beep"], [channel.get_sound() for channel in self.effect_channels()])
+
+    def test_an_idle_music_channel_is_still_not_used_for_effects(self) -> None:
+        """Even when the reserved channel is the only idle one, effects stay off it."""
+
+        self.music.stop()
+        for channel in self.effect_channels():
+            channel.play(self.long)
+        self.bank.play("beep")
+        self.assertFalse(self.music.get_busy())
+
+    def test_muting_stops_effects_already_playing_but_not_the_music(self) -> None:
+        """Switching sound off silences a jingle mid-play; the music player handles its own channel."""
+
+        self.bank.play("beep")
+        self.assertTrue(any(channel.get_busy() for channel in self.effect_channels()))
+        self.bank.muted = True
+        self.assertFalse(any(channel.get_busy() for channel in self.effect_channels()))
+        self.assertTrue(self.music.get_busy())
 
 
 class ImportTests(unittest.TestCase):

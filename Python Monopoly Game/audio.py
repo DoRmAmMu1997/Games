@@ -394,6 +394,11 @@ def init_mixer() -> None:
         pygame.mixer.pre_init(MIXER_RATE, MIXER_SIZE, MIXER_CHANNELS, MIXER_BUFFER)
 
 
+# How many low-numbered mixer channels belong to music. `reserve_channels`
+# records the real count here so `SoundBank` can keep effects off them.
+_reserved_channels = MUSIC_CHANNELS
+
+
 def reserve_channels(music_channels: int = MUSIC_CHANNELS) -> None:
     """Open `MIXER_VOICES` channels and keep the first `music_channels` for music.
 
@@ -402,10 +407,14 @@ def reserve_channels(music_channels: int = MUSIC_CHANNELS) -> None:
 
     Beginner note:
     - A mixer *channel* plays one sound at a time; 16 channels means up to
-      16 overlapping sounds. *Reserved* channels are never handed out for
-      effects, so a burst of effects can never steal the music's channel.
+      16 overlapping sounds. *Reserved* channels are kept for music:
+      `SoundBank` only ever plays effects on the channels after them, so a
+      burst of effects can never steal the music's channel.
     """
     import pygame
+
+    global _reserved_channels
+    _reserved_channels = music_channels
 
     if pygame.mixer.get_init() is None:
         return
@@ -468,6 +477,8 @@ class SoundBank:
         self._muted = False
         # Base sound name to the clock time it last actually played.
         self._last_played: dict[str, float] = {}
+        # Which busy effect channel to reuse next when every one is taken.
+        self._next_steal = 0
         mixer_state = pygame.mixer.get_init()
         self.enabled = mixer_state is not None
         if mixer_state is None:
@@ -489,8 +500,16 @@ class SoundBank:
 
     @muted.setter
     def muted(self, value: bool) -> None:
-        """Switch effects off (True) or back on (False)."""
+        """Switch effects off (True) or back on (False).
+
+        Muting also stops every effect that is still sounding (a jingle in
+        mid-play, say), so the switch is heard at once. The music channels
+        are left to the `MusicPlayer`, which mutes itself.
+        """
         self._muted = bool(value)
+        if self._muted and self.enabled:
+            for channel in self._effect_channels():
+                channel.stop()
 
     def play(self, name: str, volume: float = 1.0, pitch_step: int = 0) -> None:
         """Play the sound `name` once at `volume` (0 to 1).
@@ -514,18 +533,41 @@ class SoundBank:
         last = self._last_played.get(name)
         if last is not None and now - last < self.cooldowns.get(name, 0.0):
             return
-        import pygame
-
-        # `find_channel(True)` returns a free channel or, when all are busy,
-        # takes over the one that has been playing longest. Reserved (music)
-        # channels are never returned, so effects cannot cut the music off.
-        channel = pygame.mixer.find_channel(True)
+        channel = self._effect_channel()
         if channel is None:
             return
         # Only a sound that really plays starts its cooldown.
         self._last_played[name] = now
         channel.set_volume(max(0.0, min(1.0, volume)))
         channel.play(sound)
+
+    def _effect_channels(self) -> list[pygame.mixer.Channel]:
+        """Return every mixer channel effects may use: all but the reserved ones."""
+        import pygame
+
+        return [pygame.mixer.Channel(index) for index in range(_reserved_channels, pygame.mixer.get_num_channels())]
+
+    def _effect_channel(self) -> pygame.mixer.Channel | None:
+        """Pick a channel for the next effect, never a reserved music channel.
+
+        An idle effect channel is used first. When every effect channel is
+        busy, they take turns being reused, so a burst replaces the oldest
+        effects. Returns None if there are no effect channels at all.
+
+        Beginner note: pygame's own `find_channel` ignores reserved channels:
+        it may return the music channel when that is the only idle one, and
+        `find_channel(True)` steals the longest-playing channel, which is
+        usually the looping music. That is why the bank picks channels itself.
+        """
+        channels = self._effect_channels()
+        if not channels:
+            return None
+        for channel in channels:
+            if not channel.get_busy():
+                return channel
+        channel = channels[self._next_steal % len(channels)]
+        self._next_steal += 1
+        return channel
 
 
 class MusicPlayer:
