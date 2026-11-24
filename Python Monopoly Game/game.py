@@ -1601,9 +1601,10 @@ class MonopolyGame:
     def from_dict(cls, data: dict) -> MonopolyGame:
         """Rebuild a game from a `to_dict()` snapshot (used to resume a game).
 
-        Most stored numbers are coerced to int, then the payload is validated: a
-        save whose seats, turn state, titles, buildings or decks could not be
-        resumed raises ValueError, which the loader treats as a bad save.
+        Stored numbers (including title, building and mortgage positions) are
+        coerced to int, then the payload is validated: a save whose seats,
+        turn state, titles, buildings, mortgages or decks could not be resumed
+        raises ValueError, which the loader treats as a bad save.
 
         Beginner note:
         - Legitimate saves must still load: a bankrupt current player, titles
@@ -1619,8 +1620,8 @@ class MonopolyGame:
                    ai_profile=data.get("ai_profile", "standard"))
         game.players = [Player.from_dict(p) for p in data["players"]]
         game.owners = {int(k): int(v) for k, v in data["owners"].items()}
-        game.houses = {int(k): v for k, v in data["houses"].items()}
-        game.mortgaged = set(data["mortgaged"])
+        game.houses = {int(k): int(v) for k, v in data["houses"].items()}
+        game.mortgaged = {int(pos) for pos in data["mortgaged"]}
         game.bank_houses = int(data["bank_houses"])
         game.bank_hotels = int(data["bank_hotels"])
         game.chance = cards_module.Deck("chance", cards_module.CHANCE_CARDS,
@@ -1643,6 +1644,18 @@ class MonopolyGame:
             raise ValueError("Saved title ownership is invalid.")
         if any(not 0 <= level <= 5 for level in game.houses.values()):
             raise ValueError("Saved building level is invalid.")
+        # Buildings only stand on owned streets, and a mortgaged title may
+        # carry none: anything else would charge rent that could never
+        # happen in play. (A level of 0 is a harmless leftover entry.)
+        if any(level > 0 and (pos not in game.owners or game.board[pos].kind != "street"
+                              or pos in game.mortgaged)
+               for pos, level in game.houses.items()):
+            raise ValueError("Saved buildings are on a space that cannot hold them.")
+        # Only an owned title can be mortgaged; this also rejects positions
+        # off the board or on unownable spaces, since owners already holds
+        # only real titles.
+        if any(pos not in game.owners for pos in game.mortgaged):
+            raise ValueError("Saved mortgage is on a title nobody owns.")
         for deck in (game.chance, game.chest):
             if not deck.order or any(not 0 <= i < len(deck.master) for i in deck.order):
                 raise ValueError("Saved card deck is invalid.")
