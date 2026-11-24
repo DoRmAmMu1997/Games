@@ -487,6 +487,13 @@ SFX_COOLDOWNS: dict[str, float] = {
     "launch_blocked": 0.25,
 }
 
+# Seconds the danger check must stay in a new state before the player HEARS
+# the change (the danger cue and the calm/tense music switch). A body resting
+# right on the fail line can jitter across it every frame; without this hold
+# the cues would chatter and the music would restart over and over. The red
+# label, warning beeps and fail timer still react at once.
+DANGER_MOOD_HOLD = 0.6
+
 # The launcher clicks once each time the aim crosses a multiple of this many
 # degrees, like the detents on a dial.
 AIM_TICK_DEGREES = 5.0

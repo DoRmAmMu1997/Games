@@ -45,6 +45,7 @@ from rules import (
 from settings import (
     ANGLE_AIM_SPEED,
     COMBO_CHIME_TOP,
+    DANGER_MOOD_HOLD,
     DROP_COOLDOWN,
     FAIL_AGE_GATE,
     FAIL_GRACE,
@@ -218,6 +219,8 @@ class OrbitalOrchardGame:
         self.container_stress = 0.0
         self.goal_reached = False
         self.warning_active = False
+        self.danger_mood = False
+        self._danger_mood_timer = 0.0
         self.score = 0
         progress = self._load_progress()
         self.high_score = progress["high_score"]
@@ -585,6 +588,8 @@ class OrbitalOrchardGame:
         self.container_stress = 0.0
         self.goal_reached = False
         self.warning_active = False
+        self.danger_mood = False
+        self._danger_mood_timer = 0.0
         self.launch_angle = 0.0
         self.angle_dragging = False
         self.score = 0
@@ -731,7 +736,7 @@ class OrbitalOrchardGame:
         """
         if self.scene == "game_over":
             return None
-        if self.scene in {"playing", "paused"} and self.warning_active:
+        if self.scene in {"playing", "paused"} and self.danger_mood:
             return "tense"
         return "calm"
 
@@ -943,11 +948,23 @@ class OrbitalOrchardGame:
         # Only older bodies count toward losing. This prevents a just-launched body
         # from instantly causing game over while it is still entering the field.
         warning = any(body.top < FAIL_LINE_Y and body.age(self.now) > FAIL_AGE_GATE for body in self.bodies)
-        if warning != self.warning_active:
-            # Entering and leaving danger each get a short cue of their own.
-            cue = "danger_on" if warning else "danger_off"
-            self.assets.sounds.play(cue, SFX_VOLUMES[cue])
         self.warning_active = warning
+        # What the player HEARS (the danger cue and the tense music) follows a
+        # steadier "danger mood" that only flips after the new state has held
+        # for DANGER_MOOD_HOLD seconds.
+        # Beginner note: this is called hysteresis. A body resting exactly on
+        # the line can cross it on one frame and not the next; acting on every
+        # flip would make the cues chatter and restart the music each frame.
+        if warning != self.danger_mood:
+            self._danger_mood_timer += dt
+            if self._danger_mood_timer >= DANGER_MOOD_HOLD:
+                self.danger_mood = warning
+                self._danger_mood_timer = 0.0
+                # Entering and leaving danger each get a short cue of their own.
+                cue = "danger_on" if warning else "danger_off"
+                self.assets.sounds.play(cue, SFX_VOLUMES[cue])
+        else:
+            self._danger_mood_timer = 0.0
         # The fail timer fills while danger is active and drains when the
         # player recovers (the exact rates live in rules.py).
         self.fail_timer = advance_fail_timer(self.fail_timer, dt, warning)
@@ -977,6 +994,8 @@ class OrbitalOrchardGame:
             return
         self.scene = "game_over"
         self.warning_active = False
+        self.danger_mood = False
+        self._danger_mood_timer = 0.0
         self._refresh_high_score()
         self._save_progress()
         # The music fades out and a jingle sums up the run: a fanfare for a

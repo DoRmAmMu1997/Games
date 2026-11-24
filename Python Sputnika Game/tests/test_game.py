@@ -39,6 +39,7 @@ from physics import PhysicsWorld
 from settings import (
     AIM_TICK_DEGREES,
     COMBO_CHIME_TOP,
+    DANGER_MOOD_HOLD,
     FAIL_AGE_GATE,
     FAIL_LINE_Y,
     MUSIC_CALM_CHANNEL,
@@ -557,12 +558,12 @@ class MusicTests(GameTestCase):
         game = self.game
         game.start_round()
         game._sync_music()
-        game.warning_active = True
+        game.danger_mood = True
         game._sync_music()
         game._sync_music()
         self.calm.stop.assert_called_once_with(MUSIC_CROSSFADE_MS)
         self.tense.start.assert_called_once_with(MUSIC_CROSSFADE_MS)
-        game.warning_active = False
+        game.danger_mood = False
         game._sync_music()
         self.tense.stop.assert_called_once_with(MUSIC_CROSSFADE_MS)
         self.assertEqual(self.calm.start.call_args_list[-1], mock.call(MUSIC_CROSSFADE_MS))
@@ -571,7 +572,7 @@ class MusicTests(GameTestCase):
         """Back on the menu the calm track plays, whatever the run's danger was."""
 
         self.game.scene = "menu"
-        self.game.warning_active = True
+        self.game.danger_mood = True
         self.game._sync_music()
         self.calm.start.assert_called_once_with(MUSIC_FADE_IN_MS)
 
@@ -749,18 +750,45 @@ class SoundEventTests(GameTestCase):
         self._merge(0)
         self.assertNotIn("high_score", self.names())
 
+    def _hold(self, bodies: list[CelestialBody], seconds: float) -> None:
+        """Run the fail check every frame for `seconds` with `bodies` in play."""
+
+        self.game.bodies = bodies
+        for _ in range(round(seconds / 0.016)):
+            self.game._update_fail_state(0.016)
+
     def test_danger_is_announced_when_entered_and_cleared(self) -> None:
-        """Crossing the danger line and recovering each play their cue once."""
+        """Holding danger, then holding clear, each play their cue once."""
 
         game = self.game
         high = CelestialBody(1, 0, pygame.Vector2(game.world.center.x, FAIL_LINE_Y - 40), pygame.Vector2(), -10.0)
-        game.bodies = [high]
-        game._update_fail_state(0.016)
-        game._update_fail_state(0.016)
-        game.bodies = []
-        game._update_fail_state(0.016)
-        game._update_fail_state(0.016)
+        self._hold([high], DANGER_MOOD_HOLD + 0.1)
+        self.assertTrue(game.danger_mood)
+        self._hold([], DANGER_MOOD_HOLD + 0.1)
+        self.assertFalse(game.danger_mood)
         self.assertEqual([name for name in self.names() if name.startswith("danger")], ["danger_on", "danger_off"])
+
+    def test_a_stack_flickering_on_the_line_stays_quiet(self) -> None:
+        """A body jittering across the line every frame plays no cues and keeps the music.
+
+        Physics jitter can flip the danger check true and false on alternate
+        frames. The heard danger mood must only change after the new state has
+        held for `DANGER_MOOD_HOLD`, so the cues do not chatter and the music
+        does not restart over and over.
+        """
+
+        game = self.game
+        high = CelestialBody(1, 0, pygame.Vector2(game.world.center.x, FAIL_LINE_Y - 40), pygame.Vector2(), -10.0)
+        tense = game.music["tense"]
+        with mock.patch.object(tense, "start", wraps=tense.start) as start:
+            for frame in range(round(2.0 / 0.016)):
+                game.bodies = [high] if frame % 2 else []
+                game._update_fail_state(0.016)
+                game._sync_music()
+        self.assertFalse(game.danger_mood)
+        self.assertNotIn("danger_on", self.names())
+        self.assertNotIn("danger_off", self.names())
+        self.assertEqual(start.call_count, 0)
 
     def test_pause_and_resume_have_their_own_sounds(self) -> None:
         """Esc pauses, Enter, Space and P resume, each with its cue."""
