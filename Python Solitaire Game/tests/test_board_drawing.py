@@ -78,6 +78,8 @@ def make_app(tmp_dir: str) -> SolitaireApp:
     app.status_var = FakeVar()  # type: ignore[assignment]
     app.started_at = 0.0
     app.elapsed_seconds = 0
+    # A mock sound wrapper records which sounds the handlers ask for.
+    app.audio = mock.Mock()
     return app
 
 

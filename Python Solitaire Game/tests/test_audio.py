@@ -26,7 +26,7 @@ import pygame
 
 import audio
 from audio import LIMIT, MusicPlayer, Note, SoundBank, midi, render
-from solitaire import FOUNDATION_CHIME_STEPS, SFX_COOLDOWNS, SFX_RECIPES
+from solitaire import FOUNDATION_CHIME_STEPS, SFX_COOLDOWNS, SFX_RECIPES, SilentAudio, SolitaireAudio, open_audio
 
 RATE = 22050
 
@@ -360,6 +360,80 @@ class SolitaireRecipeTests(unittest.TestCase):
                 continue
             with self.subTest(name=name):
                 self.assertLessEqual(max(note.end for note in notes), 0.7)
+
+
+class SolitaireAudioTests(unittest.TestCase):
+    """The app's sound wrapper opens pygame's mixer only, and falls back to silence."""
+
+    def setUp(self) -> None:
+        """Make sure every test leaves the mixer closed."""
+
+        self.addCleanup(pygame.mixer.quit)
+
+    def test_open_audio_prepares_starts_and_reserves_in_order(self) -> None:
+        """The mixer format is requested before the mixer starts; channels are reserved after."""
+
+        order: list[str] = []
+        with (
+            mock.patch.object(audio, "init_mixer", side_effect=lambda: order.append("pre_init")),
+            mock.patch.object(pygame.mixer, "init", side_effect=lambda: order.append("init")),
+            mock.patch.object(audio, "reserve_channels", side_effect=lambda: order.append("reserve")),
+        ):
+            sound = open_audio()
+        self.assertIsInstance(sound, SolitaireAudio)
+        self.assertEqual(order, ["pre_init", "init", "reserve"])
+
+    def test_open_audio_builds_the_bank_without_a_display(self) -> None:
+        """With the dummy driver the bank is live, pygame's display stays closed, and pygame keeps quiet."""
+
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PYGAME_HIDE_SUPPORT_PROMPT", None)
+            sound = open_audio()
+            self.assertEqual(os.environ["PYGAME_HIDE_SUPPORT_PROMPT"], "1")
+        assert isinstance(sound, SolitaireAudio)
+        self.assertTrue(sound.bank.enabled)
+        self.assertIsNotNone(pygame.mixer.get_init())
+        self.assertFalse(pygame.display.get_init())
+
+    def test_missing_pygame_gives_silence(self) -> None:
+        """Without pygame installed the game runs silently."""
+
+        with mock.patch.dict(sys.modules, {"pygame": None}):
+            sound = open_audio()
+        self.assertIsInstance(sound, SilentAudio)
+
+    def test_missing_audio_device_gives_silence(self) -> None:
+        """A machine whose mixer cannot start runs silently."""
+
+        with mock.patch.object(pygame.mixer, "init", side_effect=pygame.error("no audio device")):
+            sound = open_audio()
+        self.assertIsInstance(sound, SilentAudio)
+
+    def test_play_forwards_the_name_and_pitch(self) -> None:
+        """``play`` hands the sound name and pitch step to the bank."""
+
+        sound = SolitaireAudio()
+        bank = sound.bank = mock.Mock()
+        sound.play("foundation", pitch_step=4)
+        bank.play.assert_called_once_with("foundation", pitch_step=4)
+
+    def test_close_quits_the_mixer(self) -> None:
+        """Closing the sound shuts the mixer down, and a mixer error is ignored."""
+
+        pygame.mixer.init()
+        sound = SolitaireAudio()
+        sound.close()
+        self.assertIsNone(pygame.mixer.get_init())
+        with mock.patch.object(pygame.mixer, "quit", side_effect=pygame.error("gone")):
+            sound.close()
+
+    def test_silent_audio_ignores_every_request(self) -> None:
+        """The silent stand-in accepts every call and does nothing."""
+
+        silent = SilentAudio()
+        silent.play("deal")
+        silent.play("foundation", pitch_step=3)
+        silent.close()
 
 
 class MusicPlayerTests(unittest.TestCase):

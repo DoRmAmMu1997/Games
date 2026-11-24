@@ -36,6 +36,7 @@ from pathlib import Path
 from tkinter import messagebox
 from typing import Any
 
+import audio
 from audio import Note, midi
 
 # Card size in pixels.
@@ -307,6 +308,8 @@ SFX_COOLDOWNS: dict[str, float] = {
     "invalid": 0.15,
     "click": 0.04,
 }
+# The sound for each answer `KlondikeGame.draw_from_stock` can give.
+STOCK_SOUNDS = {"draw": "draw", "reset": "recycle", "empty": "empty"}
 
 
 def _user_save_dir() -> str:
@@ -1765,6 +1768,75 @@ class KlondikeGame:
         return bool(source_after and self.card_can_move_to_any_foundation_in_piles(source_after[-1], foundations))
 
 
+class SilentAudio:
+    """A stand-in for `SolitaireAudio` that ignores every request.
+
+    The app uses it when pygame is missing or the machine has no audio
+    device, and it is also the app's default, so an app built without
+    `__init__` (as the tests do) simply plays nothing.
+
+    Beginner note: this is the "null object" pattern. Instead of checking
+    "is there any sound?" before every call, the app always has an object
+    with the same methods; this one just does nothing.
+    """
+
+    def play(self, name: str, pitch_step: int = 0) -> None:
+        """Ignore a request to play a sound."""
+
+    def close(self) -> None:
+        """Nothing to shut down."""
+
+
+class SolitaireAudio:
+    """The app's sound: the effects bank behind a couple of small calls.
+
+    Attributes:
+        bank: The `audio.SoundBank` built from `SFX_RECIPES`. It is silent by
+            itself when the mixer is unavailable.
+    """
+
+    def __init__(self) -> None:
+        """Render every effect for the running mixer."""
+        self.bank = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
+
+    def play(self, name: str, pitch_step: int = 0) -> None:
+        """Play the effect `name` (or its `name@pitch_step` variant)."""
+        self.bank.play(name, pitch_step=pitch_step)
+
+    def close(self) -> None:
+        """Shut the mixer down so the audio device is released when the window closes."""
+        import pygame
+
+        with contextlib.suppress(pygame.error):
+            pygame.mixer.quit()
+
+
+def open_audio() -> SolitaireAudio | SilentAudio:
+    """Start pygame's mixer (never its display) and return the app's sound.
+
+    Returns `SilentAudio` when pygame is not installed or the mixer cannot
+    start (no audio device), so the game always runs, just silently.
+
+    Beginner note: tkinter owns the window here, so only `pygame.mixer` is
+    started; `pygame.init()` would also start pygame's display, which this
+    app never uses. pygame is imported here, not at the top of the file, so
+    the rules engine and the tests can load this module without it, and the
+    environment variable set first stops pygame printing its greeting.
+    """
+    os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    try:
+        import pygame
+    except ImportError:
+        return SilentAudio()
+    audio.init_mixer()
+    try:
+        pygame.mixer.init()
+    except pygame.error:
+        return SilentAudio()
+    audio.reserve_channels()
+    return SolitaireAudio()
+
+
 class SolitaireApp:
     """tkinter user interface that draws the board and reacts to clicks.
 
@@ -1784,6 +1856,9 @@ class SolitaireApp:
     - `history`: Undo snapshots, newest last, capped at UNDO_HISTORY_LIMIT.
     - `started_at` / `elapsed_seconds`: the game clock.
     - `canvas`: the tk.Canvas that the whole board is painted on.
+    - `audio`: the sound effects (`SolitaireAudio`), or `SilentAudio` when
+      there is no sound. The class-level default is silent, so an app built
+      without `__init__` still runs every handler.
 
     Beginner note: tkinter is event driven. After `root.mainloop()` starts,
     the program only runs code when something happens: a click calls a
@@ -1793,6 +1868,8 @@ class SolitaireApp:
     The board itself is redrawn from scratch from the model after every
     change (`redraw`), so the picture can never drift from the real state.
     """
+
+    audio: SolitaireAudio | SilentAudio = SilentAudio()
 
     def __init__(self, root: tk.Tk) -> None:
         """Create the window, game model, and all UI state.
@@ -1822,6 +1899,11 @@ class SolitaireApp:
 
         # Create the game logic object.
         self.game = KlondikeGame(high_score_path)
+
+        # Sound uses pygame's mixer only; without it the game runs silently.
+        # Closing the window shuts the mixer down cleanly first.
+        self.audio = open_audio()
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         # Selection/hint/animation state belongs to the UI layer.
         self.selection: Selection | None = None
@@ -1855,8 +1937,14 @@ class SolitaireApp:
         self.root.bind("<Control-H>", lambda event: self.show_hint())
         self.refresh_header_labels()
         self.redraw()
+        self.audio.play("deal")
         self.schedule_clock_update()
         self.check_for_loss()
+
+    def close(self) -> None:
+        """Release the audio device, then close the window and end the app."""
+        self.audio.close()
+        self.root.destroy()
 
     def build_ui(self) -> None:
         """Create the labels, buttons, status text, and drawing canvas.
@@ -1960,6 +2048,7 @@ class SolitaireApp:
         which Python joins together automatically. The `parent` argument
         ties the dialog to the game window so it opens over it.
         """
+        self.audio.play("click")
         messagebox.showinfo(
             "How to Play",
             "Objective\n"
@@ -2020,6 +2109,7 @@ class SolitaireApp:
         self.status_var.set("Started a new game.")
         self.refresh_header_labels()
         self.redraw()
+        self.audio.play("deal")
         self.check_for_loss()
 
     def refresh_header_labels(self) -> None:
@@ -2062,6 +2152,7 @@ class SolitaireApp:
 
         if not self.history:
             self.status_var.set("There is nothing to undo yet.")
+            self.audio.play("invalid")
             return
 
         history_state = self.history.pop()
@@ -2076,6 +2167,7 @@ class SolitaireApp:
             self.started_at = time.time() - self.elapsed_seconds
         self.refresh_header_labels()
         self.status_var.set("Undid the previous move.")
+        self.audio.play("undo")
         self.redraw()
         if not self.game.won and not self.game.lost:
             self.check_for_loss()
@@ -2126,6 +2218,7 @@ class SolitaireApp:
                 self.status_var.set("Recycled the waste pile back into the stock.")
             else:
                 self.status_var.set("There are no cards left to draw.")
+            self.audio.play(STOCK_SOUNDS[action])
             self.refresh_header_labels()
             self.redraw()
             if self.should_auto_solve():
@@ -2220,6 +2313,7 @@ class SolitaireApp:
         else:
             self.selection = waste_selection
             self.status_var.set(f"Selected {waste_selection.cards[0].label()} from the waste.")
+            self.audio.play("select")
         self.redraw()
 
     def handle_foundation_click(self, foundation_index: int) -> None:
@@ -2257,6 +2351,7 @@ class SolitaireApp:
                 self.status_var.set("Selection cleared.")
             else:
                 self.status_var.set("That move does not fit the foundation rules.")
+                self.audio.play("invalid")
             self.redraw()
             return
 
@@ -2266,6 +2361,7 @@ class SolitaireApp:
             self.status_var.set(
                 f"Selected {foundation_selection.cards[0].label()} from the foundation."
             )
+            self.audio.play("select")
             self.redraw()
 
     def handle_tableau_click(self, column_index: int, card_index: int | None) -> None:
@@ -2312,8 +2408,10 @@ class SolitaireApp:
                 self.status_var.set(
                     f"Selected {self.describe_cards(new_selection.cards)} from tableau column {column_index + 1}."
                 )
+                self.audio.play("select")
             else:
                 self.status_var.set("That move does not fit the tableau rules.")
+                self.audio.play("invalid")
             self.redraw()
             return
 
@@ -2327,8 +2425,10 @@ class SolitaireApp:
             self.status_var.set(
                 f"Selected {self.describe_cards(new_selection.cards)} from tableau column {column_index + 1}."
             )
+            self.audio.play("select")
         else:
             self.status_var.set("Only face-up cards in a valid stack can be selected.")
+            self.audio.play("invalid")
         self.redraw()
 
     def show_hint(self) -> None:
@@ -2366,6 +2466,7 @@ class SolitaireApp:
         self.hint_move = best_move
         self.selection = self.game.selection_from_hint(best_move)
         self.status_var.set(best_move.description)
+        self.audio.play("hint")
         self.redraw()
 
     def can_place_selection_on_tableau(self, selection: Selection, column_index: int) -> bool:
@@ -2404,6 +2505,13 @@ class SolitaireApp:
         start_positions = self.selection_positions(selection)
         end_positions = self.destination_positions(selection.cards, destination_type, destination_index)
         history_state = self.capture_history_state()
+        # Moving the last card off a face-down tableau card turns it over.
+        # The board shows that at once, so its flip sound plays at once too.
+        reveals_hidden_card = (
+            selection.source_type == "tableau"
+            and selection.card_index > 0
+            and not self.game.tableau[selection.pile_index][selection.card_index - 1].face_up
+        )
 
         # Update the model immediately, then draw the animation over the new board.
         if destination_type == "foundation":
@@ -2413,9 +2521,12 @@ class SolitaireApp:
 
         if not moved:
             self.status_var.set("That move is not legal.")
+            self.audio.play("invalid")
             self.redraw()
             return
 
+        if reveals_hidden_card:
+            self.audio.play("flip")
         self.remember_history_state(history_state)
         self.animation = AnimationState(
             cards=list(selection.cards),
@@ -2442,6 +2553,7 @@ class SolitaireApp:
 
         self.animation.frame += 1
         if self.animation.frame >= self.animation.steps:
+            self.play_landing_sound(self.animation)
             completion_message = self.animation.completion_message
             self.animation = None
             self.status_var.set(completion_message)
@@ -2452,6 +2564,20 @@ class SolitaireApp:
 
         self.redraw()
         self.root.after(ANIMATION_DELAY_MS, self.advance_animation)
+
+    def play_landing_sound(self, animation: AnimationState) -> None:
+        """Play the sound of cards arriving on their pile.
+
+        A tableau move thuds onto the felt. A foundation card chimes at the
+        pitch of its rank (Ace lowest, King highest), so a suit filling up
+        sounds like a rising scale; auto-solve uses a quicker, lighter chime
+        because it sends cards home in a fast run.
+        """
+        if animation.destination_type != "foundation":
+            self.audio.play("place")
+            return
+        name = "auto_step" if self.auto_solving else "foundation"
+        self.audio.play(name, pitch_step=animation.cards[-1].rank)
 
     def finish_turn(self) -> None:
         """Run end-of-turn checks after a move or animation finishes.
@@ -2551,6 +2677,7 @@ class SolitaireApp:
                 self.status_var.set("Auto-solve is drawing from the stock.")
             else:
                 self.status_var.set("Auto-solve is recycling the stock.")
+            self.audio.play(STOCK_SOUNDS[stock_action])
             self.refresh_header_labels()
             self.redraw()
             self.root.after(140, self.advance_auto_solve)
