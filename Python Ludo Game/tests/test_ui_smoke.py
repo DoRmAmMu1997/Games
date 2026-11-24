@@ -154,6 +154,40 @@ class UiSmokeTests(unittest.TestCase):
         finally:
             app.running = False
 
+    def test_a_human_roll_with_only_one_move_plays_it_automatically(self) -> None:
+        """A human is not asked to pick when the roll leaves just one possible move."""
+
+        app = LudoApp()
+        try:
+            players = [("Human", True)] + [(f"AI {index}", False) for index in range(1, 4)]
+            game = LudoGame(players, LudoRules(total_players=4), seed=4)
+            app.start_game(game)
+            game.players[0].tokens[0].steps = 4
+            with mock.patch.object(game.rng, "randint", return_value=3), mock.patch.object(main, "save_game"):
+                app._roll_for_human()
+            self.assertEqual(game.players[0].tokens[0].steps, 7)
+            self.assertEqual(app.visible_moves, [])
+            self.assertNotEqual(game.awaiting, "choose_move")
+        finally:
+            app.running = False
+
+    def test_a_human_roll_with_a_real_choice_still_asks(self) -> None:
+        """Two different possible moves keep the choice with the player."""
+
+        app = LudoApp()
+        try:
+            players = [("Human", True)] + [(f"AI {index}", False) for index in range(1, 4)]
+            game = LudoGame(players, LudoRules(total_players=4), seed=4)
+            app.start_game(game)
+            game.players[0].tokens[0].steps = 4
+            game.players[0].tokens[1].steps = 10
+            with mock.patch.object(game.rng, "randint", return_value=3), mock.patch.object(main, "save_game"):
+                app._roll_for_human()
+            self.assertEqual(game.awaiting, "choose_move")
+            self.assertEqual(len(app.visible_moves), 2)
+        finally:
+            app.running = False
+
     def test_scaled_window_size_fits_short_work_area(self) -> None:
         """The real window should shrink when the desktop is shorter than the logical layout."""
 
@@ -217,9 +251,9 @@ class StaleMoveTests(unittest.TestCase):
         """Pressing 1, R, 2 before the next redraw never plays the old roll's move.
 
         After a 6 every yard token may enter. Key 1 enters token 1 and earns a
-        bonus roll; R rolls a 2 (seed 1), which only token 1 can use. Key 2
-        must not replay the old "enter token 2 with a 6" move from the
-        previous roll's list.
+        bonus roll; R rolls a 2 (seed 1), which only token 1 can use, so that
+        move is made automatically and the turn passes. Key 2 must not replay
+        the old "enter token 2 with a 6" move from the previous roll's list.
         """
 
         app = LudoApp()
@@ -236,9 +270,9 @@ class StaleMoveTests(unittest.TestCase):
                     app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=key, unicode=text, mod=0))
 
             self.assertEqual(game.last_roll, 2)
-            self.assertEqual([token.steps for token in game.players[0].tokens], [0, -1, -1, -1])
-            self.assertEqual(game.awaiting, "choose_move")
-            self.assertEqual([move.token_index for move in app.visible_moves], [0])
+            self.assertEqual([token.steps for token in game.players[0].tokens], [2, -1, -1, -1])
+            self.assertNotEqual(game.current, 0)
+            self.assertEqual(app.visible_moves, [])
         finally:
             app.running = False
 

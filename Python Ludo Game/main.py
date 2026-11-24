@@ -1045,6 +1045,8 @@ class LudoApp:
         Starts the short dice animation. If the roll leaves no legal move,
         the engine is told at once (``note_no_move``) so the turn passes (or a
         6 grants another roll) without the player having to click anything.
+        If it leaves no real choice (``LudoGame.forced_move``), that move is
+        made for the player straight away.
         """
 
         if self.game is None or self.game.awaiting != "pre_roll":
@@ -1055,6 +1057,9 @@ class LudoApp:
         # pre_roll), so only a roll that is waiting for a move can be a no-move.
         if self.game.awaiting == "choose_move" and not self.game.legal_moves(die):
             self.game.note_no_move(die)
+        elif self.game.awaiting == "choose_move" and (move := self.game.forced_move(die)) is not None:
+            self._apply_move(move)
+            return
         self._refresh_visible_moves()
         self._save_if_turn_completed()
 

@@ -196,6 +196,51 @@ class EngineRuleTests(unittest.TestCase):
         self.assertEqual(restored.last_roll, 6)
 
 
+class ForcedMoveTests(unittest.TestCase):
+    """``forced_move`` finds the roll whose every legal move ends the same way.
+
+    Beginner note: "only one move" means only one OUTCOME. Four yard tokens on
+    a 6 are four legal moves, but whichever token you pick, one token leaves
+    the yard onto the start square, so the choice is not a real choice.
+    """
+
+    def test_a_single_legal_move_is_forced(self) -> None:
+        """One token on the board and a non-6 roll leaves exactly one move."""
+
+        game = make_game()
+        game.players[0].tokens[0].steps = 4
+        game.record_roll(3)
+        move = game.forced_move(3)
+        self.assertEqual(move, game.legal_moves(3)[0])
+
+    def test_interchangeable_yard_tokens_count_as_one_move(self) -> None:
+        """A 6 with every token in the yard forces a token out."""
+
+        game = make_game()
+        game.record_roll(6)
+        self.assertEqual(len(game.legal_moves(6)), 4)
+        move = game.forced_move(6)
+        self.assertIsNotNone(move)
+        assert move is not None
+        self.assertTrue(move.enters_board)
+
+    def test_a_real_choice_is_not_forced(self) -> None:
+        """Two tokens on different squares give the player a real choice."""
+
+        game = make_game()
+        game.players[0].tokens[0].steps = 4
+        game.players[0].tokens[1].steps = 10
+        game.record_roll(2)
+        self.assertIsNone(game.forced_move(2))
+
+    def test_no_legal_move_is_not_forced(self) -> None:
+        """With nothing playable there is no move to make for the player."""
+
+        game = make_game()
+        game.record_roll(3)
+        self.assertIsNone(game.forced_move(3))
+
+
 class EngineEventTests(unittest.TestCase):
     """The engine queues one event kind per sound-worthy moment, for the shell to drain.
 
