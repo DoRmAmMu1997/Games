@@ -9,8 +9,11 @@ test opens a pygame display or a Tk window.
 from __future__ import annotations
 
 import ast
+import json
 import os
+import random
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -36,6 +39,7 @@ from solitaire import (
     MUSIC_VOLUME,
     SFX_COOLDOWNS,
     SFX_RECIPES,
+    KlondikeGame,
     SilentAudio,
     SolitaireAudio,
     music_notes,
@@ -475,6 +479,18 @@ class SolitaireAudioTests(unittest.TestCase):
         music.stop.assert_called_once_with(700)
         music.update.assert_called_once_with()
 
+    def test_mute_silences_effects_and_music_together(self) -> None:
+        """``set_muted`` mutes the bank and stops the music; unmuting restores both."""
+
+        sound = SolitaireAudio(threaded=False)
+        music = sound.music = mock.Mock()
+        sound.set_muted(True)
+        self.assertTrue(sound.bank.muted)
+        music.set_muted.assert_called_once_with(True)
+        sound.set_muted(False)
+        self.assertFalse(sound.bank.muted)
+        music.set_muted.assert_called_with(False)
+
     def test_silent_audio_ignores_every_request(self) -> None:
         """The silent stand-in accepts every call and does nothing."""
 
@@ -484,6 +500,7 @@ class SolitaireAudioTests(unittest.TestCase):
         silent.start_music()
         silent.stop_music(500)
         silent.update()
+        silent.set_muted(True)
         silent.close()
 
 
@@ -520,6 +537,76 @@ class SolitaireMusicTests(unittest.TestCase):
         bar_seconds = MUSIC_LOOP_SECONDS / MUSIC_BARS
         bars = {int(note.start // bar_seconds) for note in music_notes()}
         self.assertEqual(bars, set(range(MUSIC_BARS)))
+
+
+class SoundSettingTests(unittest.TestCase):
+    """The sound on/off choice is saved in the score file and kept out of Undo."""
+
+    def setUp(self) -> None:
+        """Point a game at a score file in a throwaway folder."""
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "scores.json"
+
+    def make_game(self) -> KlondikeGame:
+        """Build a seeded game that reads and writes the throwaway score file."""
+
+        return KlondikeGame(str(self.path), rng=random.Random(5))
+
+    def write(self, data: object) -> None:
+        """Replace the score file with `data` as JSON."""
+
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_sound_is_on_by_default(self) -> None:
+        """A first run (no score file) starts with sound on."""
+
+        self.assertFalse(self.make_game().sound_muted)
+
+    def test_mute_survives_a_save_and_load(self) -> None:
+        """A saved mute is read back by the next game, next to the statistics."""
+
+        game = self.make_game()
+        game.wins = 4
+        game.sound_muted = True
+        game.save_high_score()
+
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertIs(saved["muted"], True)
+        again = self.make_game()
+        self.assertTrue(again.sound_muted)
+        self.assertEqual(again.wins, 4)
+
+    def test_only_a_real_true_mutes(self) -> None:
+        """Anything but JSON ``true`` in the file reads as sound on."""
+
+        for value in ("yes", 1, None, [True], {"on": False}, False):
+            with self.subTest(value=value):
+                self.write({"muted": value})
+                self.assertIs(self.make_game().sound_muted, False)
+        self.write({"muted": True})
+        self.assertIs(self.make_game().sound_muted, True)
+
+    def test_mute_stays_out_of_undo(self) -> None:
+        """Snapshots do not carry the setting, and restoring one keeps the current choice."""
+
+        game = self.make_game()
+        snapshot = game.snapshot()
+        self.assertNotIn("muted", snapshot)
+        game.sound_muted = True
+        game.restore_snapshot(snapshot)
+        self.assertTrue(game.sound_muted)
+        self.assertTrue(json.loads(self.path.read_text(encoding="utf-8"))["muted"])
+
+    def test_statistics_saves_keep_the_setting(self) -> None:
+        """Recording a win or a loss rewrites the file without losing the mute."""
+
+        game = self.make_game()
+        game.sound_muted = True
+        game.record_win()
+        game.record_loss()
+        self.assertTrue(self.make_game().sound_muted)
 
 
 class MusicPlayerTests(unittest.TestCase):

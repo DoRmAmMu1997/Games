@@ -71,6 +71,7 @@ def make_app(tmp_dir: str, seed: int = 7) -> SolitaireApp:
     app.time_var = FakeVar()  # type: ignore[assignment]
     app.stats_var = FakeVar()  # type: ignore[assignment]
     app.status_var = FakeVar()  # type: ignore[assignment]
+    app.sound_var = FakeVar()  # type: ignore[assignment]
     app.started_at = 0.0
     app.elapsed_seconds = 0
     # A mock sound wrapper records which sounds the handlers ask for.
@@ -596,6 +597,56 @@ class SoundEffectTests(AppHandlerTestCase):
 
         self.audio.update.assert_called_once_with()
         self.root.after.assert_called_once_with(AUDIO_TICK_MS, self.app.schedule_audio_update)
+
+    def test_toggling_sound_mutes_saves_and_relabels(self) -> None:
+        """Ctrl+M / the Sound button mute everything, save the choice and relabel the button."""
+
+        self.app.toggle_sound()
+
+        self.assertTrue(self.game.sound_muted)
+        self.audio.set_muted.assert_called_once_with(True)
+        self.assertEqual(self.app.sound_var.get(), "Sound: Off")
+        self.assertTrue(KlondikeGame(self.game.high_score_path).sound_muted)
+        self.assertEqual(self.names(), [])
+
+    def test_toggling_sound_back_on_clicks(self) -> None:
+        """Switching sound back on unmutes, relabels, saves and plays a click so the player hears it."""
+
+        self.app.toggle_sound()
+        self.app.toggle_sound(mock.Mock())
+
+        self.assertFalse(self.game.sound_muted)
+        self.audio.set_muted.assert_called_with(False)
+        self.assertEqual(self.app.sound_var.get(), "Sound: On")
+        self.assertFalse(KlondikeGame(self.game.high_score_path).sound_muted)
+        self.assertEqual(self.names(), ["click"])
+
+    def test_saved_mute_is_applied(self) -> None:
+        """At start-up the saved choice reaches the sound wrapper and the button label."""
+
+        self.game.sound_muted = True
+
+        self.app.apply_sound_setting()
+
+        self.audio.set_muted.assert_called_once_with(True)
+        self.assertEqual(self.app.sound_var.get(), "Sound: Off")
+
+    def test_toggling_mid_game_keeps_the_board_and_undo(self) -> None:
+        """The sound choice is not a move: the board and the Undo history are untouched."""
+
+        self.playable_board()
+        self.game.stock = [Card("diamonds", 13, face_up=False)]
+        self.app.on_canvas_click(self.stock_click())
+        history = list(self.app.history)
+        board = self.game.position_key()
+
+        self.app.toggle_sound()
+        self.app.undo_last_action()
+
+        self.assertEqual(len(history), 1)
+        self.assertEqual(self.app.history, [])
+        self.assertNotEqual(self.game.position_key(), board)
+        self.assertTrue(self.game.sound_muted)
 
     def test_closing_the_window_shuts_the_mixer(self) -> None:
         """Closing the window closes the sound first, then destroys the root."""

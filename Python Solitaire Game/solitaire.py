@@ -585,6 +585,8 @@ class KlondikeGame:
       and the last item is the uncovered card at its front.
     - `score`, `high_score`, `wins`, `losses`: scoring and statistics; the
       last three are saved to JSON at `high_score_path`.
+    - `sound_muted`: the player's sound on/off choice. It is saved in the
+      same JSON file but is not part of the game, so Undo never touches it.
     - `won`, `lost`: set by the app when a game ends; they freeze input.
     - `rng`: the random generator used to shuffle (seedable for tests).
     - `_seen_positions`: every board this deal has left behind, used by
@@ -620,6 +622,7 @@ class KlondikeGame:
         self.high_score = saved_data["high_score"]
         self.wins = saved_data["wins"]
         self.losses = saved_data["losses"]
+        self.sound_muted = saved_data["muted"]
 
         # These values are reset for each new deal.
         self.score = 0
@@ -684,10 +687,12 @@ class KlondikeGame:
         """Read saved high score and statistics from JSON, if possible.
 
         Returns a dict with the integer keys "high_score", "wins" and
-        "losses". The method never raises: a missing, unreadable or
-        malformed file, or a field that is not a usable number, simply
-        reads as 0, and negative numbers are clamped up to 0. That way a
-        damaged save costs the player their statistics, never the game.
+        "losses", plus the boolean "muted" (the sound setting). The method
+        never raises: a missing, unreadable or malformed file, or a field
+        that is not a usable number, simply reads as 0, and negative numbers
+        are clamped up to 0. That way a damaged save costs the player their
+        statistics, never the game. Only a real JSON `true` mutes the sound;
+        anything else leaves it on.
         """
         try:
             with open(self.high_score_path, encoding="utf-8") as file:
@@ -716,10 +721,11 @@ class KlondikeGame:
             "high_score": safe_int("high_score"),
             "wins": safe_int("wins"),
             "losses": safe_int("losses"),
+            "muted": data.get("muted") is True,
         }
 
     def save_high_score(self) -> None:
-        """Write best score and win/loss counts with a crash-safe atomic write.
+        """Write best score, win/loss counts and the sound setting with a crash-safe atomic write.
 
         Beginner note: an "atomic" write means other code (or the next run of
         the game) sees either the complete old file or the complete new file,
@@ -730,6 +736,7 @@ class KlondikeGame:
             "high_score": self.high_score,
             "wins": self.wins,
             "losses": self.losses,
+            "muted": self.sound_muted,
         }
         try:
             os.makedirs(os.path.dirname(self.high_score_path), exist_ok=True)
@@ -1932,6 +1939,9 @@ class SilentAudio:
     def update(self) -> None:
         """Nothing to update."""
 
+    def set_muted(self, muted: bool) -> None:
+        """Ignore a request to mute or unmute."""
+
     def close(self) -> None:
         """Nothing to shut down."""
 
@@ -1965,6 +1975,11 @@ class SolitaireAudio:
     def update(self) -> None:
         """Let the music player turn a finished render into sound; call it from the tkinter thread."""
         self.music.update()
+
+    def set_muted(self, muted: bool) -> None:
+        """Mute (True) or unmute every effect and the music; unmuting resumes music that was playing."""
+        self.bank.muted = muted
+        self.music.set_muted(muted)
 
     def close(self) -> None:
         """Shut the mixer down so the audio device is released when the window closes."""
@@ -2019,9 +2034,10 @@ class SolitaireApp:
     - `history`: Undo snapshots, newest last, capped at UNDO_HISTORY_LIMIT.
     - `started_at` / `elapsed_seconds`: the game clock.
     - `canvas`: the tk.Canvas that the whole board is painted on.
-    - `audio`: the sound effects (`SolitaireAudio`), or `SilentAudio` when
-      there is no sound. The class-level default is silent, so an app built
-      without `__init__` still runs every handler.
+    - `audio`: the sound effects and music (`SolitaireAudio`), or
+      `SilentAudio` when there is no sound. The class-level default is
+      silent, so an app built without `__init__` still runs every handler.
+      Ctrl+M or the Sound button mutes it (`toggle_sound`).
 
     Beginner note: tkinter is event driven. After `root.mainloop()` starts,
     the program only runs code when something happens: a click calls a
@@ -2066,7 +2082,6 @@ class SolitaireApp:
         # Sound uses pygame's mixer only; without it the game runs silently.
         # Closing the window shuts the mixer down cleanly first.
         self.audio = open_audio()
-        self.audio.start_music()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         # Selection/hint/animation state belongs to the UI layer.
@@ -2085,6 +2100,12 @@ class SolitaireApp:
         self.status_var = tk.StringVar(
             value="Click a face-up card to select it, then click a destination pile."
         )
+        self.sound_var = tk.StringVar()
+
+        # Apply the saved sound choice before anything can play, then ask
+        # for the music (a muted player simply waits until it is unmuted).
+        self.apply_sound_setting()
+        self.audio.start_music()
 
         self.started_at = time.time()
         self.elapsed_seconds = 0
@@ -2099,6 +2120,9 @@ class SolitaireApp:
         self.root.bind("<Control-N>", lambda event: self.start_new_game())
         self.root.bind("<Control-h>", lambda event: self.show_hint())
         self.root.bind("<Control-H>", lambda event: self.show_hint())
+        # Ctrl+M switches sound off and on (the Sound button does the same).
+        self.root.bind("<Control-m>", self.toggle_sound)
+        self.root.bind("<Control-M>", self.toggle_sound)
         self.refresh_header_labels()
         self.redraw()
         self.audio.play("deal")
@@ -2116,9 +2140,10 @@ class SolitaireApp:
 
         The window is built from top to bottom: a header row (score, high
         score, clock and statistics on the left; Undo, Hint, New Game and
-        Help on the right), then a one-line status bar, then the canvas
-        that fills the rest. Single and double left-clicks on the canvas are
-        bound to `on_canvas_click` and `on_canvas_double_click`.
+        Help on the right), then a one-line status bar with the Sound toggle
+        at its right end, then the canvas that fills the rest. Single and
+        double left-clicks on the canvas are bound to `on_canvas_click` and
+        `on_canvas_double_click`.
 
         Beginner note: `pack` is one of tkinter's layout managers. Each
         `pack(side=...)` call pushes a widget against one side of the space
@@ -2185,15 +2210,30 @@ class SolitaireApp:
             pady=4,
         ).pack(side="left")
 
+        # The status row: the message on the left and the Sound toggle on the
+        # right, under the header buttons. The header row has no room for a
+        # fifth button once the statistics grow, so the toggle lives here.
+        # Like the header, the button is packed first so it keeps its width.
+        status_frame = tk.Frame(self.root, bg=BACKGROUND_COLOR)
+        status_frame.pack(fill="x")
+        # The Sound toggle's label follows `sound_var` ("Sound: On" / "Sound: Off").
+        tk.Button(
+            status_frame,
+            textvariable=self.sound_var,
+            command=self.toggle_sound,
+            font=HEADER_FONT,
+            padx=12,
+            pady=0,
+        ).pack(side="right", padx=(0, 12))
         tk.Label(
-            self.root,
+            status_frame,
             textvariable=self.status_var,
             bg=BACKGROUND_COLOR,
             fg="white",
             anchor="w",
             padx=14,
             font=("Arial", 10),
-        ).pack(fill="x")
+        ).pack(side="left", fill="x", expand=True)
 
         self.canvas = tk.Canvas(
             self.root,
@@ -2229,7 +2269,8 @@ class SolitaireApp:
             "Controls\n"
             "Undo button or Ctrl+Z  -  take back the last move\n"
             "Hint button  -  highlight a useful move\n"
-            "New Game button  -  deal a fresh game\n\n"
+            "New Game button  -  deal a fresh game\n"
+            "Sound button or Ctrl+M  -  switch sound and music on or off\n\n"
             "Scoring\n"
             "+10 for every card sent to a foundation, +5 for revealing a "
             "face-down card, plus a time bonus and a 100-point win bonus for "
@@ -2251,6 +2292,30 @@ class SolitaireApp:
 
         # Ask tkinter to call this method again later.
         self.root.after(250, self.schedule_clock_update)
+
+    def sound_label(self) -> str:
+        """Return the Sound button's text for the current setting."""
+        return "Sound: Off" if self.game.sound_muted else "Sound: On"
+
+    def apply_sound_setting(self) -> None:
+        """Pass the saved sound choice to the audio and show it on the Sound button."""
+        self.audio.set_muted(self.game.sound_muted)
+        self.sound_var.set(self.sound_label())
+
+    def toggle_sound(self, event: tk.Event | None = None) -> None:
+        """Switch all sound off or back on, and save the choice with the statistics.
+
+        Called by the Sound button (no argument) and by Ctrl+M (with the key
+        event, which is ignored). Muting stops the music at once and blocks
+        every effect; unmuting resumes the music and plays a click so the
+        player hears that it worked. It is a setting, not a move, so it
+        works at any time and never enters the Undo history.
+        """
+        self.game.sound_muted = not self.game.sound_muted
+        self.game.save_high_score()
+        self.apply_sound_setting()
+        if not self.game.sound_muted:
+            self.audio.play("click")
 
     def schedule_audio_update(self) -> None:
         """Give the music player a moment on the main thread, again every AUDIO_TICK_MS.
