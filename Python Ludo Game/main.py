@@ -1263,10 +1263,16 @@ class LudoApp:
                 self.token_pixels[key] = current
 
     def _play_hop(self, key: tuple[int, int]) -> None:
-        """Tap the hop sound for a token that just reached a cell, one step higher each time."""
+        """Tap the hop sound for a token that just reached a cell, one step higher each time.
+
+        Hops only sound on the play screen: the winning move ends the game at
+        once, and its token may still be easing home on the game-over screen,
+        where its taps would step on the win jingle (likewise after Save or
+        New sends the player back to setup mid-hop).
+        """
 
         step = self.token_hops.get(key)
-        if step is not None:
+        if step is not None and self.screen == "playing":
             self.sounds.play("hop", pitch_step=step)
             self.token_hops[key] = step + 1
 

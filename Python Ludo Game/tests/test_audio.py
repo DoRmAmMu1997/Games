@@ -569,6 +569,24 @@ class ShellSoundTests(unittest.TestCase):
         app._update_token_pixels(1)
         self.assertEqual(self.hop_sounds(bank), [])
 
+    def test_hops_stop_once_the_screen_leaves_play(self) -> None:
+        """A token still easing home after the game ends taps no hops over the jingle.
+
+        The winning move ends the game at once, and the shell switches to the
+        game-over screen while the token is still animating; its remaining
+        hop taps must not play on top of the win jingle. The same holds after
+        Save or New sends the player back to setup mid-hop.
+        """
+
+        app, game, bank = make_app_with_game()
+        game.players[0].tokens[0].steps = 0
+        app._update_token_pixels(0)
+        game.record_roll(4)
+        game.apply_move(next(move for move in game.legal_moves(4) if move.token_index == 0))
+        app.screen = "over"
+        app._update_token_pixels(1000)
+        self.assertEqual(self.hop_sounds(bank), [])
+
     def test_slides_into_and_out_of_the_yard_do_not_hop(self) -> None:
         """Leaving the yard and being captured are single slides with their own sounds."""
 
