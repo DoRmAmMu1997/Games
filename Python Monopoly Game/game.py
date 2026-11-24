@@ -412,6 +412,16 @@ class MonopolyGame:
         return space.kind == "street" and any(
             self.houses.get(pos, 0) > 0 for pos in board_data.COLOR_GROUPS[space.group])
 
+    def spendable_cash(self, player: Player) -> int:
+        """Cash `player` may spend now: their balance minus any debt they still owe.
+
+        A human's debt can be queued while an auction is running (raise_funds
+        starts once it ends). The cash they owe is spoken for, so it must not
+        be bid away in that auction.
+        """
+        owed = sum(debt["amount"] for debt in self.debts if debt["payer"] == player.index)
+        return max(0, player.cash - owed)
+
     def _liquidation_value(self, player: Player) -> int:
         """Cash `player` could hold after selling up: what a debt is measured against.
 
@@ -1075,8 +1085,8 @@ class MonopolyGame:
             return
         auction = self.auction
         bidder = self.players[auction["current"]]
-        if amount <= auction["high_bid"] or amount > bidder.cash:
-            return  # an illegal bid is simply ignored
+        if amount <= auction["high_bid"] or amount > self.spendable_cash(bidder):
+            return  # an illegal bid (or one paid with owed cash) is simply ignored
         auction["high_bid"] = amount
         auction["high_bidder"] = auction["current"]
         self._emit("auction_bid")
