@@ -74,9 +74,9 @@ jobs:
         working-directory: "Python Sputnika Game"
         run: python -m pytest tests -q --cov=merge_logic --cov=physics --cov=rules --cov-fail-under=97
 
-      - name: Solitaire tests (coverage floor 80)
+      - name: Solitaire tests (coverage floor 88)
         working-directory: "Python Solitaire Game"
-        run: python -m pytest tests -q --cov=solitaire --cov-fail-under=80
+        run: python -m pytest tests -q --cov=solitaire --cov-fail-under=88
 
       - name: Headless autotests (full app smoke)
         run: |
