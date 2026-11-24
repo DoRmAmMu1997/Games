@@ -33,6 +33,7 @@ them) the skills the owner uses everywhere:
 | Writing/reviewing/refactoring code | `karpathy-guidelines` (surgical changes, no speculative complexity) |
 | Any feature or bugfix | `test-driven-development` |
 | Before claiming something works | `verification-before-completion` (run the gates; evidence before assertions) |
+| Job complete (before the final report or PR hand-off) | `/code-review` and `/security-review` of the whole diff, one final time (see §10) |
 
 The Karpathy rules matter here specifically: each game deliberately duplicates
 small helpers instead of sharing a package (see §5) — do not "helpfully"
@@ -143,8 +144,9 @@ animation state, and persistence. Keep it that way:
 ## 6. Quality gates (run before claiming done)
 
 Install once: `pip install -r requirements-dev.txt` plus
-`pip install -r "Python Ludo Game/requirements.txt"` (any one pygame game's
-requirements file provides pygame-ce for all three).
+`pip install -r "Python Ludo Game/requirements.txt"` (any one game's
+requirements file provides pygame-ce for all four; Solitaire uses it for
+audio only).
 
 From the repo root, all of these must pass — CI runs exactly this set on
 Python 3.12, 3.13 and 3.14:
@@ -247,3 +249,10 @@ Bundled read-only resources (window icons) are declared in the spec's
   before pushing; the `Quality & Security` workflow must be green before
   merging.
 - Do not amend or force-push shared history; add follow-up commits instead.
+- **Final review on completion.** When a job is done, before the final
+  report or PR hand-off, run `/code-review` and `/security-review` one final
+  time over the job's whole diff (for a stacked PR, against its base
+  branch). Verify each finding: fix real bugs test-first in follow-up
+  commits with the §6 gates green, and report intentional behaviour,
+  out-of-scope items and anything left unfixed to the owner instead of
+  silently dropping it.
