@@ -41,6 +41,15 @@ LAP_VERSION = 2
 # - no_move: the roll had no legal move;
 # - turn_change: the turn passed to the next player;
 # - game_won: the game ended.
+# One action can queue several kinds, in order: a 6 that captures queues
+# roll, rolled_six, then (on the move) move, capture and bonus_turn.
+#
+# Why a queue instead of playing sounds here: the engine must stay free of
+# pygame, so it only *reports* what happened and the window decides what to
+# play. Because humans, the AI, tests and simulations all drive the game
+# through the same methods, an AI turn queues exactly the events a human turn
+# would, and so is heard the same way. The queue is presentation data, not
+# game state, so it is never saved: a resumed game should not replay old sounds.
 EVENT_KINDS = (
     "roll",
     "rolled_six",

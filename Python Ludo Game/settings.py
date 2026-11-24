@@ -192,8 +192,14 @@ SAVEGAME_PATH = SAVE_DIR / "savegame.json"    # one resumable in-progress game
 #   then rings down over `ring` seconds, like a mallet striking a marimba bar.
 # - Volumes stay well under 1.0 on purpose: several effects often play at
 #   once (a hop, a capture and a turn change) and their samples add up.
+# - A name such as "hop@3" or "dice@5" is a *pitch variant*: the same sound
+#   pre-rendered at another pitch. `SoundBank.play(name, pitch_step=n)` plays
+#   "name@n" when it exists and falls back to the plain "name" otherwise, so
+#   the plain entry doubles as step 0 ("hop") or face 1 ("dice").
 SFX_PLUCK_ATTACK = 0.004  # A struck note reaches full volume this fast (s).
-SFX_PLUCK_RELEASE = 0.02  # Tail after a pluck's ring, so it never ends abruptly (s).
+# Fade used when a pluck is cut short before it has rung down (the music loop
+# trims notes at its end); a pluck that rings out fully is already silent here.
+SFX_PLUCK_RELEASE = 0.02  # Seconds.
 SFX_ROOT_NOTE = 67  # G4: the home note of the effects' G major ladder.
 G_MAJOR_STEPS = (0, 2, 4, 5, 7, 9, 11)  # Semitones above G for each degree of the scale.
 # The dice sound is a rattle of short noise ticks (the die tumbling), then the
@@ -211,7 +217,20 @@ HOP_PITCH_STEPS = 6
 
 
 def pluck(pitch: float, start: float, ring: float, volume: float, voice: str = "pluck") -> Note:
-    """Return a struck note: a near-instant attack, then a ring down to silence."""
+    """Return a struck note: a near-instant attack, then a ring down to silence.
+
+    Args:
+        pitch: MIDI note number (converted to Hz with `midi`).
+        start: Seconds from the start of the sound.
+        ring: Seconds the note takes to fade from full volume to silence.
+        volume: Peak loudness, 0 to 1.
+        voice: Wavetable name from audio.py; "pluck" is the marimba-like tone.
+
+    Beginner note:
+    - In ADSR terms this is attack `SFX_PLUCK_ATTACK`, decay `ring`, and
+      sustain 0: the note is held just long enough (attack plus ring) for the
+      decay to reach silence, so nothing is left for the release to fade.
+    """
 
     return Note(
         midi(pitch),
@@ -227,7 +246,11 @@ def pluck(pitch: float, start: float, ring: float, volume: float, voice: str = "
 
 
 def scale_note(degree: int) -> int:
-    """Return the MIDI note `degree` steps up the G major ladder from SFX_ROOT_NOTE."""
+    """Return the MIDI note `degree` steps up the G major ladder from SFX_ROOT_NOTE.
+
+    Degrees past the seventh wrap into the next octave: degree 0 is G4 (67),
+    degree 6 is F#5 (78) and degree 7 is G5 (79).
+    """
 
     octave, step = divmod(degree, len(G_MAJOR_STEPS))
     return SFX_ROOT_NOTE + 12 * octave + G_MAJOR_STEPS[step]
@@ -349,6 +372,8 @@ MUSIC_VOLUME = 0.22  # Channel volume: low, so effects sit on top of the music.
 MUSIC_FADE_IN_MS = 1500  # The tune eases in when the app opens or a new game is set up.
 MUSIC_GAME_OVER_FADE_MS = 700  # How quickly the tune fades under the game-over jingle.
 # Each chord: (bass root, bass fifth, the three notes of the off-beat "pah"), as MIDI numbers.
+# The fifth sits above or below the root, whichever keeps the bass in one low
+# register (E2 to D3), so the "oom" never jumps around.
 MUSIC_CHORDS: dict[str, tuple[int, int, tuple[int, int, int]]] = {
     "G": (43, 50, (55, 59, 62)),
     "C": (48, 43, (55, 60, 64)),
@@ -377,7 +402,8 @@ MUSIC_SCORE: tuple[tuple[str, tuple[tuple[float, float, int], ...]], ...] = (
     ("G", ((0, 1, 67), (1, 1, 71), (2, 2, 67))),
 )
 MUSIC_BARS = len(MUSIC_SCORE)
-MUSIC_LOOP_SECONDS = MUSIC_BARS * MUSIC_BEATS_PER_BAR * MUSIC_BEAT_SECONDS  # 30 s at 128 BPM.
+# 16 bars x 4 beats = 64 beats, and one beat is 60 / 128 s, so 64 x 0.46875 = 30 s exactly.
+MUSIC_LOOP_SECONDS = MUSIC_BARS * MUSIC_BEATS_PER_BAR * MUSIC_BEAT_SECONDS
 MUSIC_MELODY_VOLUME = 0.22
 MUSIC_MELODY_RING = 1.5  # A melody note rings this many times its written length (legato marimba).
 MUSIC_BASS_VOLUME = 0.26
@@ -386,7 +412,10 @@ MUSIC_CHORD_VOLUME = 0.06  # Per chord note; three of them sound together.
 MUSIC_CHORD_RING = 0.35  # Beats an off-beat chord rings: a light "pah".
 MUSIC_SHAKER_VOLUME = 0.03
 MUSIC_SHAKER_RATE = 6000.0  # Noise values per second: a high, airy hiss.
-MUSIC_SHAKER_RING = 0.06  # Seconds each shaker tick lasts.
+# The shaker tick's decay time (s). Each tick is held only 5 ms and then
+# released over 10 ms, so it is cut long before this decay ends: the value
+# just tilts the tick slightly downward, and each tick lasts about 15 ms.
+MUSIC_SHAKER_RING = 0.06
 
 
 def music_notes() -> list[Note]:
@@ -395,6 +424,19 @@ def music_notes() -> list[Note]:
     Every note ends by `MUSIC_LOOP_SECONDS`: a note that would ring past the
     end is shortened so its release fade finishes exactly there, so the loop
     restarts without a click.
+
+    Each bar adds four layers: the melody, the bass "oom" on beats 1 and 3,
+    the soft chord "pah" on beats 2 and 4, and a shaker tick on each off-beat
+    (halfway between beats).
+
+    Beginner note:
+    - Times are worked out in beats and turned into seconds by multiplying
+      by `MUSIC_BEAT_SECONDS`, so changing `MUSIC_BPM` speeds up or slows
+      down the whole tune (and the loop length) together.
+    - The loop is rendered to exactly `MUSIC_LOOP_SECONDS`, so a note still
+      ringing there would be cut off mid-sound every time the loop restarts
+      (only the renderer's 3 ms edge fade would soften the cut). Trimming
+      notes to end in their own release fade makes the seam clean.
     """
 
     beat = MUSIC_BEAT_SECONDS
@@ -415,6 +457,9 @@ def music_notes() -> list[Note]:
                 Note(MUSIC_SHAKER_RATE, at, 0.005, "noise", MUSIC_SHAKER_VOLUME, attack=0.003,
                      decay=MUSIC_SHAKER_RING, sustain=0.0, release=0.01)
             )
+    # Fit every note inside the loop: one that would ring past the end gets a
+    # shorter held part so its release ends exactly at MUSIC_LOOP_SECONDS; one
+    # that starts too late for even its release to fit is dropped.
     fitted = []
     for note in notes:
         room = MUSIC_LOOP_SECONDS - note.start - note.release

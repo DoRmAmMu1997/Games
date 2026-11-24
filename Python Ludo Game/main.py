@@ -654,7 +654,13 @@ class LudoApp:
 
         Muting stops the music at once and blocks every effect; unmuting
         resumes the music and plays a click so the player hears it worked. A
-        non-persisting app (the autotest) only changes the setting in memory.
+        non-persisting app (the autotest) only changes the setting in memory,
+        so a smoke test never overwrites the player's real stats file.
+
+        The choice is stored as ``"sound"`` in the lifetime stats file rather
+        than in the savegame, so it applies to every game and survives
+        starting a new one. The shortcut is Ctrl+M rather than plain M
+        because M must still type into the setup screen's name fields.
         """
 
         self.stats["sound"] = not self.sound_on
@@ -1080,6 +1086,8 @@ class LudoApp:
         if self.dice_anim_remaining > 0:
             self.dice_anim_remaining = max(0, self.dice_anim_remaining - elapsed)
         self._update_token_pixels(elapsed)
+        # Events are played before the game-over check below, so the winning
+        # move's own sounds (its token reaching home) are heard before the jingle.
         if self.game is not None:
             self._play_event_sounds()
 
@@ -1227,6 +1235,9 @@ class LudoApp:
                     self.token_waypoints[key] = self._token_waypoints(
                         player_index, token_index, old_steps, token.steps
                     )
+                    # Only a forward move between board cells hops (counting from
+                    # pitch step 0). Leaving the yard (old steps -1) and being
+                    # captured (new steps -1) are silent slides.
                     self.token_hops[key] = 0 if 0 <= old_steps < token.steps else None
                     self.token_steps[key] = token.steps
 
