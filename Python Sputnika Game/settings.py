@@ -556,6 +556,10 @@ def combo_notes(chain: int) -> list[Note]:
     return [pluck(root, 0.0, 0.3, 0.26, voice="sine"), pluck(root + 4, 0.07, 0.4, 0.22, voice="sine")]
 
 
+# Beginner note: a name such as "merge@3" is a pitch variant of "merge".
+# `SoundBank.play(name, volume, pitch_step=3)` plays "merge@3" when it exists
+# and falls back to plain "merge" otherwise. Every variant is rendered ahead
+# of time at start-up, because rendering on the fly would stall a frame.
 SFX_RECIPES.update(
     {
         # Launch: a breathy whoosh that rises as the body leaves the launcher.
@@ -636,8 +640,20 @@ def music_notes(tense: bool) -> list[Note]:
     """Return one loop of the soundtrack: calm, or tense when `tense` is True.
 
     Every note ends by `MUSIC_LOOP_SECONDS`, so the loop restarts without a
-    note being cut off mid-ring. The final chord is shortened to make room
-    for its release.
+    note being cut off mid-ring. The final chord's pad and bass are held
+    `MUSIC_PAD_RELEASE` seconds less, so the pad's release fades out exactly
+    at the loop end. Arpeggio notes near the end whose ring would run past
+    the loop are left out entirely (the filter on the last line) rather than
+    cut short.
+
+    Tempo arithmetic (calm): 16 s / 4 chords = 4 s per chord; 8 arpeggio
+    notes per chord = one every 0.5 s. The tense track plays 16 per chord
+    (one every 0.25 s) over a heartbeat on each of 4 beats per chord, which
+    is one thump a second (60 beats per minute).
+
+    Beginner note:
+    - Pad notes are moved up 12 MIDI numbers (one octave) for the arpeggio,
+      so it sparkles above the pad instead of muddying it.
     """
     notes: list[Note] = []
     span = MUSIC_CHORD_SECONDS

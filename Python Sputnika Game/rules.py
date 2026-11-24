@@ -155,8 +155,14 @@ def sanitize_progress(data: Any) -> dict[str, int]:
     The three counters become non-negative integers: missing fields default
     to zero and `best_tier` is clamped onto the tier ladder. `muted` (the
     sound setting) is True only for a real JSON `true`; anything else,
-    including a missing key, leaves sound on. Data that cannot be cleaned (not a JSON object, or a field that
-    `int()` cannot convert) raises, and the caller falls back to fresh progress.
+    including a missing key or a string such as "yes", leaves sound on, so a
+    damaged save can never silence the game by accident. Data that cannot be
+    cleaned (not a JSON object, or a field that `int()` cannot convert)
+    raises, and the caller falls back to fresh progress.
+
+    Beginner note:
+    - The return type says `dict[str, int]` although `muted` is a bool. That
+      is allowed: in Python `bool` is a kind of `int` (True == 1).
     """
     return {
         "high_score": max(0, int(data.get("high_score", 0))),
