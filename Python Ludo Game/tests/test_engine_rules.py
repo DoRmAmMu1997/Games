@@ -498,6 +498,35 @@ class CorruptSaveTests(unittest.TestCase):
             with self.subTest(case=name), self.assertRaises(ValueError):
                 LudoGame.from_dict(data)  # type: ignore[arg-type]
 
+    def test_a_choose_move_save_with_no_legal_move_resolves_like_live_play(self) -> None:
+        """A save waiting for a move nobody can make is resolved on load, not stuck.
+
+        All of P1's tokens are in the yard and the saved roll is a 3, so no
+        move is legal. A human resuming this save would get no Roll button and
+        nothing to click. Loading now resolves it exactly as ``note_no_move``
+        does in play: a 3 passes the turn to P2.
+        """
+
+        data = make_game().to_dict()
+        data.update(awaiting="choose_move", last_roll=3)
+        restored = LudoGame.from_dict(data)
+        self.assertEqual(restored.awaiting, "pre_roll")
+        self.assertEqual(restored.current, 1)
+        self.assertEqual(restored.drain_events(), [])
+
+    def test_a_stuck_six_keeps_its_bonus_roll_on_load(self) -> None:
+        """With no legal move on a saved 6, the same player rolls again, as in play."""
+
+        game = make_game()
+        for token in game.players[0].tokens:
+            token.steps = game.layout.finish_steps
+        game.players[0].tokens[0].steps = game.layout.finish_steps - 2
+        data = game.to_dict()
+        data.update(awaiting="choose_move", last_roll=6)
+        restored = LudoGame.from_dict(data)
+        self.assertEqual(restored.awaiting, "pre_roll")
+        self.assertEqual(restored.current, 0)
+
     def test_valid_choose_move_save_still_loads(self) -> None:
         """A save taken mid-turn, with a real die roll waiting, still resumes."""
 

@@ -495,6 +495,14 @@ class LudoGame:
                     not -1 <= token.steps <= game.layout.finish_steps for token in player.tokens):
                 raise ValueError("Saved token data is invalid.")
         game._mark_finished_tokens()
+        if game.awaiting == "choose_move" and game.last_roll is not None and not game.legal_moves(game.last_roll):
+            # A save can be waiting for a move that nobody can make. Left as
+            # is, a human would get no Roll button and nothing to click, so
+            # the turn is resolved exactly as live play does: a 6 rolls
+            # again, anything else passes the turn.
+            game.note_no_move(game.last_roll)
+            # Loading must not replay sounds, so drop the event just queued.
+            game.drain_events()
         return game
 
     def _capture_at(self, move: Move) -> list[tuple[int, int]]:
