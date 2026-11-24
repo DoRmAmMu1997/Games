@@ -1661,6 +1661,10 @@ class MonopolyGame:
                               or pos in game.mortgaged)
                for pos, level in game.houses.items()):
             raise ValueError("Saved buildings are on a space that cannot hold them.")
+        # Even a harmless level-0 entry must name a real board space, so a
+        # damaged key can never reach code that indexes the board with it.
+        if any(not 0 <= pos < len(game.board) for pos in game.houses):
+            raise ValueError("Saved building entry is off the board.")
         # Only an owned title can be mortgaged; this also rejects positions
         # off the board or on unownable spaces, since owners already holds
         # only real titles.

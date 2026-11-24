@@ -64,6 +64,8 @@ class SaveValidationTests(unittest.TestCase):
             "mortgage that is not a number": lambda p: p.update(mortgaged=["Boardwalk"]),
             "buildings on a railroad": lambda p: (p["owners"].update({"5": 0}), p["houses"].update({"5": 3})),
             "buildings on an unowned street": lambda p: p["houses"].update({"1": 2}),
+            "building entry off the board": lambda p: p["houses"].update({"99": 0}),
+            "building entry before the board": lambda p: p["houses"].update({"-1": 0}),
             "buildings on a mortgaged street": lambda p: (
                 p["owners"].update({"1": 0}), p["houses"].update({"1": 1}), p.update(mortgaged=[1])),
         }
