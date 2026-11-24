@@ -26,7 +26,21 @@ import pygame
 
 import audio
 from audio import LIMIT, MusicPlayer, Note, SoundBank, midi, render
-from solitaire import FOUNDATION_CHIME_STEPS, SFX_COOLDOWNS, SFX_RECIPES, SilentAudio, SolitaireAudio, open_audio
+from solitaire import (
+    FOUNDATION_CHIME_STEPS,
+    MUSIC_BARS,
+    MUSIC_BEATS_PER_BAR,
+    MUSIC_BPM,
+    MUSIC_FADE_IN_MS,
+    MUSIC_LOOP_SECONDS,
+    MUSIC_VOLUME,
+    SFX_COOLDOWNS,
+    SFX_RECIPES,
+    SilentAudio,
+    SolitaireAudio,
+    music_notes,
+    open_audio,
+)
 
 RATE = 22050
 
@@ -352,6 +366,21 @@ class SolitaireRecipeTests(unittest.TestCase):
                 pitches.append(min(note.freq for note in SFX_RECIPES[f"{base}@{rank}"] if note.voice != "noise"))
             self.assertEqual(pitches, sorted(set(pitches)))
 
+    def test_jingles_last_a_moment_and_point_the_right_way(self) -> None:
+        """The win jingle climbs, the loss jingle falls, and each lasts 1.2 to 3 seconds."""
+
+        for name in ("win", "lose"):
+            notes = SFX_RECIPES[name]
+            with self.subTest(name=name):
+                self.assertGreaterEqual(max(note.end for note in notes), 1.2)
+                self.assertLessEqual(max(note.end for note in notes), 3.0)
+        rising = [note.freq for note in SFX_RECIPES["win"] if note.voice == "sine" and note.start < 0.5]
+        falling = [note.freq for note in SFX_RECIPES["lose"] if note.voice == "triangle"]
+        self.assertEqual(rising, sorted(rising))
+        self.assertGreater(len(rising), 2)
+        self.assertEqual(falling, sorted(falling, reverse=True))
+        self.assertGreater(len(falling), 2)
+
     def test_effects_stay_short(self) -> None:
         """Table effects (not the jingles) are over in well under a second."""
 
@@ -427,13 +456,70 @@ class SolitaireAudioTests(unittest.TestCase):
         with mock.patch.object(pygame.mixer, "quit", side_effect=pygame.error("gone")):
             sound.close()
 
+    def test_music_player_loops_the_lofi_tune(self) -> None:
+        """The wrapper's music player loops ``music_notes`` for the loop length at the music volume."""
+
+        with mock.patch.object(audio, "MusicPlayer") as player_class:
+            SolitaireAudio(threaded=False)
+        player_class.assert_called_once_with(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME, threaded=False)
+
+    def test_music_calls_reach_the_player(self) -> None:
+        """Starting fades the tune in, stopping fades it out, and the tick updates the player."""
+
+        sound = SolitaireAudio(threaded=False)
+        music = sound.music = mock.Mock()
+        sound.start_music()
+        sound.stop_music(700)
+        sound.update()
+        music.start.assert_called_once_with(MUSIC_FADE_IN_MS)
+        music.stop.assert_called_once_with(700)
+        music.update.assert_called_once_with()
+
     def test_silent_audio_ignores_every_request(self) -> None:
         """The silent stand-in accepts every call and does nothing."""
 
         silent = SilentAudio()
         silent.play("deal")
         silent.play("foundation", pitch_step=3)
+        silent.start_music()
+        silent.stop_music(500)
+        silent.update()
         silent.close()
+
+
+class SolitaireMusicTests(unittest.TestCase):
+    """The lo-fi piano loop is the right length, repeatable and seamless."""
+
+    def test_loop_length_matches_the_bars(self) -> None:
+        """The loop is its bars of four beats at the tempo, between 16 and 32 seconds."""
+
+        self.assertAlmostEqual(MUSIC_LOOP_SECONDS, MUSIC_BARS * MUSIC_BEATS_PER_BAR * 60.0 / MUSIC_BPM)
+        self.assertGreaterEqual(MUSIC_LOOP_SECONDS, 16.0)
+        self.assertLessEqual(MUSIC_LOOP_SECONDS, 32.0)
+
+    def test_loop_renders_cleanly(self) -> None:
+        """The loop renders to its length, starts and ends near silence, and never clips."""
+
+        notes = music_notes()
+        samples = render(notes, RATE, 1, total=MUSIC_LOOP_SECONDS)
+        self.assertEqual(len(samples), round(MUSIC_LOOP_SECONDS * RATE))
+        self.assertLess(abs(samples[0]), 300)
+        self.assertLess(abs(samples[-1]), 300)
+        self.assertLess(max(abs(value) for value in samples), 0.95 * 32767)
+        self.assertTrue(all(note.end <= MUSIC_LOOP_SECONDS + 1e-9 for note in notes))
+        self.assertTrue(all(note.voice in audio.VOICES for note in notes))
+
+    def test_loop_is_deterministic(self) -> None:
+        """Building the loop twice gives exactly the same notes."""
+
+        self.assertEqual(music_notes(), music_notes())
+
+    def test_every_bar_has_music(self) -> None:
+        """Each bar of the loop holds notes, so the tune never drops out."""
+
+        bar_seconds = MUSIC_LOOP_SECONDS / MUSIC_BARS
+        bars = {int(note.start // bar_seconds) for note in music_notes()}
+        self.assertEqual(bars, set(range(MUSIC_BARS)))
 
 
 class MusicPlayerTests(unittest.TestCase):

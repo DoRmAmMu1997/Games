@@ -26,12 +26,13 @@ Beginner note: Klondike vocabulary used throughout the code.
 
 import contextlib
 import json
+import math
 import os
 import random
 import sys
 import time
 import tkinter as tk
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import messagebox
 from typing import Any
@@ -310,6 +311,145 @@ SFX_COOLDOWNS: dict[str, float] = {
 }
 # The sound for each answer `KlondikeGame.draw_from_stock` can give.
 STOCK_SOUNDS = {"draw": "draw", "reset": "recycle", "empty": "empty"}
+
+# Game-over jingles: the music fades out and one of these plays. The win
+# jingle sounds together with the confetti.
+SFX_RECIPES.update(
+    {
+        # A win: a rising C major arpeggio that blooms into a held chord over
+        # a low C, with a high sparkle on top.
+        "win": [
+            *(
+                note
+                for index, pitch in enumerate((60, 64, 67, 72, 76))
+                for note in chime(pitch, index * 0.1, 0.4, 0.15)
+            ),
+            *(
+                Note(midi(pitch), 0.5, 0.8, "triangle", 0.08, attack=0.04, decay=0.25, sustain=0.6, release=0.8)
+                for pitch in (72, 76, 79, 84)
+            ),
+            Note(midi(36), 0.5, 0.8, "sine", 0.2, attack=0.06, decay=0.25, sustain=0.8, release=0.8),
+            strike(96, 0.5, 0.6, 0.06),
+        ],
+        # A loss: a gentle descending A minor phrase settling on a soft low A.
+        "lose": [
+            Note(midi(76), 0.0, 0.28, "triangle", 0.2, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+            Note(midi(72), 0.34, 0.28, "triangle", 0.2, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+            Note(midi(69), 0.68, 0.7, "triangle", 0.22, attack=0.015, decay=0.2, sustain=0.6, release=0.55),
+            Note(midi(45), 0.68, 0.7, "sine", 0.18, attack=0.2, decay=0.2, sustain=0.8, release=0.55),
+            Note(midi(52), 0.68, 0.7, "sine", 0.08, attack=0.3, decay=0.2, sustain=0.8, release=0.55),
+        ],
+    }
+)
+
+# Music: a calm lo-fi piano loop in C major, rendered once (off the main
+# thread) and played on the reserved mixer channel 0 (see `music_notes`).
+# Soft piano chords drift down Fmaj7 - Em7 - Dm7 - Cmaj7, a round sine bass
+# holds the roots, a sparse melody wanders on top, and a muffled kick, brush
+# and hi-hat keep a slow, lightly swung pulse.
+#
+# Beginner note:
+# - "Swing" plays pairs of eighth notes long-short instead of evenly: the
+#   off-beat note arrives late, at MUSIC_SWING of the beat instead of half
+#   way. Lo-fi music swings only a little, which makes it feel lazy.
+# - A seventh chord (maj7, m7) stacks one more third on a plain chord; that
+#   soft, unresolved colour is what makes this style sound mellow.
+MUSIC_BPM = 72  # Beats per minute: slow and relaxed.
+MUSIC_BEATS_PER_BAR = 4
+MUSIC_BEAT_SECONDS = 60.0 / MUSIC_BPM
+MUSIC_SWING = 0.58  # Where the off-beat eighth lands inside the beat ("lightly swung").
+MUSIC_VOLUME = 0.2  # Channel volume: low, so the card sounds sit on top of the music.
+MUSIC_FADE_IN_MS = 2000  # The tune eases in when the app opens or a new game is dealt.
+MUSIC_GAME_OVER_FADE_MS = 800  # How quickly the tune fades under a game-over jingle.
+# How often the app lets the music player turn a finished render into a
+# playing sound (ms). It is checked on the tkinter main thread, which is the
+# only thread allowed to create pygame sounds.
+AUDIO_TICK_MS = 50
+# Each chord: (bass root as a MIDI number, the piano's voicing as MIDI
+# numbers). The voicings step down together, so the chords glide smoothly.
+MUSIC_CHORDS: dict[str, tuple[int, tuple[int, ...]]] = {
+    "Fmaj7": (41, (53, 57, 60, 64)),
+    "Em7": (40, (52, 55, 59, 62)),
+    "Dm7": (38, (50, 53, 57, 60)),
+    "Cmaj7": (36, (48, 52, 55, 59)),
+    "G7sus4": (43, (50, 53, 55, 60)),
+}
+# The tune, one bar per entry: the bar's chord, then the melody as (beat in
+# the bar, length in beats, MIDI pitch). Half beats are swung by
+# `music_notes`. The last bar (G7sus4) leans back into the Fmaj7 at the top.
+MUSIC_SCORE: tuple[tuple[str, tuple[tuple[float, float, int], ...]], ...] = (
+    ("Fmaj7", ((0, 1, 76), (1.5, 0.5, 74), (2, 1, 72), (3, 1, 69))),
+    ("Em7", ((0.5, 1, 71), (2, 1.5, 67), (3.5, 0.5, 69))),
+    ("Dm7", ((0, 1, 72), (1, 0.5, 74), (1.5, 1.5, 77), (3, 1, 76))),
+    ("Cmaj7", ((0, 2, 74), (2.5, 1.5, 71))),
+    ("Fmaj7", ((0, 1, 81), (1, 0.5, 79), (1.5, 0.5, 76), (2, 2, 77))),
+    ("Em7", ((0, 1, 76), (1, 1, 74), (2.5, 1.5, 71))),
+    ("Dm7", ((0, 0.5, 69), (0.5, 0.5, 72), (1, 1, 74), (2, 1, 77), (3, 1, 76))),
+    ("G7sus4", ((0, 2, 74), (2, 1, 72), (3, 1, 67))),
+)
+MUSIC_BARS = len(MUSIC_SCORE)
+MUSIC_LOOP_SECONDS = MUSIC_BARS * MUSIC_BEATS_PER_BAR * MUSIC_BEAT_SECONDS  # About 26.7 s at 72 BPM.
+MUSIC_CHORD_VOLUME = 0.05  # Per chord note; four of them sound together.
+MUSIC_CHORD_RING = 1.8  # Beats a struck chord rings.
+MUSIC_CHORD_ROLL = 0.025  # Seconds between the chord's notes, low to high, like a gently rolled chord.
+MUSIC_PUSH_VOLUME = 0.03  # The softer repeat of the chord on the swung "and" of beat 3.
+MUSIC_MELODY_VOLUME = 0.11
+MUSIC_MELODY_RING = 1.3  # A melody note rings this many times its written length.
+MUSIC_BASS_VOLUME = 0.22
+MUSIC_BASS_RING = 1.7  # Beats the bass root rings from beat 1.
+MUSIC_KICK_VOLUME = 0.12
+MUSIC_KICK_GLIDE = -120.0  # Hz per second: the kick's pitch drops for a soft "thump".
+MUSIC_BRUSH_VOLUME = 0.035
+MUSIC_BRUSH_RATE = 3000.0  # Noise values per second: a dull, papery brush on beats 2 and 4.
+MUSIC_BRUSH_RING = 0.09
+MUSIC_HAT_VOLUME = 0.014
+MUSIC_HAT_RATE = 7000.0  # A light, airy hi-hat on every swung eighth.
+MUSIC_HAT_RING = 0.03
+
+
+def swung(beat: float) -> float:
+    """Return where a written beat position is played: half beats are swung late."""
+    whole = math.floor(beat)
+    return whole + MUSIC_SWING if beat - whole == 0.5 else beat
+
+
+def music_notes() -> list[Note]:
+    """Return one loop of the lo-fi tune (see `MUSIC_SCORE`).
+
+    Every note ends by `MUSIC_LOOP_SECONDS`: a note that would ring past the
+    end is shortened so its release fade finishes exactly there, so the loop
+    restarts without a click.
+    """
+    beat = MUSIC_BEAT_SECONDS
+    notes: list[Note] = []
+    for bar, (chord, melody) in enumerate(MUSIC_SCORE):
+        start = bar * MUSIC_BEATS_PER_BAR * beat
+        root, voicing = MUSIC_CHORDS[chord]
+        # Piano chords: rolled on beat 1, pushed softly on the swung "and" of 3.
+        for at, volume in ((0.0, MUSIC_CHORD_VOLUME), (2.5, MUSIC_PUSH_VOLUME)):
+            for index, pitch in enumerate(voicing):
+                notes.append(strike(pitch, start + swung(at) * beat + index * MUSIC_CHORD_ROLL,
+                                    MUSIC_CHORD_RING * beat, volume))
+        notes.append(strike(root, start, MUSIC_BASS_RING * beat, MUSIC_BASS_VOLUME))
+        notes.append(strike(root + 7, start + 2 * beat, MUSIC_BASS_RING * beat / 2, MUSIC_BASS_VOLUME * 0.7))
+        for at, length, pitch in melody:
+            notes += chime(pitch, start + swung(at) * beat, length * beat * MUSIC_MELODY_RING, MUSIC_MELODY_VOLUME)
+        # Drums: kick on 1 and 3, brush on 2 and 4, hi-hat on every swung eighth.
+        for at in (0.0, 2.0):
+            notes.append(strike(33, start + at * beat, 0.18, MUSIC_KICK_VOLUME, glide=MUSIC_KICK_GLIDE))
+        for at in (1.0, 3.0):
+            notes.append(paper(start + at * beat, MUSIC_BRUSH_RATE, MUSIC_BRUSH_VOLUME, MUSIC_BRUSH_RING))
+        for eighth in range(MUSIC_BEATS_PER_BAR * 2):
+            notes.append(paper(start + swung(eighth / 2) * beat, MUSIC_HAT_RATE, MUSIC_HAT_VOLUME, MUSIC_HAT_RING))
+    fitted = []
+    for note in notes:
+        if note.end > MUSIC_LOOP_SECONDS:
+            room = MUSIC_LOOP_SECONDS - note.start - note.release
+            if room <= 0:
+                continue
+            note = replace(note, length=room)
+        fitted.append(note)
+    return fitted
 
 
 def _user_save_dir() -> str:
@@ -1783,25 +1923,48 @@ class SilentAudio:
     def play(self, name: str, pitch_step: int = 0) -> None:
         """Ignore a request to play a sound."""
 
+    def start_music(self) -> None:
+        """Ignore a request to start the music."""
+
+    def stop_music(self, fade_ms: int) -> None:
+        """Ignore a request to stop the music."""
+
+    def update(self) -> None:
+        """Nothing to update."""
+
     def close(self) -> None:
         """Nothing to shut down."""
 
 
 class SolitaireAudio:
-    """The app's sound: the effects bank behind a couple of small calls.
+    """The app's sound: the effects bank and the music loop behind a few small calls.
 
     Attributes:
         bank: The `audio.SoundBank` built from `SFX_RECIPES`. It is silent by
             itself when the mixer is unavailable.
+        music: The `audio.MusicPlayer` looping the lo-fi tune.
     """
 
-    def __init__(self) -> None:
-        """Render every effect for the running mixer."""
+    def __init__(self, threaded: bool = True) -> None:
+        """Render every effect, and start rendering the music (in a background thread when `threaded`)."""
         self.bank = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
+        self.music = audio.MusicPlayer(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME, threaded=threaded)
 
     def play(self, name: str, pitch_step: int = 0) -> None:
         """Play the effect `name` (or its `name@pitch_step` variant)."""
         self.bank.play(name, pitch_step=pitch_step)
+
+    def start_music(self) -> None:
+        """Fade the music in as soon as it has rendered (nothing changes if it is already playing)."""
+        self.music.start(MUSIC_FADE_IN_MS)
+
+    def stop_music(self, fade_ms: int) -> None:
+        """Fade the music out over `fade_ms` milliseconds."""
+        self.music.stop(fade_ms)
+
+    def update(self) -> None:
+        """Let the music player turn a finished render into sound; call it from the tkinter thread."""
+        self.music.update()
 
     def close(self) -> None:
         """Shut the mixer down so the audio device is released when the window closes."""
@@ -1903,6 +2066,7 @@ class SolitaireApp:
         # Sound uses pygame's mixer only; without it the game runs silently.
         # Closing the window shuts the mixer down cleanly first.
         self.audio = open_audio()
+        self.audio.start_music()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         # Selection/hint/animation state belongs to the UI layer.
@@ -1939,6 +2103,7 @@ class SolitaireApp:
         self.redraw()
         self.audio.play("deal")
         self.schedule_clock_update()
+        self.schedule_audio_update()
         self.check_for_loss()
 
     def close(self) -> None:
@@ -2087,6 +2252,16 @@ class SolitaireApp:
         # Ask tkinter to call this method again later.
         self.root.after(250, self.schedule_clock_update)
 
+    def schedule_audio_update(self) -> None:
+        """Give the music player a moment on the main thread, again every AUDIO_TICK_MS.
+
+        Beginner note: the music renders in a background thread, but pygame
+        sounds may only be created on the main thread. This small `after`
+        loop is where the finished samples become sound and start playing.
+        """
+        self.audio.update()
+        self.root.after(AUDIO_TICK_MS, self.schedule_audio_update)
+
     def start_new_game(self) -> None:
         """Deal a fresh game and clear all UI-only state."""
         # Guard an in-progress game: a non-empty history with no win/loss yet
@@ -2110,6 +2285,7 @@ class SolitaireApp:
         self.refresh_header_labels()
         self.redraw()
         self.audio.play("deal")
+        self.audio.start_music()
         self.check_for_loss()
 
     def refresh_header_labels(self) -> None:
@@ -2156,6 +2332,7 @@ class SolitaireApp:
             return
 
         history_state = self.history.pop()
+        was_lost = self.game.lost
         self.auto_solving = False
         self.auto_solve_seen_states = set()
         self.selection = None
@@ -2168,6 +2345,9 @@ class SolitaireApp:
         self.refresh_header_labels()
         self.status_var.set("Undid the previous move.")
         self.audio.play("undo")
+        if was_lost and not self.game.lost:
+            # The game is open again, so the music faded at the loss returns.
+            self.audio.start_music()
         self.redraw()
         if not self.game.won and not self.game.lost:
             self.check_for_loss()
@@ -2744,6 +2924,8 @@ class SolitaireApp:
             f"You win! Time: {self.format_time(self.elapsed_seconds)}. Time bonus: {time_bonus}."
         )
         self.redraw()
+        self.audio.stop_music(MUSIC_GAME_OVER_FADE_MS)
+        self.audio.play("win")
 
         # Capture the summary values now, then play a short confetti
         # celebration; the win dialog appears once the animation finishes.
@@ -2854,6 +3036,8 @@ class SolitaireApp:
         self.refresh_header_labels()
         self.redraw()
         self.status_var.set("No more productive moves remain. You lost this game.")
+        self.audio.stop_music(MUSIC_GAME_OVER_FADE_MS)
+        self.audio.play("lose")
         messagebox.showinfo(
             "Game Over",
             (

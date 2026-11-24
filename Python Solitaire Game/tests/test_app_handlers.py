@@ -20,9 +20,11 @@ if str(GAME_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_DIR))
 
 from solitaire import (
+    AUDIO_TICK_MS,
     CARD_HEIGHT,
     CARD_WIDTH,
     FOUNDATION_COUNT,
+    MUSIC_GAME_OVER_FADE_MS,
     TABLEAU_COLUMNS,
     AnimationState,
     Card,
@@ -393,6 +395,7 @@ class SoundEffectTests(AppHandlerTestCase):
         self.game.tableau[0] = [Card("hearts", 9, face_up=True)]
         self.game.tableau[1] = [Card("clubs", 10, face_up=True)]
         self.game.tableau[2] = [Card("spades", 4, face_up=False), Card("spades", 5, face_up=True)]
+        self.game.stock = [Card("diamonds", 13, face_up=False)]
         self.app.on_canvas_click(self.tableau_click(0, 0))
         self.app.on_canvas_click(self.tableau_click(1, 0))
         self.assertEqual(self.names(), ["select"])
@@ -531,6 +534,68 @@ class SoundEffectTests(AppHandlerTestCase):
 
         self.assertIsInstance(self.app.audio, SilentAudio)
         self.assertIsNotNone(self.app.selection)
+
+    def test_winning_fades_the_music_into_the_win_jingle(self) -> None:
+        """The last card home fades the music out and plays the win jingle after its chime."""
+
+        self.clear_board()
+        for index, suit in enumerate(["hearts", "diamonds", "clubs", "spades"]):
+            self.game.foundations[index] = [Card(suit, rank, face_up=True) for rank in range(1, 14)]
+        self.game.tableau[0] = [self.game.foundations[3].pop()]
+        self.app.on_canvas_double_click(self.tableau_click(0, 0))
+
+        self.land()
+
+        self.assertEqual(self.played()[-2:], [("foundation", 13), ("win", 0)])
+        self.audio.stop_music.assert_called_once_with(MUSIC_GAME_OVER_FADE_MS)
+
+    def test_losing_fades_the_music_into_the_loss_jingle_before_the_dialog(self) -> None:
+        """A lost deal fades the music and plays the loss jingle before the dialog opens."""
+
+        self.clear_board()
+        self.game.tableau[0] = [Card("spades", 4, face_up=False), Card("hearts", 9, face_up=True)]
+        order = mock.Mock()
+        order.attach_mock(self.audio.stop_music, "stop_music")
+        order.attach_mock(self.audio.play, "play")
+        order.attach_mock(self.messagebox.showinfo, "showinfo")
+
+        self.app.check_for_loss()
+
+        self.assertEqual(
+            [call[0] for call in order.mock_calls], ["stop_music", "play", "showinfo"]
+        )
+        self.audio.stop_music.assert_called_once_with(MUSIC_GAME_OVER_FADE_MS)
+        self.assertEqual(self.names(), ["lose"])
+
+    def test_new_game_restarts_the_music(self) -> None:
+        """A new deal asks for the music again (it fades out at every game over)."""
+
+        self.app.start_new_game()
+
+        self.audio.start_music.assert_called_once_with()
+
+    def test_undoing_a_loss_restarts_the_music(self) -> None:
+        """Undo out of a lost game brings the music back; an ordinary undo leaves it alone."""
+
+        self.playable_board()
+        self.game.stock = [Card("diamonds", 13, face_up=False)]
+        self.app.on_canvas_click(self.stock_click())
+        self.app.undo_last_action()
+        self.audio.start_music.assert_not_called()
+
+        self.app.on_canvas_click(self.stock_click())
+        self.app.end_game_as_loss()
+        self.app.undo_last_action()
+
+        self.audio.start_music.assert_called_once_with()
+
+    def test_audio_tick_updates_the_music_and_reschedules(self) -> None:
+        """Each tick lets the music player start a finished render, then books the next tick."""
+
+        self.app.schedule_audio_update()
+
+        self.audio.update.assert_called_once_with()
+        self.root.after.assert_called_once_with(AUDIO_TICK_MS, self.app.schedule_audio_update)
 
     def test_closing_the_window_shuts_the_mixer(self) -> None:
         """Closing the window closes the sound first, then destroys the root."""
