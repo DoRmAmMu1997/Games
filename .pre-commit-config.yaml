@@ -2,7 +2,7 @@
 # Keep the ruff rev aligned with the pin in requirements-dev.txt.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.1
+    rev: v0.17.5
     hooks:
       - id: ruff-check
         name: ruff check (no fixes)
