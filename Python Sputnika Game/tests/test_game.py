@@ -591,10 +591,25 @@ class MusicTests(GameTestCase):
         """A run that beats the high score ends with the record fanfare instead."""
 
         game = self.game
+        game.high_score = 10
         game.start_round()
         game.score = game.high_score + 50
         game._trigger_game_over()
         self.sounds.play.assert_called_with("record", mock.ANY)
+
+    def test_a_first_ever_run_ends_with_the_game_over_phrase(self) -> None:
+        """With no earlier score to beat, game over is not a "new record" fanfare.
+
+        The mid-run cheer already stays quiet on a first-ever run; the
+        game-over jingle follows the same rule.
+        """
+
+        game = self.game
+        game.high_score = 0
+        game.start_round()
+        game.score = 40
+        game._trigger_game_over()
+        self.sounds.play.assert_called_with("game_over", mock.ANY)
 
     def test_play_again_brings_the_music_back(self) -> None:
         """Starting a new run after a loss fades the calm track back in."""

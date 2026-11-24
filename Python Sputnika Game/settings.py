@@ -487,6 +487,11 @@ SFX_COOLDOWNS: dict[str, float] = {
     "launch_blocked": 0.25,
 }
 
+# The warning beep grows louder as the fail timer fills: it starts at
+# `WARNING_VOLUME_MIN` and climbs by up to `WARNING_VOLUME_SPAN` at the brink.
+WARNING_VOLUME_MIN = 0.28
+WARNING_VOLUME_SPAN = 0.3
+
 # Seconds the danger check must stay in a new state before the player HEARS
 # the change (the danger cue and the calm/tense music switch). A body resting
 # right on the fail line can jitter across it every frame; without this hold
@@ -510,6 +515,17 @@ IMPACT_LOUDEST_SPEED = 1100.0
 COMBO_CHIME_TOP = 6
 # How loud each newer event sound plays (0 to 1).
 SFX_VOLUMES: dict[str, float] = {
+    "button": 0.4,
+    # Starting a run is the one button that gets a slightly fuller click.
+    "start_run": 0.45,
+    "drop": 0.35,
+    "merge": 0.36,
+    "big_merge": 0.42,
+    # Reaching the top tier is the loudest moment in the game; a new
+    # lifetime-best tier and the game-over jingles sit just under it.
+    "record_top_tier": 0.45,
+    "record": 0.42,
+    "jingle": 0.42,
     "whoosh": 0.3,
     "launch_blocked": 0.34,
     "aim_tick": 0.22,

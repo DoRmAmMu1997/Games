@@ -74,6 +74,8 @@ from settings import (
     SPAWN_Y,
     TIERS,
     WARNING,
+    WARNING_VOLUME_MIN,
+    WARNING_VOLUME_SPAN,
     WINDOW_TITLE,
     clamp,
     music_notes,
@@ -450,7 +452,7 @@ class OrbitalOrchardGame:
             # `M` jumps back to the menu from any in-run scene.
             if self.scene in {"playing", "paused", "game_over"}:
                 self.scene = "menu"
-                self.assets.sounds.play("button", 0.4)
+                self.assets.sounds.play("button", SFX_VOLUMES["button"])
             return
 
         if key == pygame.K_r and self.scene in {"playing", "paused", "game_over"}:
@@ -517,7 +519,7 @@ class OrbitalOrchardGame:
                     if action == "resume":
                         self._resume()
                         return True
-                    self.assets.sounds.play("button", 0.4)
+                    self.assets.sounds.play("button", SFX_VOLUMES["button"])
                     if action == "restart":
                         self.start_round()
                     else:
@@ -531,7 +533,7 @@ class OrbitalOrchardGame:
                 (self.over_menu_button, "menu"),
             ):
                 if button.contains(position):
-                    self.assets.sounds.play("button", 0.4)
+                    self.assets.sounds.play("button", SFX_VOLUMES["button"])
                     if action == "restart":
                         self.start_round()
                     else:
@@ -550,7 +552,7 @@ class OrbitalOrchardGame:
         self._apply_mute()
         self._save_progress()
         if not self.muted:
-            self.assets.sounds.play("button", 0.4)
+            self.assets.sounds.play("button", SFX_VOLUMES["button"])
 
     def _apply_mute(self) -> None:
         """Pass the mute setting to the effects bank and both music players."""
@@ -610,7 +612,7 @@ class OrbitalOrchardGame:
         # Count this run and persist the updated lifetime stats right away.
         self.games_played += 1
         self._save_progress()
-        self.assets.sounds.play("button", 0.45)
+        self.assets.sounds.play("button", SFX_VOLUMES["start_run"])
 
     def drop_current_body(self) -> None:
         """Launch the current queued body into the container.
@@ -661,7 +663,7 @@ class OrbitalOrchardGame:
         self.current_seed = self.next_seed
         self.next_tier, self.next_seed = self._roll_spawn_choice()
         self.drop_timer = DROP_COOLDOWN
-        self.assets.sounds.play("drop", 0.35)
+        self.assets.sounds.play("drop", SFX_VOLUMES["drop"])
         self.assets.sounds.play("whoosh", SFX_VOLUMES["whoosh"])
 
     def _update(self, dt: float) -> None:
@@ -899,16 +901,16 @@ class OrbitalOrchardGame:
                 self.goal_reached = True
                 self.effects.announce(f"{merged_body.info.name} reached!", merged_body.position)
                 self.effects.reward_burst(merged_body.position, merged_body.info.color)
-                self.assets.sounds.play("record", 0.45)
+                self.assets.sounds.play("record", SFX_VOLUMES["record_top_tier"])
             elif new_personal_best and event.target_tier >= 5:
                 # First time the player has ever reached this mid/high tier.
                 self.effects.reward_burst(merged_body.position, merged_body.info.color)
-                self.assets.sounds.play("record", 0.42)
+                self.assets.sounds.play("record", SFX_VOLUMES["record"])
             elif event.target_tier >= len(TIERS) - 3:
-                self.assets.sounds.play("big_merge", 0.42, pitch_step=event.target_tier)
+                self.assets.sounds.play("big_merge", SFX_VOLUMES["big_merge"], pitch_step=event.target_tier)
             else:
                 # Each tier merges one step higher up the scale.
-                self.assets.sounds.play("merge", 0.36, pitch_step=event.target_tier)
+                self.assets.sounds.play("merge", SFX_VOLUMES["merge"], pitch_step=event.target_tier)
 
         if consumed:
             # Remove all consumed bodies, then append the newly spawned merged bodies.
@@ -973,7 +975,7 @@ class OrbitalOrchardGame:
             # faster the tone repeats, so danger is felt as well as seen.
             if self.now >= self._next_warning_beep:
                 ratio = fail_ratio(self.fail_timer)
-                self.assets.sounds.play("warning", 0.28 + ratio * 0.3)
+                self.assets.sounds.play("warning", WARNING_VOLUME_MIN + ratio * WARNING_VOLUME_SPAN)
                 self._next_warning_beep = self.now + warning_beep_interval(ratio)
         else:
             # Reset the beep timer so the next danger spell starts fresh.
@@ -999,9 +1001,12 @@ class OrbitalOrchardGame:
         self._refresh_high_score()
         self._save_progress()
         # The music fades out and a jingle sums up the run: a fanfare for a
-        # new high score, otherwise a gentle falling phrase.
+        # new high score, otherwise a gentle falling phrase. Like the mid-run
+        # cheer, the fanfare needs an earlier score to beat, so a first-ever
+        # run ends with the ordinary phrase.
         self._sync_music()
-        self.assets.sounds.play("record" if self.new_record else "game_over", 0.42)
+        beat_a_record = self.new_record and self._score_to_beat > 0
+        self.assets.sounds.play("record" if beat_a_record else "game_over", SFX_VOLUMES["jingle"])
 
     def _roll_spawn_tier(self) -> int:
         """Randomly choose a low-tier body for the queue based on weighted odds."""
