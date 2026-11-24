@@ -68,6 +68,13 @@ SAVE_VERSION = 2
 # - raise_funds: a short human must raise cash (queued on entering that state);
 # - bankrupt: a player went bankrupt;
 # - game_over: the game ended.
+#
+# Beginner note:
+# - The engine never plays a sound itself (it must not import pygame), so it
+#   only *reports* what happened by appending a kind string to a list. The
+#   window reads that list once per frame and chooses the sounds. This keeps
+#   the rules testable without audio, and an AI move is heard exactly like
+#   a human one because both go through the same engine methods.
 EVENT_KINDS = (
     "roll",
     "doubles",
@@ -213,7 +220,9 @@ class MonopolyGame:
 
         self.log: list[str] = []
         # Not part of the game state: `to_dict` leaves it out, so a loaded
-        # game always starts with an empty queue.
+        # game always starts with an empty queue. Events are moments to be
+        # heard once; saving them would replay a past roll or rent payment
+        # the next time the game is opened.
         self.events: list[str] = []
         self._note(f"New game on the {board_data.THEMES[theme]['name']} board.")
 
@@ -238,6 +247,15 @@ class MonopolyGame:
         The window calls this once per frame and turns each kind into a
         sound. Humans, the AI, tests and simulations all change the game
         through the same methods, so their actions queue the same events.
+        One frame can hold several events (a roll, passing GO and a rent
+        payment all happen inside one `roll_dice` call); they come back in
+        the order they happened, so the window can play them in that order.
+        No rule ever reads the queue, so it cannot change how a game plays.
+
+        Beginner note:
+        - `events, self.events = self.events, []` hands the old list to the
+          caller and gives the game a fresh empty one in a single step, so
+          nothing can be both returned and still left queued.
         """
         events, self.events = self.events, []
         return events
@@ -690,6 +708,8 @@ class MonopolyGame:
                 # forward and resolves the landing.
                 self._continue_after_landing()
                 return
+            # Only a player who is still in the game is heard leaving Jail;
+            # a fine that bankrupted them has already queued "bankrupt".
             self._emit("leave_jail")
             if self.debts:
                 # A human is raising funds for the fine: they move the rolled
@@ -1326,6 +1346,8 @@ class MonopolyGame:
         if not forced and not self.can_sell_building(player, position):
             return False
         space = self.board[position]
+        # Queued before the branch below so the hotel-break path, which
+        # returns early, is heard as a sale too.
         self._emit("sell_building")
         if level == 5 and self.bank_houses < 4:
             self._break_hotels_in_shortage(player, space.group)

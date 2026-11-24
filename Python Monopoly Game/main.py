@@ -72,7 +72,8 @@ class TradeDraft(TradeOffer, total=False):
 
 # Which effect (a name in settings.SFX_RECIPES) each engine event plays; see
 # game.EVENT_KINDS. "game_over" has no entry because the end of a game is
-# answered by the game-over jingle.
+# answered by the game-over jingle. A few mapped events are still skipped in
+# some frames so one moment never sounds twice; `event_sounds` decides that.
 EVENT_SOUNDS = {
     "roll": "dice",
     "doubles": "doubles",
@@ -113,6 +114,11 @@ def event_sounds(kinds: list[str]) -> list[str]:
     double plays its own groan, which already ends in the jail bars (so
     neither the doubles chime nor the jail clang repeats it), and doubles
     rolled to escape Jail are heard as the release rather than the chime.
+
+    These checks look at the whole frame's list, not only at neighbours:
+    one `roll_dice` call queues all of its events together, so they always
+    arrive in the same frame. A Go to Jail card is not a third double, so
+    it still plays its card flip and then the clang.
     """
     sounds: list[str] = []
     for kind in kinds:
@@ -284,6 +290,8 @@ class MonopolyApp:
         self.sounds = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
         # The tune renders in a background thread; it starts playing on the
         # first frame after it is ready (``music.update`` in ``_update``).
+        # `start` only records that music is wanted, so calling it this
+        # early is safe even though nothing has been rendered yet.
         self.music = audio.MusicPlayer(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME)
         self.music.start(MUSIC_FADE_IN_MS)
 
@@ -365,7 +373,12 @@ class MonopolyApp:
 
         Muting stops the music at once and blocks every effect; unmuting
         resumes the music and plays a click so the player hears it worked.
-        A non-persisting app (the self-test) only changes it in memory.
+        A non-persisting app (the self-test) only changes it in memory: the
+        self-test must leave the player's own files exactly as it found them.
+
+        The choice lives in options.json under the save folder rather than in
+        stats.json, because the game-over screen rewrites stats.json with a
+        fixed set of keys and would drop it.
         """
         self.options["sound"] = not self.sound_on
         self._apply_sound_setting()
@@ -462,8 +475,12 @@ class MonopolyApp:
         if self.screen != "playing" or self.game is None:
             return
         game = self.game
+        # Sounds first, so the move that ended the game (say, a bankruptcy)
+        # is still heard before the jingle.
         self._play_event_sounds()
         if game.phase == "game_over":
+            # `_end_game` leaves the "playing" screen, so the early return
+            # above makes the jingle play exactly once.
             self._end_game()
             self._play_game_over_jingle()
             return
@@ -562,7 +579,9 @@ class MonopolyApp:
         """Drain the engine's event queue and play each event's effect.
 
         Draining once per frame means every event is heard exactly once,
-        whether a human click or an AI step caused it.
+        whether a human click or an AI step caused it. The bank's cooldowns
+        (`SFX_COOLDOWNS`) thin out a burst of the same effect, for example
+        when the self-test runs an AI action on every frame.
         """
         game = self._require_game()
         for name in event_sounds(game.drain_events()):
@@ -586,6 +605,11 @@ class MonopolyApp:
 
         Slides (to Jail, or a long card jump) are silent here: their events
         have their own sounds.
+
+        Hop n of a move asks the bank for pitch step n, which picks the
+        pre-rendered variant "hop@n" (one F major degree higher per space;
+        see `HOP_PITCH_STEPS` in settings.py), so the player can hear the
+        count. Step 0 has no "@0" variant and plays the plain "hop".
         """
         step = self.token_hops.get(idx)
         if step is not None:
@@ -601,6 +625,13 @@ class MonopolyApp:
         Ctrl+M switches sound off and on, on every screen (even while a
         name box has focus, so plain M still types there and still means
         Mortgage on a turn).
+
+        Beginner note:
+        - `event.mod` is a bit mask of the modifier keys held down with the
+          key. `& pygame.KMOD_CTRL` is non-zero when either Ctrl key is held,
+          so the test reads "M pressed while Ctrl is down".
+        - Ctrl+M is checked first so it wins over the screen-specific
+          handlers below, which would otherwise treat it as a plain M.
         """
         if event.key == pygame.K_m and event.mod & pygame.KMOD_CTRL:
             self._toggle_sound()
@@ -731,6 +762,7 @@ class MonopolyApp:
         if key == "new_game":
             self.screen = "setup"
             self.game = None
+            # The tune was faded out under the game-over jingle; bring it back.
             self.music.start(MUSIC_FADE_IN_MS)
             return
         if key == "quit":
@@ -1437,6 +1469,12 @@ def main() -> None:
 
     The mixer format is requested before ``pygame.init()`` opens the mixer,
     and the music channel is reserved right after.
+
+    Beginner note:
+    - ``pygame.init()`` opens the mixer with whatever format was requested
+      beforehand, so the request has to come first. Reserving a channel
+      stops `find_channel` from handing it to a sound effect, so an effect
+      can never cut off the music.
     """
     audio.init_mixer()
     pygame.init()

@@ -193,7 +193,12 @@ class MixerSetupTests(unittest.TestCase):
 
 
 class SoundBankTests(unittest.TestCase):
-    """The bank builds sounds for the running mixer and plays them politely."""
+    """The bank builds sounds for the running mixer and plays them politely.
+
+    "Politely" means: it honours each sound's cooldown, picks a pitch variant
+    ("beep@2") only when one exists, stays quiet while muted or without a
+    mixer, and ignores unknown names instead of raising.
+    """
 
     RECIPES = {
         "beep": [Note(440.0, 0.0, 0.02, "sine", 0.3)],

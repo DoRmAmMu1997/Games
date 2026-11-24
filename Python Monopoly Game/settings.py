@@ -192,10 +192,22 @@ OPTIONS_PATH = SAVE_DIR / "options.json"
 # soft brassy "square" voice kept low and rare.
 #
 # Beginner note:
+# - A `Note` (from audio.py) is one ingredient of a sound: a frequency in Hz
+#   (or, for the "noise" voice, how many random values per second), a start
+#   time and length in seconds, a voice (the tone colour: "sine", "triangle",
+#   "square", "pluck" or "noise"), a volume, and an optional pitch glide and
+#   ADSR envelope. A recipe is just a list of Notes that are mixed together.
+# - `midi(n)` turns a MIDI note number into Hz, so recipes can be written as
+#   music: 60 is middle C, 65 is F4, +1 is a semitone, +12 an octave. Noise
+#   notes take a raw rate instead, because noise has no pitch.
 # - A "strike" note below has no sustain: it rises over a few milliseconds
 #   and then rings down over `ring` seconds, like a hammer hitting a tine.
 # - Volumes stay well under 1.0 on purpose: an AI turn can fire a roll, a
 #   few hops, rent and a card in one breath, and their samples add up.
+# - A recipe named "base@n" is a pitch variant of "base": the shell asks for
+#   `play("hop", pitch_step=n)` and the bank picks "hop@n" if it exists,
+#   otherwise plain "hop". Each variant is rendered once at start-up, so no
+#   pitch shifting happens while the game runs.
 SFX_STRIKE_ATTACK = 0.006  # A struck note reaches full volume this fast (s).
 SFX_STRIKE_RELEASE = 0.03  # Tail after a strike's ring, so it never ends abruptly (s).
 SFX_ROOT_NOTE = 65  # F4: the home note of the effects' F major ladder.
@@ -257,7 +269,12 @@ def knock(start: float, rate: float, volume: float, ring: float = 0.03) -> Note:
 
 
 def scale_note(degree: int) -> int:
-    """Return the MIDI note `degree` steps up the F major ladder from SFX_ROOT_NOTE."""
+    """Return the MIDI note `degree` steps up the F major ladder from SFX_ROOT_NOTE.
+
+    `divmod` splits the degree into whole octaves and a step inside the
+    seven-note scale, so degree 7 is F an octave up (77) and degree 9 is
+    the A above that (81).
+    """
 
     octave, step = divmod(degree, len(F_MAJOR_STEPS))
     return SFX_ROOT_NOTE + 12 * octave + F_MAJOR_STEPS[step]
@@ -308,6 +325,8 @@ SFX_RECIPES: dict[str, list[Note]] = {
              sustain=0.7, release=0.08),
         *jail_bars(DICE_RESULT_AT + 0.6),
     ],
+    # A token hop: "hop" is the first space of a move (F4) and "hop@1" to
+    # "hop@11" climb the F major ladder, one degree per further space.
     "hop": hop_notes(0),
     **{f"hop@{step}": hop_notes(step) for step in range(1, HOP_PITCH_STEPS)},
     # Passing GO: a cash-register "cha" (drawer thud and a noise burst), then a bell "ching".
@@ -347,6 +366,7 @@ SFX_RECIPES: dict[str, list[Note]] = {
         Note(2200.0, 0.0, 0.09, "noise", 0.11, glide=-6000.0, attack=0.01, decay=0.08, sustain=0.2, release=0.02),
         *(note for index, pitch in enumerate((60, 65, 69)) for note in rhodes(pitch, 0.1 + index * 0.03, 0.35, 0.12)),
     ],
+    # Going to Jail: the clashing bars on their own (also the end of "three_doubles").
     "jail": jail_bars(0.0),
     # Leaving jail: a quick upward swoop and a free-and-easy F major run.
     "leave_jail": [
@@ -510,6 +530,9 @@ MUSIC_SCORE: tuple[tuple[tuple[str, ...], tuple[tuple[float, float, int], ...]],
     (("Gm7", "C7"), ((0, 1, 70), (1, 1, 69), (2, 1, 67), (3, 1, 64))),
 )
 MUSIC_BARS = len(MUSIC_SCORE)
+# 16 bars x 4 beats = 64 beats; at 128 BPM a beat lasts 60 / 128 = 0.46875 s,
+# so the loop is 64 x 0.46875 = 30 s exactly. Changing the tempo or the
+# number of bars changes the loop length with it.
 MUSIC_LOOP_SECONDS = MUSIC_BARS * MUSIC_BEATS_PER_BAR * MUSIC_BEAT_SECONDS  # 30 s at 128 BPM.
 MUSIC_MELODY_VOLUME = 0.15
 MUSIC_MELODY_RING = 1.2  # A melody note rings this many times its written length.
@@ -559,6 +582,17 @@ def music_notes() -> list[Note]:
     Every note ends by `MUSIC_LOOP_SECONDS`: a note that would ring past the
     end is shortened so its release fade finishes exactly there, so the loop
     restarts without a click.
+
+    Beginner note:
+    - The track is rendered exactly one loop long and the mixer replays it
+      end to start. Anything still sounding at the end does not carry over
+      into the next pass; it would simply be chopped off, and a sudden jump
+      in the waveform is heard as a click at the seam. Shortening such a
+      note lets its own release fade it out first. A note whose release
+      alone cannot fit (`room <= 0`) is dropped.
+    - Each bar's bass line needs the *next* bar's root for its last-beat
+      lead-in; `% MUSIC_BARS` wraps the last bar round to the first, so the
+      bass walks smoothly over the seam too.
     """
 
     beat = MUSIC_BEAT_SECONDS
