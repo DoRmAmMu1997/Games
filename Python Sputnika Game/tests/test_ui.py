@@ -340,5 +340,71 @@ class MenuBackdropTests(UiTestCase):
         self.assertFalse(start[0] > 200 and start[1] < 120 and start[2] < 120, start)
 
 
+class SoundToggleTests(UiTestCase):
+    """The sound toggle reads clearly and keeps clear of everything around it."""
+
+    # Real breathing room around the label and between the pieces.
+    LABEL_MARGIN = 12
+    GAP = 8
+    # Panels and buttons draw a soft glow this far outside their rectangle.
+    GLOW = 14
+    assets: AssetLibrary
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Build the real asset library (fonts) once."""
+
+        super().setUpClass()
+        cls.assets = AssetLibrary()
+
+    def test_labels_name_the_current_state(self) -> None:
+        """The label says whether sound is on or off."""
+
+        self.assertEqual(ui.sound_label(False), "Sound: On")
+        self.assertEqual(ui.sound_label(True), "Sound: Off")
+
+    def test_labels_and_hint_fit_both_buttons(self) -> None:
+        """Both labels fit inside each button; the shortcut hint sits below it on screen."""
+
+        canvas = pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT).inflate(-2 * self.GAP, -2 * self.GAP)
+        for name, rect in (("hud", ui.SOUND_BUTTON_HUD), ("menu", ui.SOUND_BUTTON_MENU)):
+            button = ui.Button(rect.copy(), "")
+            for muted in (False, True):
+                width, height = self.assets.ui_font.size(ui.sound_label(muted))
+                with self.subTest(button=name, muted=muted):
+                    self.assertLessEqual(width + 2 * self.LABEL_MARGIN, rect.w)
+                    self.assertLessEqual(height + self.LABEL_MARGIN, rect.h)
+            _, hint = ui.sound_hint_layout(self.assets, button)
+            with self.subTest(button=name):
+                self.assertTrue(canvas.contains(rect.inflate(2 * self.GLOW, 2 * self.GLOW)), rect)
+                self.assertTrue(canvas.contains(hint), hint)
+                self.assertGreaterEqual(hint.top - (rect.bottom + self.GLOW), 0)
+
+    def test_hud_button_stays_in_the_sidebar(self) -> None:
+        """The in-run toggle sits in the sidebar column, clear of the bubble."""
+
+        self.assertGreaterEqual(ui.SOUND_BUTTON_HUD.left - self.GLOW, SIDEBAR_X)
+        self.assertLessEqual(ui.SOUND_BUTTON_HUD.right + self.GLOW, SCREEN_WIDTH)
+
+    def test_menu_button_clears_the_menu_modal(self) -> None:
+        """The menu toggle sits below the menu modal, glow to glow with a gap."""
+
+        modal_bottom = ui.MENU_MODAL.bottom + self.GLOW
+        self.assertGreaterEqual(ui.SOUND_BUTTON_MENU.top - self.GLOW - modal_bottom, self.GAP)
+        self.assertEqual(ui.SOUND_BUTTON_MENU.centerx, ui.MENU_MODAL.centerx)
+
+    def test_drawing_updates_the_label(self) -> None:
+        """Drawing the toggle relabels it from the muted flag and paints the button."""
+
+        target = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        target.fill((0, 0, 0))
+        button = ui.Button(ui.SOUND_BUTTON_HUD.copy(), "")
+        ui.draw_sound_toggle(target, self.assets, button, True, (-1, -1))
+        self.assertEqual(button.label, "Sound: Off")
+        self.assertNotEqual(tuple(target.get_at(button.rect.center))[:3], (0, 0, 0))
+        ui.draw_sound_toggle(target, self.assets, button, False, (-1, -1))
+        self.assertEqual(button.label, "Sound: On")
+
+
 if __name__ == "__main__":
     unittest.main()

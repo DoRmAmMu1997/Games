@@ -76,8 +76,11 @@ def make_app(tmp_dir: str) -> SolitaireApp:
     app.time_var = FakeVar()  # type: ignore[assignment]
     app.stats_var = FakeVar()  # type: ignore[assignment]
     app.status_var = FakeVar()  # type: ignore[assignment]
+    app.sound_var = FakeVar()  # type: ignore[assignment]
     app.started_at = 0.0
     app.elapsed_seconds = 0
+    # A mock sound wrapper records which sounds the handlers ask for.
+    app.audio = mock.Mock()
     return app
 
 
@@ -136,6 +139,45 @@ class HeaderTests(DrawingTestCase):
         }
         self.assertEqual(len(button_fonts), 1)
         self.assertEqual(header_label_fonts, button_fonts)
+
+    def test_sound_toggle_sits_in_the_status_row(self) -> None:
+        """The header keeps its four buttons; the Sound toggle ends the status row and shows the setting."""
+
+        created: list[tuple[str, object, dict, mock.Mock]] = []
+
+        def factory(kind: str):
+            """Return a fake widget constructor that logs each widget it builds."""
+
+            def build(parent: object, *args: object, **kwargs: object) -> mock.Mock:
+                """Create one fake widget and record its parent and options."""
+
+                widget = mock.Mock(name=kind)
+                created.append((kind, parent, kwargs, widget))
+                return widget
+
+            return build
+
+        with mock.patch("solitaire.tk.Frame", side_effect=factory("Frame")), \
+                mock.patch("solitaire.tk.Label", side_effect=factory("Label")), \
+                mock.patch("solitaire.tk.Button", side_effect=factory("Button")), \
+                mock.patch("solitaire.tk.Canvas", side_effect=factory("Canvas")):
+            self.app.build_ui()
+
+        frames = [widget for kind, _, _, widget in created if kind == "Frame"]
+        button_frame, status_frame = frames[1], frames[2]
+        header = [
+            kwargs.get("text") for kind, parent, kwargs, _ in created if kind == "Button" and parent is button_frame
+        ]
+        self.assertEqual(header, ["Undo", "Hint", "New Game", "Help"])
+        status_buttons = [(kwargs, widget) for kind, parent, kwargs, widget in created
+                          if kind == "Button" and parent is status_frame]
+        self.assertEqual(len(status_buttons), 1)
+        sound, sound_widget = status_buttons[0]
+        self.assertIs(sound["textvariable"], self.app.sound_var)
+        self.assertEqual(sound["command"], self.app.toggle_sound)
+        self.assertEqual(sound_widget.pack.call_args.kwargs["side"], "right")
+        status_label = next(widget for kind, parent, _, widget in created if kind == "Label" and parent is status_frame)
+        self.assertEqual(status_label.pack.call_args.kwargs["side"], "left")
 
 
 class TableLayoutTests(DrawingTestCase):

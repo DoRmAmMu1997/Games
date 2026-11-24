@@ -3,13 +3,19 @@
 Klondike Solitaire is the classic single-player card game, built as a desktop
 Python app with `tkinter`. Deal a shuffled deck, build the four foundations up
 from Ace to King by suit, and clear the board to win — with a hint system,
-auto-solve, undo, and a confetti win celebration along the way.
+auto-solve, undo, a confetti win celebration, and procedural sound effects
+and music along the way.
 
 ## Project Structure
 
-- `solitaire.py` is the whole game. The rules model (`KlondikeGame`) and the
-  tkinter interface (`SolitaireApp`) both live in this single file.
-- `tests/` holds the headless rules test suite for `KlondikeGame`.
+- `solitaire.py` is the game. The rules model (`KlondikeGame`), the tkinter
+  interface (`SolitaireApp`) and the sound recipes all live in this file.
+- `audio.py` is the small synthesizer that turns those recipes into sound
+  effects and music (the same shared core every game in this repository
+  carries).
+- `tests/` holds the headless test suite: the rules, the hint engine, the
+  app's click handlers and drawing, and the sound.
+- `requirements.txt` lists the one `pip` package, `pygame-ce`.
 - `solitaire_icon.ico` is the window and executable icon.
 - `Solitaire Game.spec` is the PyInstaller build recipe for the `.exe`.
 
@@ -17,8 +23,16 @@ auto-solve, undo, and a confetti win celebration along the way.
 
 - Python 3.12 or newer.
 - `tkinter`, which ships with the standard Python installer on Windows and
-  macOS. **No `pip` packages are required** — the game uses only the Python
-  standard library.
+  macOS.
+- `pygame-ce`, used **only for its sound mixer** (tkinter still draws the
+  window). Install it once with:
+
+```bash
+pip install -r requirements.txt
+```
+
+Without `pygame-ce`, or on a machine with no audio device, the game still
+runs, just silently.
 
 ## Run
 
@@ -28,8 +42,10 @@ python solitaire.py
 
 ## Tests
 
-The rules model (`KlondikeGame`) is independent of tkinter, so the test
-suite runs headless without opening a window:
+The rules model (`KlondikeGame`) is independent of tkinter, and the app tests
+use stand-ins for the window, so the test suite runs headless without opening
+a window. The sound tests switch SDL to its silent "dummy" audio driver
+themselves, so they need no speakers either:
 
 ```bash
 python -m unittest discover -s tests
@@ -61,6 +77,8 @@ foundation is built up in a single suit, from Ace to King.
 - **Hint button** or **Ctrl+H**: highlight a useful move. The card to move is
   outlined in yellow; the suggested destination is outlined in orange.
 - **New Game button** or **Ctrl+N**: deal a fresh game.
+- **Sound button** (at the right end of the status line) or **Ctrl+M**:
+  switch all sound and music off or back on.
 - **Help button**: open an in-game rules and controls reference.
 
 ## Features
@@ -76,6 +94,35 @@ foundation is built up in a single suit, from Ace to King.
 - **Statistics** — a high score plus lifetime wins and losses are kept across
   sessions.
 - **Win celebration** — a confetti shower and a banner play when you win.
+- **Sound** — soft card sounds and a calm background tune (see below).
+
+## Sound
+
+Every sound is synthesised in code when the game starts; no audio files ship
+with it. `audio.py` renders short recipes of notes (sine, soft triangle and
+plucked voices plus noise, each with a volume envelope and an optional pitch
+slide) into sample buffers, and the recipes at the top of `solitaire.py` are
+written as musical notes in C major so overlapping sounds stay in harmony.
+Only pygame's mixer is used; tkinter keeps the window.
+
+- **Effects:** a light paper tick when you pick up a card, a soft felt thud
+  when cards land on a column, and a piano-like chime when a card reaches its
+  foundation, pitched by rank (Ace lowest, King highest), so a suit filling
+  up climbs a scale. A paper flip when a hidden card turns over, a slide for
+  each stock draw, a riffle for recycling the waste and a dull knock for an
+  empty stock. A gentle "uh-uh" for a move the rules refuse, a rewind for
+  Undo, a sparkle for a hint, a cascade of ticks for a new deal, quicker
+  chimes while auto-solve finishes the game, and a click for the Help and
+  Sound buttons.
+- **Music:** a calm, lightly swung lo-fi piano loop (about 27 seconds) over a
+  soft bass and brushed drums. It renders in a background thread, so startup
+  stays quick.
+- **Game over:** the music fades out under a rising C major arpeggio that
+  plays with the confetti when you win, or a gentle falling phrase when the
+  deal is lost. A new game, or undoing out of a loss, brings the music back.
+- **Mute:** `Ctrl+M` or the `Sound` button switches all sound off and on. The
+  choice is saved as `"muted"` with your statistics and remembered next time;
+  Undo never changes it.
 
 ## Scoring
 
@@ -88,7 +135,8 @@ foundation is built up in a single suit, from Ace to King.
 
 ## Save Data
 
-The high score and lifetime win/loss counts are saved to:
+The high score, lifetime win/loss counts and the sound on/off choice are
+saved to:
 
 ```
 %APPDATA%\Klondike Solitaire\solitaire_high_score.json
@@ -102,10 +150,11 @@ This per-user location is used whether you run the script or a compiled
 The game can be packaged into a single Windows executable with
 [PyInstaller](https://pyinstaller.org/).
 
-1. Install PyInstaller (only needed once):
+1. Install PyInstaller and the game's requirements (only needed once):
 
 ```bash
 pip install pyinstaller
+pip install -r requirements.txt
 ```
 
 2. From this folder (`Python Solitaire Game`), build using the bundled spec
@@ -118,8 +167,10 @@ pyinstaller "Solitaire Game.spec"
 3. The finished program is written to `dist\Solitaire Game.exe`. Copy that
    file anywhere you like and double-click it to play.
 
-The spec file produces a single-file, windowed executable and bundles the
-window icon. Because the save data lives in `%APPDATA%`, the high score and
+The build still uses the same `Solitaire Game.spec`: PyInstaller finds
+`audio.py` and `pygame-ce` through the game's imports and bundles them, so the
+spec needs no changes. It produces a single-file, windowed executable and
+bundles the window icon. Because the save data lives in `%APPDATA%`, the high score and
 stats persist no matter where the `.exe` is moved.
 
 ## License

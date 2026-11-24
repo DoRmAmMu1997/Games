@@ -29,6 +29,41 @@ from settings import TOKENS_PER_PLAYER, seat_colors
 # shifts version-1 steps down and refuses versions it does not know.
 LAP_VERSION = 2
 
+# The event kinds ``LudoGame`` queues for the window's sounds (see
+# ``drain_events``), one per sound-worthy moment:
+# - roll: any die roll, even one equal to the previous roll;
+# - rolled_six: the roll was a 6 (queued right after its roll);
+# - three_sixes: a third 6 in a row forfeited the roll;
+# - leave_yard / move: a token entered the board / moved along it;
+# - capture: the move sent opponent tokens back to their yard;
+# - home: the move brought a token home;
+# - bonus_turn: the same player rolls again;
+# - no_move: the roll had no legal move;
+# - turn_change: the turn passed to the next player;
+# - game_won: the game ended.
+# One action can queue several kinds, in order: a 6 that captures queues
+# roll, rolled_six, then (on the move) move, capture and bonus_turn.
+#
+# Why a queue instead of playing sounds here: the engine must stay free of
+# pygame, so it only *reports* what happened and the window decides what to
+# play. Because humans, the AI, tests and simulations all drive the game
+# through the same methods, an AI turn queues exactly the events a human turn
+# would, and so is heard the same way. The queue is presentation data, not
+# game state, so it is never saved: a resumed game should not replay old sounds.
+EVENT_KINDS = (
+    "roll",
+    "rolled_six",
+    "three_sixes",
+    "leave_yard",
+    "move",
+    "capture",
+    "home",
+    "bonus_turn",
+    "no_move",
+    "turn_change",
+    "game_won",
+)
+
 
 @dataclass(frozen=True)
 class LudoRules:
@@ -84,6 +119,9 @@ class LudoGame:
         consecutive_sixes: Sixes rolled in a row this turn (for the penalty).
         ranking: Final standings, filled in when the game ends.
         event_log: The last few human-readable messages for the HUD.
+        events: Sound-worthy moments since the shell last called
+            ``drain_events``, as short kind strings in the order they
+            happened (see ``EVENT_KINDS``). Never saved.
     """
 
     def __init__(
@@ -155,6 +193,9 @@ class LudoGame:
         self.winner: int | None = None
         self.ranking: list[int] = []
         self.event_log: list[str] = ["Choose players and start rolling."]
+        # Not part of the game state: ``to_dict`` leaves it out, so a loaded
+        # game always starts with an empty queue.
+        self.events: list[str] = []
         self._mark_finished_tokens()
 
     @property
@@ -186,9 +227,11 @@ class LudoGame:
 
         self.last_roll = die
         self.total_rolls += 1
+        self._emit("roll")
         if die == 6:
             self.current_player.sixes_rolled += 1
             self.consecutive_sixes += 1
+            self._emit("rolled_six")
         else:
             self.consecutive_sixes = 0
 
@@ -198,6 +241,7 @@ class LudoGame:
             and self.consecutive_sixes >= 3
         ):
             self._note(f"{self.current_player.name} rolled a third 6 and loses the roll.")
+            self._emit("three_sixes")
             self.consecutive_sixes = 0
             self._advance_turn()
             return True
@@ -271,6 +315,7 @@ class LudoGame:
         player = self.players[move.player_index]
         token = player.tokens[move.token_index]
         token.steps = move.to_steps
+        self._emit("leave_yard" if move.enters_board else "move")
 
         # Order matters: the mover's token is placed first, then anything else
         # on the landing square is captured (``_capture_at`` skips the mover's
@@ -278,9 +323,11 @@ class LudoGame:
         captured = self._capture_at(move)
         if captured:
             player.captures += len(captured)
+            self._emit("capture")
 
         home = move.reaches_home
         if home:
+            self._emit("home")
             self._note(f"{player.name} brought token {move.token_index + 1} home.")
         elif captured:
             targets = ", ".join(self.players[p].name for p, _ in captured)
@@ -319,6 +366,7 @@ class LudoGame:
             # Same player rolls again; ``consecutive_sixes`` is kept so a run
             # of three sixes can still trigger the penalty.
             self.awaiting = "pre_roll"
+            self._emit("bonus_turn")
         else:
             self.consecutive_sixes = 0
             self._advance_turn()
@@ -328,6 +376,7 @@ class LudoGame:
         """Handle a roll with no legal moves."""
 
         self._note(f"{self.current_player.name} rolled {die} and has no legal move.")
+        self._emit("no_move")
         if die == 6:
             # A 6 always earns another roll, exactly as in apply_move; the
             # three-sixes penalty (when enabled) is enforced earlier in record_roll.
@@ -520,6 +569,7 @@ class LudoGame:
             if self.players[candidate].finished_count(self.layout.finish_steps) < TOKENS_PER_PLAYER:
                 self.current = candidate
                 self.awaiting = "pre_roll"
+                self._emit("turn_change")
                 return
         self._finish_game(self.current)
 
@@ -535,6 +585,7 @@ class LudoGame:
         self.phase = "game_over"
         self.awaiting = "game_over"
         self.winner = winner_index
+        self._emit("game_won")
         if winner_index not in self.ranking:
             self.ranking.append(winner_index)
         ordered = sorted(
@@ -563,6 +614,22 @@ class LudoGame:
         for player_state in self.players:
             for token in player_state.tokens:
                 token._finished_steps = self.layout.finish_steps
+
+    def drain_events(self) -> list[str]:
+        """Return every queued event, oldest first, and empty the queue.
+
+        The window calls this once per frame and turns each kind into a
+        sound. Humans, the AI, tests and simulations all change the game
+        through the same methods, so their actions queue the same events.
+        """
+
+        events, self.events = self.events, []
+        return events
+
+    def _emit(self, kind: str) -> None:
+        """Queue one event kind (one of ``EVENT_KINDS``) for ``drain_events``."""
+
+        self.events.append(kind)
 
     def _note(self, message: str) -> None:
         """Append a short message to the on-screen event log."""

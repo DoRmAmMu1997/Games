@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from audio import Note, midi
+
 # Window and render-space size.
 # The game internally renders to this portrait canvas even when the desktop
 # window itself is resized smaller or larger.
@@ -378,3 +380,321 @@ def build_tiers() -> list[TierInfo]:
 
 # Build the tier list once at import time so every other file can reuse it.
 TIERS = build_tiers()
+
+
+# ---- Sound ----
+# Every sound is a recipe: a list of `Note`s that audio.py renders into
+# samples when the game starts (no audio files ship with the game). Pitches
+# are written as MIDI note numbers through `midi()`: 69 is A4 (440 Hz), +12 is
+# one octave up. The palette lives in A minor pentatonic (A C D E G), which
+# has no clashing notes, so overlapping effects always sound consonant.
+#
+# Beginner note:
+# - A "pluck" note below has no sustain: it rises over a few milliseconds and
+#   then rings down over `ring` seconds, like a struck bell or a marimba bar.
+# - Volumes stay well under 1.0 on purpose: several effects often play at
+#   once and their samples add up.
+SFX_PLUCK_ATTACK = 0.004  # A struck note reaches full volume this fast (s).
+SFX_PLUCK_RELEASE = 0.02  # Tail after a pluck's ring, so it never ends abruptly (s).
+# The merge ladder: tier n merges at A3 plus the n-th step of the pentatonic
+# scale, so every evolution sounds a little higher than the one before.
+MERGE_ROOT_NOTE = 57  # A3.
+PENTATONIC_STEPS = (0, 3, 5, 7, 10)
+
+
+def pluck(pitch: float, start: float, ring: float, volume: float, voice: str = "pluck") -> Note:
+    """Return a struck note: a near-instant attack, then a ring down to silence."""
+    return Note(
+        midi(pitch),
+        start,
+        SFX_PLUCK_ATTACK + ring,
+        voice,
+        volume,
+        attack=SFX_PLUCK_ATTACK,
+        decay=ring,
+        sustain=0.0,
+        release=SFX_PLUCK_RELEASE,
+    )
+
+
+def ladder_note(step: int) -> int:
+    """Return the MIDI note `step` places up the A minor pentatonic ladder."""
+    octave, degree = divmod(step, len(PENTATONIC_STEPS))
+    return MERGE_ROOT_NOTE + 12 * octave + PENTATONIC_STEPS[degree]
+
+
+def merge_notes(tier: int) -> list[Note]:
+    """Return the merge sound for reaching `tier`: a rising fifth with a shimmer."""
+    root = ladder_note(tier)
+    return [
+        pluck(root, 0.0, 0.16, 0.3),
+        pluck(root + 7, 0.055, 0.22, 0.26),
+        pluck(root + 12, 0.055, 0.3, 0.1, voice="sine"),
+    ]
+
+
+def big_merge_notes(tier: int) -> list[Note]:
+    """Return the big-merge sound for `tier`: a quick minor arpeggio over a soft swell."""
+    root = ladder_note(tier)
+    notes = [pluck(root + offset, index * 0.05, 0.3, 0.24) for index, offset in enumerate((0, 3, 7, 12))]
+    notes.append(Note(midi(root - 12), 0.0, 0.25, "triangle", 0.18, attack=0.06, decay=0.2, sustain=0.5, release=0.3))
+    return notes
+
+
+SFX_RECIPES: dict[str, list[Note]] = {
+    # A soft launcher "thup": a sine falling in pitch with a bright tick on top.
+    "drop": [
+        Note(midi(64), 0.0, 0.08, "sine", 0.32, glide=-1400.0, attack=0.003, decay=0.08, sustain=0.0, release=0.02),
+        pluck(76, 0.0, 0.05, 0.1),
+    ],
+    "merge": merge_notes(1),
+    "big_merge": big_merge_notes(len(TIERS) - 3),
+    # A short, soft two-note click for every button.
+    "button": [pluck(84, 0.0, 0.05, 0.22, voice="sine"), pluck(91, 0.012, 0.04, 0.08, voice="sine")],
+    # Game over without a record: a gentle descending A minor phrase over a low pad.
+    "game_over": [
+        Note(midi(64), 0.0, 0.28, "triangle", 0.26, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+        Note(midi(60), 0.3, 0.28, "triangle", 0.26, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+        Note(midi(57), 0.6, 0.7, "triangle", 0.28, attack=0.015, decay=0.2, sustain=0.6, release=0.5),
+        Note(midi(45), 0.6, 0.7, "sine", 0.2, attack=0.2, decay=0.2, sustain=0.8, release=0.5),
+        Note(midi(52), 0.6, 0.7, "sine", 0.12, attack=0.3, decay=0.2, sustain=0.8, release=0.5),
+    ],
+    # A record (new best tier or high score): an ascending A major fanfare
+    # that settles into a ringing chord.
+    "record": [
+        *(pluck(pitch, index * 0.11, 0.35, 0.26) for index, pitch in enumerate((69, 73, 76, 81))),
+        Note(midi(81), 0.44, 0.5, "triangle", 0.16, attack=0.05, decay=0.2, sustain=0.6, release=0.45),
+        Note(midi(76), 0.44, 0.5, "sine", 0.14, attack=0.05, decay=0.2, sustain=0.6, release=0.45),
+        Note(midi(85), 0.44, 0.5, "sine", 0.08, attack=0.05, decay=0.2, sustain=0.6, release=0.45),
+    ],
+    # The danger beep: a hollow low fourth, short enough to repeat quickly.
+    "warning": [
+        Note(midi(55), 0.0, 0.08, "square", 0.17, attack=0.006, decay=0.04, sustain=0.6, release=0.04),
+        Note(midi(60), 0.0, 0.08, "square", 0.12, attack=0.006, decay=0.04, sustain=0.6, release=0.04),
+    ],
+}
+# The fewest seconds between two plays of the same effect. A cascade can merge
+# several pairs in one frame; one merge sound per frame reads better than a
+# pile of identical sounds stacked on top of each other.
+SFX_COOLDOWNS: dict[str, float] = {
+    "merge": 0.03,
+    "big_merge": 0.03,
+    # Aim ticks and impact thuds can fire every frame; these keep them a
+    # gentle texture instead of a buzz.
+    "aim_tick": 0.045,
+    "impact": 0.07,
+    # Mashing launch during the cooldown gets one "not yet" per beat.
+    "launch_blocked": 0.25,
+}
+
+# The warning beep grows louder as the fail timer fills: it starts at
+# `WARNING_VOLUME_MIN` and climbs by up to `WARNING_VOLUME_SPAN` at the brink.
+WARNING_VOLUME_MIN = 0.28
+WARNING_VOLUME_SPAN = 0.3
+
+# Seconds the danger check must stay in a new state before the player HEARS
+# the change (the danger cue and the calm/tense music switch). A body resting
+# right on the fail line can jitter across it every frame; without this hold
+# the cues would chatter and the music would restart over and over. The red
+# label, warning beeps and fail timer still react at once.
+DANGER_MOOD_HOLD = 0.6
+
+# The launcher clicks once each time the aim crosses a multiple of this many
+# degrees, like the detents on a dial.
+AIM_TICK_DEGREES = 5.0
+# Impact thuds come in three weights. A collision at or above each speed (in
+# pixels per second) uses the next heavier thud; `IMPACT_EVENT_SPEED` is the
+# softest hit that makes any sound at all.
+IMPACT_SOUND_BANDS = (420.0, 800.0)
+# Thud loudness grows with speed from the quietest to the loudest value,
+# reaching the top at `IMPACT_LOUDEST_SPEED`.
+IMPACT_VOLUME_RANGE = (0.12, 0.4)
+IMPACT_LOUDEST_SPEED = 1100.0
+# Combo chimes climb with the chain: a chain of n plays variant "combo@n",
+# up to this many (longer chains keep the top chime).
+COMBO_CHIME_TOP = 6
+# How loud each newer event sound plays (0 to 1).
+SFX_VOLUMES: dict[str, float] = {
+    "button": 0.4,
+    # Starting a run is the one button that gets a slightly fuller click.
+    "start_run": 0.45,
+    "drop": 0.35,
+    "merge": 0.36,
+    "big_merge": 0.42,
+    # Reaching the top tier is the loudest moment in the game; a new
+    # lifetime-best tier and the game-over jingles sit just under it.
+    "record_top_tier": 0.45,
+    "record": 0.42,
+    "jingle": 0.42,
+    "whoosh": 0.3,
+    "launch_blocked": 0.34,
+    "aim_tick": 0.22,
+    "combo": 0.34,
+    "high_score": 0.4,
+    "danger_on": 0.34,
+    "danger_off": 0.3,
+    "pause": 0.32,
+    "resume": 0.32,
+}
+
+
+def impact_notes(weight: int) -> list[Note]:
+    """Return an impact thud: a falling low sine with a dull noise burst.
+
+    `weight` 0 is a light tap; each step up is lower, longer and noisier.
+    """
+    ring = 0.07 + 0.03 * weight
+    return [
+        Note(midi(52 - 5 * weight), 0.0, ring, "sine", 0.4, glide=-160.0, attack=0.002, decay=ring, sustain=0.0),
+        Note(380.0 + 120.0 * weight, 0.0, 0.03, "noise", 0.08 + 0.04 * weight, attack=0.001, decay=0.03, sustain=0.0),
+    ]
+
+
+def combo_notes(chain: int) -> list[Note]:
+    """Return the combo chime for a chain of `chain`: a bright third, higher each link."""
+    root = ladder_note(8 + chain)
+    return [pluck(root, 0.0, 0.3, 0.26, voice="sine"), pluck(root + 4, 0.07, 0.4, 0.22, voice="sine")]
+
+
+# Beginner note: a name such as "merge@3" is a pitch variant of "merge".
+# `SoundBank.play(name, volume, pitch_step=3)` plays "merge@3" when it exists
+# and falls back to plain "merge" otherwise. Every variant is rendered ahead
+# of time at start-up, because rendering on the fly would stall a frame.
+SFX_RECIPES.update(
+    {
+        # Launch: a breathy whoosh that rises as the body leaves the launcher.
+        "whoosh": [
+            Note(1200.0, 0.0, 0.16, "noise", 0.16, glide=26000.0, attack=0.06, decay=0.1, sustain=0.4, release=0.08),
+            Note(midi(69), 0.0, 0.14, "sine", 0.05, glide=900.0, attack=0.05, decay=0.08, sustain=0.3, release=0.06),
+        ],
+        # A launch refused by the cooldown: a soft, low "not yet" double bump.
+        "launch_blocked": [pluck(45, 0.0, 0.06, 0.26, voice="square"), pluck(45, 0.08, 0.06, 0.2, voice="square")],
+        # One detent click of the aiming dial.
+        "aim_tick": [pluck(96, 0.0, 0.016, 0.18, voice="sine")],
+        "impact": impact_notes(0),
+        **{f"impact@{weight}": impact_notes(weight) for weight in range(1, len(IMPACT_SOUND_BANDS) + 1)},
+        "combo": combo_notes(2),
+        **{f"combo@{chain}": combo_notes(chain) for chain in range(3, COMBO_CHIME_TOP + 1)},
+        # Each merge sounds one step higher up the ladder than the tier before.
+        **{f"merge@{tier}": merge_notes(tier) for tier in range(1, len(TIERS))},
+        **{f"big_merge@{tier}": big_merge_notes(tier) for tier in range(len(TIERS) - 3, len(TIERS))},
+        # Passing the old high score mid-run: a quick sparkling A major run.
+        "high_score": [
+            *(pluck(pitch, index * 0.06, 0.4, 0.2, voice="sine") for index, pitch in enumerate((81, 85, 88, 93))),
+            Note(midi(93), 0.24, 0.2, "triangle", 0.08, attack=0.03, decay=0.15, sustain=0.5, release=0.3),
+        ],
+        # Crossing the danger line: a hollow falling third. Leaving it: a
+        # relieved rising sine phrase that resolves home to A.
+        "danger_on": [pluck(64, 0.0, 0.16, 0.22, voice="square"), pluck(60, 0.13, 0.22, 0.22, voice="square")],
+        "danger_off": [
+            pluck(pitch, index * 0.09, 0.25, 0.24, voice="sine") for index, pitch in enumerate((60, 64, 69))
+        ],
+        "pause": [pluck(76, 0.0, 0.12, 0.22, voice="sine"), pluck(69, 0.08, 0.18, 0.22, voice="sine")],
+        "resume": [pluck(69, 0.0, 0.12, 0.22, voice="sine"), pluck(76, 0.08, 0.18, 0.22, voice="sine")],
+    }
+)
+
+# Music: an ambient space pad with a slow arpeggio, rendered once into a loop
+# that plays on reserved mixer channels (see `music_notes`). The tense track
+# shares the pad and bass but runs the arpeggio twice as fast over a soft
+# heartbeat; the game crossfades to it while the stack is over the danger line.
+MUSIC_LOOP_SECONDS = 16.0  # One pass through the four chords below.
+MUSIC_CHORD_SECONDS = MUSIC_LOOP_SECONDS / 4
+MUSIC_VOLUME = 0.22  # Channel volume: low, so effects sit on top of the music.
+# Channel 0 plays the calm track and channel 1 the tense one, so the two can
+# crossfade; both are reserved so effects never take them.
+MUSIC_CHANNEL_COUNT = 2
+MUSIC_CALM_CHANNEL = 0
+MUSIC_TENSE_CHANNEL = 1
+MUSIC_CROSSFADE_MS = 900  # Fade time when switching between calm and tense.
+MUSIC_FADE_IN_MS = 1200  # Fade-in when music starts from silence.
+MUSIC_GAME_OVER_FADE_MS = 700  # How quickly the music fades under the game-over jingle.
+# Am9 - Fmaj7 - Cmaj7 - G6 in A minor: (bass note, pad notes) per chord, as MIDI numbers.
+MUSIC_CHORDS = (
+    (45, (57, 60, 64, 71)),
+    (41, (53, 57, 60, 64)),
+    (48, (55, 60, 64, 71)),
+    (43, (55, 59, 62, 64)),
+)
+MUSIC_PAD_VOLUME = 0.085  # Per pad voice; four of them sound together.
+MUSIC_PAD_ATTACK = 1.2  # The pad swells in slowly, like a breath.
+MUSIC_PAD_RELEASE = 1.2  # ...and lingers under the start of the next chord.
+MUSIC_PAD_DECAY = 0.6  # After the swell the pad settles down to...
+MUSIC_PAD_SUSTAIN = 0.8  # ...this share of its peak while the chord is held.
+MUSIC_BASS_VOLUME = 0.16
+MUSIC_BASS_ATTACK = 0.3  # The bass eases in under each chord (s)...
+MUSIC_BASS_SUSTAIN = 0.9  # ...holds nearly full...
+MUSIC_BASS_RELEASE = 0.8  # ...and fades out over this long (s).
+# The arpeggio climbs and falls through the chord an octave above the pad.
+# The calm track plays two notes a second; the tense one four.
+MUSIC_ARP_PATTERN = (0, 1, 2, 3, 2, 1, 2, 3)
+MUSIC_ARP_STEPS = {False: 8, True: 16}  # Arpeggio notes per chord.
+MUSIC_ARP_VOLUME = {False: 0.075, True: 0.07}
+MUSIC_ARP_RING = {False: 1.4, True: 0.45}  # How long each arpeggio note rings (s).
+MUSIC_HEARTBEAT_VOLUME = 0.16  # The tense track's soft low pulse on every beat.
+MUSIC_HEARTBEAT_RING = 0.25  # How long each heartbeat thump rings (s).
+MUSIC_BEATS_PER_CHORD = 4
+
+
+def music_notes(tense: bool) -> list[Note]:
+    """Return one loop of the soundtrack: calm, or tense when `tense` is True.
+
+    Every note ends by `MUSIC_LOOP_SECONDS`, so the loop restarts without a
+    note being cut off mid-ring. The final chord's pad and bass are held
+    `MUSIC_PAD_RELEASE` seconds less, so the pad's release fades out exactly
+    at the loop end. Arpeggio notes near the end whose ring would run past
+    the loop are left out entirely (the filter on the last line) rather than
+    cut short.
+
+    Tempo arithmetic (calm): 16 s / 4 chords = 4 s per chord; 8 arpeggio
+    notes per chord = one every 0.5 s. The tense track plays 16 per chord
+    (one every 0.25 s) over a heartbeat on each of 4 beats per chord, which
+    is one thump a second (60 beats per minute).
+
+    Beginner note:
+    - Pad notes are moved up 12 MIDI numbers (one octave) for the arpeggio,
+      so it sparkles above the pad instead of muddying it.
+    """
+    notes: list[Note] = []
+    span = MUSIC_CHORD_SECONDS
+    for index, (bass, pad) in enumerate(MUSIC_CHORDS):
+        start = index * span
+        last = index == len(MUSIC_CHORDS) - 1
+        hold = span - MUSIC_PAD_RELEASE if last else span
+        for pitch in pad:
+            notes.append(
+                Note(
+                    midi(pitch),
+                    start,
+                    hold,
+                    "triangle",
+                    MUSIC_PAD_VOLUME,
+                    attack=MUSIC_PAD_ATTACK,
+                    decay=MUSIC_PAD_DECAY,
+                    sustain=MUSIC_PAD_SUSTAIN,
+                    release=MUSIC_PAD_RELEASE,
+                )
+            )
+        notes.append(
+            Note(
+                midi(bass),
+                start,
+                hold,
+                "sine",
+                MUSIC_BASS_VOLUME,
+                attack=MUSIC_BASS_ATTACK,
+                sustain=MUSIC_BASS_SUSTAIN,
+                release=MUSIC_BASS_RELEASE,
+            )
+        )
+        steps = MUSIC_ARP_STEPS[tense]
+        for step in range(steps):
+            pitch = pad[MUSIC_ARP_PATTERN[step % len(MUSIC_ARP_PATTERN)]] + 12
+            voice = "pluck" if tense else "sine"
+            at = start + step * span / steps
+            notes.append(pluck(pitch, at, MUSIC_ARP_RING[tense], MUSIC_ARP_VOLUME[tense], voice))
+        if tense:
+            for beat in range(MUSIC_BEATS_PER_CHORD):
+                at = start + beat * span / MUSIC_BEATS_PER_CHORD
+                notes.append(pluck(bass - 12, at, MUSIC_HEARTBEAT_RING, MUSIC_HEARTBEAT_VOLUME, "sine"))
+    return [note for note in notes if note.end <= MUSIC_LOOP_SECONDS]

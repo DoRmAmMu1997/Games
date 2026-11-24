@@ -21,18 +21,22 @@ import math
 import os
 import random
 import time
+from functools import partial
 
 import pygame
 
 from assets import AssetLibrary
+from audio import MusicPlayer
 from effects import EffectsManager
 from entities import CelestialBody
 from merge_logic import find_merge_events
 from physics import PhysicsWorld
 from rules import (
     advance_fail_timer,
+    aim_tick_crossed,
     combo_points,
     fail_ratio,
+    impact_sound,
     next_combo_count,
     sanitize_progress,
     stress_level,
@@ -40,6 +44,8 @@ from rules import (
 )
 from settings import (
     ANGLE_AIM_SPEED,
+    COMBO_CHIME_TOP,
+    DANGER_MOOD_HOLD,
     DROP_COOLDOWN,
     FAIL_AGE_GATE,
     FAIL_GRACE,
@@ -50,20 +56,33 @@ from settings import (
     MAX_BODIES,
     MAX_LAUNCH_ANGLE,
     MOUSE_WHEEL_ANGLE_STEP,
+    MUSIC_CALM_CHANNEL,
+    MUSIC_CROSSFADE_MS,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_LOOP_SECONDS,
+    MUSIC_TENSE_CHANNEL,
+    MUSIC_VOLUME,
     OVERLAY_PADDING,
     PREVIEW_GLOW_EXTRA,
     SAVE_DATA_DIR,
     SAVE_DATA_PATH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SFX_VOLUMES,
     SPAWN_WEIGHTS,
     SPAWN_Y,
     TIERS,
     WARNING,
+    WARNING_VOLUME_MIN,
+    WARNING_VOLUME_SPAN,
     WINDOW_TITLE,
     clamp,
+    music_notes,
 )
 from ui import (
+    SOUND_BUTTON_HUD,
+    SOUND_BUTTON_MENU,
     Button,
     danger_label_rect,
     draw_danger_label,
@@ -72,9 +91,11 @@ from ui import (
     draw_menu_overlay,
     draw_pause_overlay,
     draw_playfield,
+    draw_sound_toggle,
     place_game_over_buttons,
     place_menu_buttons,
     place_pause_buttons,
+    sound_label,
 )
 
 
@@ -167,6 +188,16 @@ class OrbitalOrchardGame:
         self.world = PhysicsWorld()
         self.random = random.Random()
 
+        # Background music: a calm loop and a tense one for danger, each
+        # rendered in its own background thread (see audio.MusicPlayer).
+        # `_music_mood` names the track currently wanted ("calm", "tense",
+        # or None for silence); `_sync_music()` keeps it in step with play.
+        self.music = {
+            mood: MusicPlayer(partial(music_notes, mood == "tense"), MUSIC_LOOP_SECONDS, MUSIC_VOLUME, channel=channel)
+            for mood, channel in (("calm", MUSIC_CALM_CHANNEL), ("tense", MUSIC_TENSE_CHANNEL))
+        }
+        self._music_mood: str | None = None
+
         # Global scene/state flags.
         # `scene` is a simple state machine:
         # - "menu"
@@ -190,13 +221,21 @@ class OrbitalOrchardGame:
         self.container_stress = 0.0
         self.goal_reached = False
         self.warning_active = False
+        self.danger_mood = False
+        self._danger_mood_timer = 0.0
         self.score = 0
         progress = self._load_progress()
         self.high_score = progress["high_score"]
         self.games_played = progress["games_played"]
         self.lifetime_best_tier = progress["best_tier"]
+        # The player's sound on/off choice, saved with the progress.
+        self.muted = bool(progress["muted"])
         self.new_record = False
         self.best_tier_seen = 0
+        # The high score this run has to beat, and whether passing it has
+        # already been cheered (the sparkle plays once per run).
+        self._score_to_beat = self.high_score
+        self._high_score_cheered = False
 
         # Combo scoring state: quick back-to-back merges build a score
         # multiplier. `_combo_count` is the current chain length and
@@ -236,6 +275,10 @@ class OrbitalOrchardGame:
         place_menu_buttons([self.play_button])
         place_pause_buttons([self.resume_button, self.pause_restart_button, self.pause_menu_button])
         place_game_over_buttons([self.over_restart_button, self.over_menu_button])
+        # The sound toggle: one in the sidebar during a run, one under the menu.
+        self.sound_button = Button(SOUND_BUTTON_HUD.copy(), sound_label(self.muted))
+        self.menu_sound_button = Button(SOUND_BUTTON_MENU.copy(), sound_label(self.muted))
+        self._apply_mute()
 
     @property
     def current_body_name(self) -> str:
@@ -331,7 +374,7 @@ class OrbitalOrchardGame:
 
             if event.type == pygame.KEYDOWN:
                 # Keyboard actions are grouped in a helper so this loop stays readable.
-                self._handle_keydown(event.key)
+                self._handle_keydown(event.key, event.mod)
 
             if event.type == pygame.MOUSEWHEEL and self.scene == "playing":
                 # Mouse wheel provides fine angle adjustments.
@@ -375,10 +418,11 @@ class OrbitalOrchardGame:
                 # Releasing the right mouse button ends angle dragging.
                 self.angle_dragging = False
 
-    def _handle_keydown(self, key: int) -> None:
+    def _handle_keydown(self, key: int, mod: int = 0) -> None:
         """Handle one key press based on the current scene.
 
         Bindings:
+        - Ctrl+M: sound on/off, in every scene.
         - Esc / P: toggle between playing and paused.
         - M: back to the menu from any in-run scene.
         - R: restart a fresh run from any in-run scene.
@@ -389,22 +433,26 @@ class OrbitalOrchardGame:
 
         Args:
             key: The pygame key code from a `KEYDOWN` event.
+            mod: The modifier keys held down (the event's `mod` bit flags).
         """
+        if key == pygame.K_m and mod & pygame.KMOD_CTRL:
+            # Ctrl+M toggles sound. Plain M (below) keeps its menu job.
+            self._toggle_mute()
+            return
+
         if key in (pygame.K_ESCAPE, pygame.K_p):
             # `Esc` / `P` toggles pause during gameplay.
             if self.scene == "playing":
-                self.scene = "paused"
-                self.assets.sounds.play("button", 0.4)
+                self._pause()
             elif self.scene == "paused":
-                self.scene = "playing"
-                self.assets.sounds.play("button", 0.4)
+                self._resume()
             return
 
         if key == pygame.K_m:
             # `M` jumps back to the menu from any in-run scene.
             if self.scene in {"playing", "paused", "game_over"}:
                 self.scene = "menu"
-                self.assets.sounds.play("button", 0.4)
+                self.assets.sounds.play("button", SFX_VOLUMES["button"])
             return
 
         if key == pygame.K_r and self.scene in {"playing", "paused", "game_over"}:
@@ -429,7 +477,7 @@ class OrbitalOrchardGame:
             elif self.scene == "playing":
                 self.drop_current_body()
             elif self.scene == "paused":
-                self.scene = "playing"
+                self._resume()
             elif self.scene == "game_over":
                 self.start_round()
 
@@ -438,6 +486,13 @@ class OrbitalOrchardGame:
 
         Returns `True` when a button handled the click.
         """
+        # The sound toggle works on the menu and in every in-run scene (the
+        # sidebar stays visible behind the pause and game-over modals).
+        toggle = self.menu_sound_button if self.scene == "menu" else self.sound_button
+        if toggle.contains(position):
+            self._toggle_mute()
+            return True
+
         if self.scene == "menu":
             if self.play_button.contains(position):
                 self.start_round()
@@ -446,8 +501,7 @@ class OrbitalOrchardGame:
 
         if self.scene == "playing":
             if self.pause_button.contains(position):
-                self.scene = "paused"
-                self.assets.sounds.play("button", 0.4)
+                self._pause()
                 return True
             if self.restart_button.contains(position):
                 self.start_round()
@@ -462,10 +516,11 @@ class OrbitalOrchardGame:
                 (self.pause_menu_button, "menu"),
             ):
                 if button.contains(position):
-                    self.assets.sounds.play("button", 0.4)
                     if action == "resume":
-                        self.scene = "playing"
-                    elif action == "restart":
+                        self._resume()
+                        return True
+                    self.assets.sounds.play("button", SFX_VOLUMES["button"])
+                    if action == "restart":
                         self.start_round()
                     else:
                         self.scene = "menu"
@@ -478,7 +533,7 @@ class OrbitalOrchardGame:
                 (self.over_menu_button, "menu"),
             ):
                 if button.contains(position):
-                    self.assets.sounds.play("button", 0.4)
+                    self.assets.sounds.play("button", SFX_VOLUMES["button"])
                     if action == "restart":
                         self.start_round()
                     else:
@@ -487,6 +542,33 @@ class OrbitalOrchardGame:
             return False
 
         return False
+
+    def _toggle_mute(self) -> None:
+        """Switch all sound off or back on, and remember the choice.
+
+        Turning sound back on plays a click, so the player hears it worked.
+        """
+        self.muted = not self.muted
+        self._apply_mute()
+        self._save_progress()
+        if not self.muted:
+            self.assets.sounds.play("button", SFX_VOLUMES["button"])
+
+    def _apply_mute(self) -> None:
+        """Pass the mute setting to the effects bank and both music players."""
+        self.assets.sounds.muted = self.muted
+        for player in self.music.values():
+            player.set_muted(self.muted)
+
+    def _pause(self) -> None:
+        """Open the pause menu with its falling two-note cue."""
+        self.scene = "paused"
+        self.assets.sounds.play("pause", SFX_VOLUMES["pause"])
+
+    def _resume(self) -> None:
+        """Close the pause menu with its rising two-note cue."""
+        self.scene = "playing"
+        self.assets.sounds.play("resume", SFX_VOLUMES["resume"])
 
     def start_round(self) -> None:
         """Reset gameplay state and begin a new run.
@@ -508,11 +590,15 @@ class OrbitalOrchardGame:
         self.container_stress = 0.0
         self.goal_reached = False
         self.warning_active = False
+        self.danger_mood = False
+        self._danger_mood_timer = 0.0
         self.launch_angle = 0.0
         self.angle_dragging = False
         self.score = 0
         self.new_record = False
         self.best_tier_seen = 0
+        self._score_to_beat = self.high_score
+        self._high_score_cheered = False
         self.current_tier, self.current_seed = self._roll_spawn_choice()
         self.next_tier, self.next_seed = self._roll_spawn_choice()
         self.spawn_x = self.world.center.x
@@ -526,7 +612,7 @@ class OrbitalOrchardGame:
         # Count this run and persist the updated lifetime stats right away.
         self.games_played += 1
         self._save_progress()
-        self.assets.sounds.play("button", 0.45)
+        self.assets.sounds.play("button", SFX_VOLUMES["start_run"])
 
     def drop_current_body(self) -> None:
         """Launch the current queued body into the container.
@@ -537,8 +623,13 @@ class OrbitalOrchardGame:
         legal spawn point, moving along the aim direction at `LAUNCH_SPEED`,
         the queue moves forward one slot, and the cooldown restarts.
         """
-        # Ignore launches when not actively playing or while the cooldown is active.
-        if self.scene != "playing" or self.drop_timer > 0.0:
+        # Ignore launches when not actively playing. While the cooldown is
+        # active a launch is refused, with a soft "not yet" so the player
+        # knows the click was heard.
+        if self.scene != "playing":
+            return
+        if self.drop_timer > 0.0:
+            self.assets.sounds.play("launch_blocked", SFX_VOLUMES["launch_blocked"])
             return
 
         # A body cap prevents the simulation from becoming too crowded or slow.
@@ -572,7 +663,8 @@ class OrbitalOrchardGame:
         self.current_seed = self.next_seed
         self.next_tier, self.next_seed = self._roll_spawn_choice()
         self.drop_timer = DROP_COOLDOWN
-        self.assets.sounds.play("drop", 0.35)
+        self.assets.sounds.play("drop", SFX_VOLUMES["drop"])
+        self.assets.sounds.play("whoosh", SFX_VOLUMES["whoosh"])
 
     def _update(self, dt: float) -> None:
         """Advance one frame of non-drawing game logic.
@@ -604,12 +696,20 @@ class OrbitalOrchardGame:
             # Physics runs only while the round is active.
             collisions = self.world.step(self.bodies, dt)
 
+            # The hardest impact a body registers this frame gets one thud;
+            # a pile of simultaneous thuds would only sound like noise.
+            hardest = 0.0
             for collision in collisions:
                 # Convert high-energy impacts into particles and pulse animations.
                 if collision.body_a.register_impact(self.now, collision.impact_speed):
                     self.effects.impact(collision.point, collision.body_a.info.color, collision.impact_speed)
+                    hardest = max(hardest, collision.impact_speed)
                 if collision.body_b and collision.body_b.register_impact(self.now, collision.impact_speed):
                     self.effects.impact(collision.point, collision.body_b.info.color, collision.impact_speed)
+                    hardest = max(hardest, collision.impact_speed)
+            if hardest > 0.0:
+                weight, volume = impact_sound(hardest)
+                self.assets.sounds.play("impact", volume, pitch_step=weight)
 
             for body in self.bodies:
                 # Bodies also update their own blink/pulse state each frame.
@@ -627,6 +727,38 @@ class OrbitalOrchardGame:
         # In this game the pause scene still redraws the current frame instead of
         # freezing a screenshot, so effect state can still be stepped safely.
         self.effects.update(dt)
+        self._sync_music()
+
+    def _music_wanted(self) -> str | None:
+        """Return which music track the current moment calls for.
+
+        The tense track plays while a run (playing or paused) is over the
+        danger line, the calm one everywhere else, and nothing after a loss
+        so the game-over jingle stands alone.
+        """
+        if self.scene == "game_over":
+            return None
+        if self.scene in {"playing", "paused"} and self.danger_mood:
+            return "tense"
+        return "calm"
+
+    def _sync_music(self) -> None:
+        """Crossfade to the wanted music track, then let both players update.
+
+        A change between calm and tense fades one out while the other fades
+        in; music starting from silence fades in more slowly, and a loss
+        fades the music out under the game-over jingle.
+        """
+        wanted = self._music_wanted()
+        if wanted != self._music_mood:
+            if self._music_mood is not None:
+                self.music[self._music_mood].stop(MUSIC_CROSSFADE_MS if wanted else MUSIC_GAME_OVER_FADE_MS)
+            if wanted is not None:
+                self.music[wanted].start(MUSIC_CROSSFADE_MS if self._music_mood else MUSIC_FADE_IN_MS)
+            self._music_mood = wanted
+        for player in self.music.values():
+            # Hands a finished background render to the mixer (main thread only).
+            player.update()
 
     def _update_spawn_aim(self, dt: float) -> None:
         """Update launcher position and angle from mouse/keyboard input.
@@ -753,8 +885,11 @@ class OrbitalOrchardGame:
             self.score += gained
             self.effects.merge(merged_body.position, merged_body.info.color, gained, event.target_tier)
             if self._combo_count >= 2:
-                # A chain of quick merges earns its own callout popup.
+                # A chain of quick merges earns its own callout popup, and a
+                # chime that climbs one step with every link of the chain.
                 self.effects.combo(self._combo_count, merged_body.position)
+                chime = min(self._combo_count, COMBO_CHIME_TOP)
+                self.assets.sounds.play("combo", SFX_VOLUMES["combo"], pitch_step=chime)
             self.best_tier_seen = max(self.best_tier_seen, event.target_tier)
 
             # A merge that beats the best tier ever reached is a personal record.
@@ -766,21 +901,27 @@ class OrbitalOrchardGame:
                 self.goal_reached = True
                 self.effects.announce(f"{merged_body.info.name} reached!", merged_body.position)
                 self.effects.reward_burst(merged_body.position, merged_body.info.color)
-                self.assets.sounds.play("record", 0.45)
+                self.assets.sounds.play("record", SFX_VOLUMES["record_top_tier"])
             elif new_personal_best and event.target_tier >= 5:
                 # First time the player has ever reached this mid/high tier.
                 self.effects.reward_burst(merged_body.position, merged_body.info.color)
-                self.assets.sounds.play("record", 0.42)
+                self.assets.sounds.play("record", SFX_VOLUMES["record"])
             elif event.target_tier >= len(TIERS) - 3:
-                self.assets.sounds.play("big_merge", 0.42)
+                self.assets.sounds.play("big_merge", SFX_VOLUMES["big_merge"], pitch_step=event.target_tier)
             else:
-                self.assets.sounds.play("merge", 0.36)
+                # Each tier merges one step higher up the scale.
+                self.assets.sounds.play("merge", SFX_VOLUMES["merge"], pitch_step=event.target_tier)
 
         if consumed:
             # Remove all consumed bodies, then append the newly spawned merged bodies.
             self.bodies = [body for body in self.bodies if body.body_id not in consumed]
             self.bodies.extend(spawned)
             self._refresh_high_score()
+            # Passing the old high score mid-run sparkles once. A first-ever
+            # run has no score to beat yet, so it stays quiet.
+            if not self._high_score_cheered and 0 < self._score_to_beat < self.score:
+                self._high_score_cheered = True
+                self.assets.sounds.play("high_score", SFX_VOLUMES["high_score"])
             if (self.high_score, self.lifetime_best_tier) != records_before:
                 self._save_progress()
 
@@ -810,6 +951,22 @@ class OrbitalOrchardGame:
         # from instantly causing game over while it is still entering the field.
         warning = any(body.top < FAIL_LINE_Y and body.age(self.now) > FAIL_AGE_GATE for body in self.bodies)
         self.warning_active = warning
+        # What the player HEARS (the danger cue and the tense music) follows a
+        # steadier "danger mood" that only flips after the new state has held
+        # for DANGER_MOOD_HOLD seconds.
+        # Beginner note: this is called hysteresis. A body resting exactly on
+        # the line can cross it on one frame and not the next; acting on every
+        # flip would make the cues chatter and restart the music each frame.
+        if warning != self.danger_mood:
+            self._danger_mood_timer += dt
+            if self._danger_mood_timer >= DANGER_MOOD_HOLD:
+                self.danger_mood = warning
+                self._danger_mood_timer = 0.0
+                # Entering and leaving danger each get a short cue of their own.
+                cue = "danger_on" if warning else "danger_off"
+                self.assets.sounds.play(cue, SFX_VOLUMES[cue])
+        else:
+            self._danger_mood_timer = 0.0
         # The fail timer fills while danger is active and drains when the
         # player recovers (the exact rates live in rules.py).
         self.fail_timer = advance_fail_timer(self.fail_timer, dt, warning)
@@ -818,7 +975,7 @@ class OrbitalOrchardGame:
             # faster the tone repeats, so danger is felt as well as seen.
             if self.now >= self._next_warning_beep:
                 ratio = fail_ratio(self.fail_timer)
-                self.assets.sounds.play("warning", 0.28 + ratio * 0.3)
+                self.assets.sounds.play("warning", WARNING_VOLUME_MIN + ratio * WARNING_VOLUME_SPAN)
                 self._next_warning_beep = self.now + warning_beep_interval(ratio)
         else:
             # Reset the beep timer so the next danger spell starts fresh.
@@ -839,9 +996,17 @@ class OrbitalOrchardGame:
             return
         self.scene = "game_over"
         self.warning_active = False
+        self.danger_mood = False
+        self._danger_mood_timer = 0.0
         self._refresh_high_score()
         self._save_progress()
-        self.assets.sounds.play("game_over", 0.42)
+        # The music fades out and a jingle sums up the run: a fanfare for a
+        # new high score, otherwise a gentle falling phrase. Like the mid-run
+        # cheer, the fanfare needs an earlier score to beat, so a first-ever
+        # run ends with the ordinary phrase.
+        self._sync_music()
+        beat_a_record = self.new_record and self._score_to_beat > 0
+        self.assets.sounds.play("record" if beat_a_record else "game_over", SFX_VOLUMES["jingle"])
 
     def _roll_spawn_tier(self) -> int:
         """Randomly choose a low-tier body for the queue based on weighted odds."""
@@ -868,7 +1033,7 @@ class OrbitalOrchardGame:
         return self._roll_spawn_tier(), self.random.random()
 
     def _load_progress(self) -> dict:
-        """Read the saved high score and lifetime stats, falling back safely."""
+        """Read the saved high score, lifetime stats and sound setting, falling back safely."""
         try:
             data = json.loads(SAVE_DATA_PATH.read_text(encoding="utf-8")) if SAVE_DATA_PATH.exists() else {}
             return sanitize_progress(data)
@@ -878,7 +1043,7 @@ class OrbitalOrchardGame:
             # cannot become an int; `RecursionError` covers absurdly deep
             # nesting that exhausts the JSON reader. (`json.JSONDecodeError`
             # is a kind of `ValueError`, so it is already covered.)
-            return {"high_score": 0, "games_played": 0, "best_tier": 0}
+            return {"high_score": 0, "games_played": 0, "best_tier": 0, "muted": False}
 
     def _refresh_high_score(self) -> None:
         """Promote the current score to a new high score when it beats the old best."""
@@ -887,13 +1052,14 @@ class OrbitalOrchardGame:
             self.new_record = True
 
     def _save_progress(self) -> None:
-        """Persist high score and lifetime stats with a crash-safe atomic write."""
+        """Persist high score, lifetime stats and the sound setting with a crash-safe atomic write."""
         if not self.persist:
             return
         payload = {
             "high_score": self.high_score,
             "games_played": self.games_played,
             "best_tier": self.lifetime_best_tier,
+            "muted": self.muted,
         }
         try:
             SAVE_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -964,6 +1130,7 @@ class OrbitalOrchardGame:
             draw_hud(self.canvas, self, self.assets)
             self.pause_button.draw(self.canvas, self.assets, hover_mouse)
             self.restart_button.draw(self.canvas, self.assets, hover_mouse)
+            draw_sound_toggle(self.canvas, self.assets, self.sound_button, self.muted, hover_mouse)
 
         # Finally draw whichever full-screen overlay matches the current scene.
         if self.scene == "menu":
@@ -976,6 +1143,7 @@ class OrbitalOrchardGame:
                 self.lifetime_best_tier_name,
                 hover_mouse,
             )
+            draw_sound_toggle(self.canvas, self.assets, self.menu_sound_button, self.muted, hover_mouse)
         elif self.scene == "paused":
             draw_pause_overlay(
                 self.canvas,
@@ -1176,7 +1344,18 @@ class OrbitalOrchardGame:
 
     def _nudge_launch_angle(self, delta: float) -> None:
         """Adjust the launcher angle while keeping it inside the allowed range."""
-        self.launch_angle = clamp(self.launch_angle + delta, -MAX_LAUNCH_ANGLE, MAX_LAUNCH_ANGLE)
+        self._aim_at(self.launch_angle + delta)
+
+    def _aim_at(self, angle: float) -> None:
+        """Set the launcher angle (clamped to the legal range), ticking at each detent.
+
+        The aim clicks softly every `AIM_TICK_DEGREES`, like a dial, so fine
+        aiming can be felt as well as seen.
+        """
+        angle = clamp(angle, -MAX_LAUNCH_ANGLE, MAX_LAUNCH_ANGLE)
+        if aim_tick_crossed(self.launch_angle, angle):
+            self.assets.sounds.play("aim_tick", SFX_VOLUMES["aim_tick"])
+        self.launch_angle = angle
 
     def _set_launch_angle_from_point(self, point: tuple[int, int]) -> None:
         """Aim the launcher toward a point in internal canvas coordinates."""
@@ -1194,8 +1373,7 @@ class OrbitalOrchardGame:
         # `atan2(x, y)` here turns the 2D direction into an angle in degrees.
         # We use x first and y second because our angle is defined as sideways
         # deviation from "straight down", not the usual math convention.
-        angle = math.degrees(math.atan2(delta.x, delta.y))
-        self.launch_angle = clamp(angle, -MAX_LAUNCH_ANGLE, MAX_LAUNCH_ANGLE)
+        self._aim_at(math.degrees(math.atan2(delta.x, delta.y)))
 
     def _recommended_window_size(self) -> tuple[int, int]:
         """Choose a starting window size that fits on the current monitor."""

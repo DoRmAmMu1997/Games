@@ -12,6 +12,7 @@ Beginner note:
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import sys
@@ -30,11 +31,26 @@ if str(GAME_DIR) not in sys.path:
 import pygame
 
 import game as game_module
+from audio import MusicPlayer
 from entities import CelestialBody
 from game import OrbitalOrchardGame
 from merge_logic import find_merge_events
 from physics import PhysicsWorld
-from settings import FAIL_AGE_GATE, SPAWN_Y, TIERS
+from settings import (
+    AIM_TICK_DEGREES,
+    COMBO_CHIME_TOP,
+    DANGER_MOOD_HOLD,
+    FAIL_AGE_GATE,
+    FAIL_LINE_Y,
+    MUSIC_CALM_CHANNEL,
+    MUSIC_CROSSFADE_MS,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_TENSE_CHANNEL,
+    SFX_VOLUMES,
+    SPAWN_Y,
+    TIERS,
+)
 
 
 class GameTestCase(unittest.TestCase):
@@ -369,7 +385,7 @@ class NoPersistTests(GameTestCase):
 class CorruptSaveTests(GameTestCase):
     """A damaged save file loads as fresh progress instead of crashing startup."""
 
-    DEFAULTS = {"high_score": 0, "games_played": 0, "best_tier": 0}
+    DEFAULTS = {"high_score": 0, "games_played": 0, "best_tier": 0, "muted": False}
 
     def _load_text(self, text: str) -> dict:
         """Write ``text`` as the save file and return what the game loads from it."""
@@ -505,6 +521,412 @@ class SpawnInsideCircleTests(GameTestCase):
                         game.launch_angle = angle
                         game._draw_spawn_indicator(pygame.Vector2())
                         self.assertGreater(len(captured[-1]), 5)
+
+
+class MusicTests(GameTestCase):
+    """The soundtrack follows the scene: calm, tense in danger, silent after a loss."""
+
+    def setUp(self) -> None:
+        """Swap the real players and sound bank for mocks that record calls."""
+
+        super().setUp()
+        self.calm = mock.Mock()
+        self.tense = mock.Mock()
+        self.sounds = mock.Mock()
+        self.game.music = {"calm": self.calm, "tense": self.tense}
+        self.game.assets.sounds = self.sounds
+
+    def test_game_builds_calm_and_tense_players(self) -> None:
+        """A new game owns a calm and a tense player on their reserved channels."""
+
+        music = self.make_game().music
+        self.assertIsInstance(music["calm"], MusicPlayer)
+        self.assertEqual((music["calm"].channel, music["tense"].channel), (MUSIC_CALM_CHANNEL, MUSIC_TENSE_CHANNEL))
+
+    def test_menu_plays_the_calm_track(self) -> None:
+        """The first frame on the menu fades the calm track in and updates both players."""
+
+        self.game._update(0.016)
+        self.calm.start.assert_called_once_with(MUSIC_FADE_IN_MS)
+        self.tense.start.assert_not_called()
+        self.calm.update.assert_called_once_with()
+        self.tense.update.assert_called_once_with()
+
+    def test_danger_crossfades_to_tense_and_back(self) -> None:
+        """Danger swaps calm for tense; recovering swaps back; nothing repeats meanwhile."""
+
+        game = self.game
+        game.start_round()
+        game._sync_music()
+        game.danger_mood = True
+        game._sync_music()
+        game._sync_music()
+        self.calm.stop.assert_called_once_with(MUSIC_CROSSFADE_MS)
+        self.tense.start.assert_called_once_with(MUSIC_CROSSFADE_MS)
+        game.danger_mood = False
+        game._sync_music()
+        self.tense.stop.assert_called_once_with(MUSIC_CROSSFADE_MS)
+        self.assertEqual(self.calm.start.call_args_list[-1], mock.call(MUSIC_CROSSFADE_MS))
+
+    def test_menu_is_calm_even_after_leaving_a_run_in_danger(self) -> None:
+        """Back on the menu the calm track plays, whatever the run's danger was."""
+
+        self.game.scene = "menu"
+        self.game.danger_mood = True
+        self.game._sync_music()
+        self.calm.start.assert_called_once_with(MUSIC_FADE_IN_MS)
+
+    def test_losing_fades_the_music_and_plays_the_game_over_jingle(self) -> None:
+        """A run that sets no record fades the music out under the game-over phrase."""
+
+        game = self.game
+        game.start_round()
+        game.high_score = 10
+        game._sync_music()
+        game._trigger_game_over()
+        self.calm.stop.assert_called_once_with(MUSIC_GAME_OVER_FADE_MS)
+        self.sounds.play.assert_called_with("game_over", mock.ANY)
+
+    def test_record_run_ends_with_the_record_jingle(self) -> None:
+        """A run that beats the high score ends with the record fanfare instead."""
+
+        game = self.game
+        game.high_score = 10
+        game.start_round()
+        game.score = game.high_score + 50
+        game._trigger_game_over()
+        self.sounds.play.assert_called_with("record", mock.ANY)
+
+    def test_a_first_ever_run_ends_with_the_game_over_phrase(self) -> None:
+        """With no earlier score to beat, game over is not a "new record" fanfare.
+
+        The mid-run cheer already stays quiet on a first-ever run; the
+        game-over jingle follows the same rule.
+        """
+
+        game = self.game
+        game.high_score = 0
+        game.start_round()
+        game.score = 40
+        game._trigger_game_over()
+        self.sounds.play.assert_called_with("game_over", mock.ANY)
+
+    def test_play_again_brings_the_music_back(self) -> None:
+        """Starting a new run after a loss fades the calm track back in."""
+
+        game = self.game
+        game._sync_music()
+        game.start_round()
+        game._trigger_game_over()
+        game.start_round()
+        game._sync_music()
+        self.assertEqual(self.calm.start.call_args_list, [mock.call(MUSIC_FADE_IN_MS)] * 2)
+
+
+class SoundEventTests(GameTestCase):
+    """Player actions and game events ask the sound bank for the right sounds."""
+
+    def setUp(self) -> None:
+        """Start a round with a mock sound bank that records every request."""
+
+        super().setUp()
+        self.game.start_round()
+        self.sounds = mock.Mock()
+        self.game.assets.sounds = self.sounds
+
+    def names(self) -> list[str]:
+        """Return the names of every sound requested so far, in order."""
+
+        return [call.args[0] for call in self.sounds.play.call_args_list]
+
+    def _merge(self, tier: int) -> None:
+        """Merge two touching ``tier`` bodies right now."""
+
+        game = self.game
+        radius = TIERS[tier].radius
+        center = game.world.center
+        game.bodies = [
+            CelestialBody(game._next_body_id, tier, pygame.Vector2(center), pygame.Vector2(), game.now - 5.0),
+            CelestialBody(
+                game._next_body_id + 1,
+                tier,
+                pygame.Vector2(center.x + radius, center.y),
+                pygame.Vector2(),
+                game.now - 5.0,
+            ),
+        ]
+        game._next_body_id += 2
+        game._apply_merges(find_merge_events(game.bodies, game.now))
+
+    def test_launch_plays_the_drop_and_a_whoosh(self) -> None:
+        """A launch thumps and whooshes."""
+
+        self.game.drop_current_body()
+        self.assertEqual(self.names(), ["drop", "whoosh"])
+        self.sounds.play.assert_called_with("whoosh", SFX_VOLUMES["whoosh"])
+
+    def test_launch_during_the_cooldown_is_refused_audibly(self) -> None:
+        """A launch attempt while recharging plays the "not yet" sound and launches nothing."""
+
+        self.game.drop_current_body()
+        self.game.drop_current_body()
+        self.assertEqual(self.names(), ["drop", "whoosh", "launch_blocked"])
+        self.assertEqual(len(self.game.bodies), 1)
+
+    def test_aim_ticks_when_a_detent_is_crossed(self) -> None:
+        """Turning past a detent ticks once; a tiny turn inside one is silent."""
+
+        self.game._nudge_launch_angle(AIM_TICK_DEGREES / 4)
+        self.assertEqual(self.names(), [])
+        self.game._nudge_launch_angle(AIM_TICK_DEGREES)
+        self.assertEqual(self.names(), ["aim_tick"])
+        self.game._set_launch_angle_from_point((round(self.game.spawn_x) - 300, SPAWN_Y + 300))
+        self.assertEqual(self.names(), ["aim_tick", "aim_tick"])
+
+    def test_aim_at_the_limit_stays_silent(self) -> None:
+        """Pushing against the angle limit does not keep ticking."""
+
+        self.game._nudge_launch_angle(1000.0)
+        self.game._nudge_launch_angle(1000.0)
+        self.assertEqual(self.names(), ["aim_tick"])
+
+    def test_hardest_impact_of_the_frame_thuds(self) -> None:
+        """One thud per frame, weighted and scaled by the hardest new impact."""
+
+        body = CelestialBody(1, 0, pygame.Vector2(self.game.world.center), pygame.Vector2(), self.game.now)
+        hits = [
+            mock.Mock(body_a=body, body_b=None, impact_speed=300.0, point=pygame.Vector2()),
+            mock.Mock(body_a=body, body_b=None, impact_speed=900.0, point=pygame.Vector2()),
+        ]
+        with (
+            mock.patch.object(self.game.world, "step", return_value=hits),
+            mock.patch.object(CelestialBody, "register_impact", return_value=True),
+        ):
+            self.game._update(0.016)
+        weight, volume = game_module.impact_sound(900.0)
+        self.sounds.play.assert_any_call("impact", volume, pitch_step=weight)
+        self.assertEqual(self.names().count("impact"), 1)
+
+    def test_ignored_impacts_stay_silent(self) -> None:
+        """Impacts the bodies do not register (too soft or too soon) make no thud."""
+
+        body = CelestialBody(1, 0, pygame.Vector2(self.game.world.center), pygame.Vector2(), self.game.now)
+        hit = mock.Mock(body_a=body, body_b=None, impact_speed=900.0, point=pygame.Vector2())
+        with (
+            mock.patch.object(self.game.world, "step", return_value=[hit]),
+            mock.patch.object(CelestialBody, "register_impact", return_value=False),
+        ):
+            self.game._update(0.016)
+        self.assertNotIn("impact", self.names())
+
+    def test_merge_pitch_rises_with_the_tier(self) -> None:
+        """A merge asks for the variant of the tier it creates."""
+
+        self.game.high_score = 10_000
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        self._merge(2)
+        self.sounds.play.assert_any_call("merge", 0.36, pitch_step=3)
+
+    def test_big_merge_pitch_rises_with_the_tier(self) -> None:
+        """A late-tier merge asks for the big merge variant of its tier."""
+
+        self.game.high_score = 10_000
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        self.game.goal_reached = True
+        self._merge(len(TIERS) - 3)
+        self.sounds.play.assert_any_call("big_merge", 0.42, pitch_step=len(TIERS) - 2)
+
+    def test_combo_chime_climbs_with_the_chain(self) -> None:
+        """Chained merges chime one step higher per link, up to the top chime."""
+
+        self.game.high_score = 10_000
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        for _ in range(COMBO_CHIME_TOP + 1):
+            self._merge(0)
+        steps = [call.kwargs["pitch_step"] for call in self.sounds.play.call_args_list if call.args[0] == "combo"]
+        self.assertEqual(steps, [*range(2, COMBO_CHIME_TOP + 1), COMBO_CHIME_TOP])
+
+    def test_passing_the_high_score_cheers_once_per_run(self) -> None:
+        """Beating the old high score mid-run plays its sparkle once."""
+
+        self.game.high_score = 2
+        self.game.start_round()
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        for _ in range(3):
+            self._merge(0)
+        self.assertEqual(self.names().count("high_score"), 1)
+
+    def test_a_first_ever_run_does_not_cheer(self) -> None:
+        """With no high score to beat yet, the first points are not a "new record"."""
+
+        self.game.high_score = 0
+        self.game.start_round()
+        self.game.lifetime_best_tier = len(TIERS) - 1
+        self._merge(0)
+        self.assertNotIn("high_score", self.names())
+
+    def _hold(self, bodies: list[CelestialBody], seconds: float) -> None:
+        """Run the fail check every frame for `seconds` with `bodies` in play."""
+
+        self.game.bodies = bodies
+        for _ in range(round(seconds / 0.016)):
+            self.game._update_fail_state(0.016)
+
+    def test_danger_is_announced_when_entered_and_cleared(self) -> None:
+        """Holding danger, then holding clear, each play their cue once."""
+
+        game = self.game
+        high = CelestialBody(1, 0, pygame.Vector2(game.world.center.x, FAIL_LINE_Y - 40), pygame.Vector2(), -10.0)
+        self._hold([high], DANGER_MOOD_HOLD + 0.1)
+        self.assertTrue(game.danger_mood)
+        self._hold([], DANGER_MOOD_HOLD + 0.1)
+        self.assertFalse(game.danger_mood)
+        self.assertEqual([name for name in self.names() if name.startswith("danger")], ["danger_on", "danger_off"])
+
+    def test_a_stack_flickering_on_the_line_stays_quiet(self) -> None:
+        """A body jittering across the line every frame plays no cues and keeps the music.
+
+        Physics jitter can flip the danger check true and false on alternate
+        frames. The heard danger mood must only change after the new state has
+        held for `DANGER_MOOD_HOLD`, so the cues do not chatter and the music
+        does not restart over and over.
+        """
+
+        game = self.game
+        high = CelestialBody(1, 0, pygame.Vector2(game.world.center.x, FAIL_LINE_Y - 40), pygame.Vector2(), -10.0)
+        tense = game.music["tense"]
+        with mock.patch.object(tense, "start", wraps=tense.start) as start:
+            for frame in range(round(2.0 / 0.016)):
+                game.bodies = [high] if frame % 2 else []
+                game._update_fail_state(0.016)
+                game._sync_music()
+        self.assertFalse(game.danger_mood)
+        self.assertNotIn("danger_on", self.names())
+        self.assertNotIn("danger_off", self.names())
+        self.assertEqual(start.call_count, 0)
+
+    def test_pause_and_resume_have_their_own_sounds(self) -> None:
+        """Esc pauses, Enter, Space and P resume, each with its cue."""
+
+        game = self.game
+        for key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_p):
+            game._handle_keydown(pygame.K_ESCAPE)
+            self.assertEqual(game.scene, "paused")
+            game._handle_keydown(key)
+            self.assertEqual(game.scene, "playing")
+        self.assertEqual(self.names(), ["pause", "resume"] * 3)
+
+    def test_pause_and_resume_buttons_have_their_own_sounds(self) -> None:
+        """The Pause and Resume buttons play the same cues as the keys."""
+
+        game = self.game
+        game._handle_click(game.pause_button.rect.center)
+        game._handle_click(game.resume_button.rect.center)
+        self.assertEqual(self.names(), ["pause", "resume"])
+        self.assertEqual(game.scene, "playing")
+
+
+class MuteTests(GameTestCase):
+    """Ctrl+M and the on-screen toggles switch all sound off and on, and it is remembered."""
+
+    def setUp(self) -> None:
+        """Swap the players and the bank for mocks that record calls."""
+
+        super().setUp()
+        self.calm = mock.Mock()
+        self.tense = mock.Mock()
+        self.sounds = mock.Mock()
+        self.game.music = {"calm": self.calm, "tense": self.tense}
+        self.game.assets.sounds = self.sounds
+
+    def test_ctrl_m_mutes_and_unmutes(self) -> None:
+        """Ctrl+M silences effects and music, then brings them back."""
+
+        game = self.game
+        game._handle_keydown(pygame.K_m, pygame.KMOD_LCTRL)
+        self.assertTrue(game.muted)
+        self.assertTrue(self.sounds.muted)
+        self.calm.set_muted.assert_called_with(True)
+        self.tense.set_muted.assert_called_with(True)
+        game._handle_keydown(pygame.K_m, pygame.KMOD_RCTRL)
+        self.assertFalse(game.muted)
+        self.assertFalse(self.sounds.muted)
+        self.calm.set_muted.assert_called_with(False)
+
+    def test_plain_m_still_opens_the_menu(self) -> None:
+        """Without Ctrl, M keeps its old job and leaves sound alone."""
+
+        game = self.game
+        game.start_round()
+        game._handle_keydown(pygame.K_m)
+        self.assertEqual(game.scene, "menu")
+        self.assertFalse(game.muted)
+
+    def test_ctrl_m_does_not_leave_the_run(self) -> None:
+        """Ctrl+M in a run toggles sound without jumping to the menu."""
+
+        game = self.game
+        game.start_round()
+        game._handle_keydown(pygame.K_m, pygame.KMOD_CTRL)
+        self.assertEqual(game.scene, "playing")
+        self.assertTrue(game.muted)
+
+    def test_sidebar_and_menu_buttons_toggle_sound(self) -> None:
+        """The menu toggle works on the menu; the sidebar toggle works in every in-run scene."""
+
+        game = self.game
+        self.assertTrue(game._handle_click(game.menu_sound_button.rect.center))
+        self.assertTrue(game.muted)
+        game.start_round()
+        for scene in ("playing", "paused", "game_over"):
+            game.scene = scene
+            before = game.muted
+            with self.subTest(scene=scene):
+                self.assertTrue(game._handle_click(game.sound_button.rect.center))
+                self.assertNotEqual(game.muted, before)
+
+    def test_sidebar_toggle_clears_the_other_buttons(self) -> None:
+        """The sidebar toggle does not overlap Pause or Restart."""
+
+        for other in (self.game.pause_button, self.game.restart_button):
+            self.assertFalse(self.game.sound_button.rect.colliderect(other.rect))
+
+    def test_mute_survives_a_restart_of_the_game(self) -> None:
+        """The setting is saved and a new game starts muted, music and effects alike."""
+
+        self.game._toggle_mute()
+        self.assertTrue(json.loads(self.save_path.read_text(encoding="utf-8"))["muted"])
+        reloaded = self.make_game()
+        self.assertTrue(reloaded.muted)
+        self.assertTrue(reloaded.assets.sounds.muted)
+        self.assertTrue(all(player._muted for player in reloaded.music.values()))
+
+    def test_saving_progress_keeps_the_mute_setting(self) -> None:
+        """Ordinary progress saves write the current mute setting too."""
+
+        self.game.muted = True
+        self.game.start_round()
+        self.assertTrue(json.loads(self.save_path.read_text(encoding="utf-8"))["muted"])
+
+    def test_non_persisting_game_never_writes_the_setting(self) -> None:
+        """With ``persist=False`` toggling sound leaves the save untouched."""
+
+        self.save_path.parent.mkdir(parents=True, exist_ok=True)
+        original = '{"high_score": 5, "games_played": 3, "best_tier": 2, "muted": true}'
+        self.save_path.write_text(original, encoding="utf-8")
+        game = OrbitalOrchardGame(persist=False)
+        self.assertTrue(game.muted)
+        game._toggle_mute()
+        self.assertFalse(game.muted)
+        self.assertEqual(self.save_path.read_text(encoding="utf-8"), original)
+
+    def test_unmuting_confirms_with_a_click(self) -> None:
+        """Turning sound back on plays a button click so the player hears it work."""
+
+        self.game._toggle_mute()
+        self.sounds.play.assert_not_called()
+        self.game._toggle_mute()
+        self.sounds.play.assert_called_once_with("button", mock.ANY)
 
 
 if __name__ == "__main__":

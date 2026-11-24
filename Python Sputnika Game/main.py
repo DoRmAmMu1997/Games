@@ -21,9 +21,12 @@ from pathlib import Path
 
 import pygame
 
+from audio import init_mixer, reserve_channels
+
 # `OrbitalOrchardGame` is the main "controller" object for the whole program.
 # It owns the window, the current scene, the list of bodies, and the game loop.
 from game import OrbitalOrchardGame
+from settings import MUSIC_CHANNEL_COUNT
 
 
 def _resource_path(name: str) -> Path:
@@ -53,19 +56,17 @@ def main() -> None:
       raises an exception.
     """
     # pygame has a few subsystems that care about initialization order.
-    # Audio is the most sensitive one here, so we configure it first.
-    # `pre_init` asks pygame to use these audio settings when the mixer starts.
-    # Keeping this before `pygame.init()` gives more predictable sound latency.
-    #
-    # The numbers mean:
-    # - 22050: sample rate in Hz,
-    # - -16: signed 16-bit audio samples,
-    # - 1: mono audio,
-    # - 512: small-ish audio buffer for responsive sound playback.
-    pygame.mixer.pre_init(22050, -16, 1, 512)
+    # Audio is the most sensitive one here, so we configure it first:
+    # `init_mixer()` asks for the shared mixer format (22050 Hz, 16-bit,
+    # stereo, a small 512-sample buffer for responsive sound) BEFORE
+    # `pygame.init()` opens the mixer. See audio.py for the details.
+    init_mixer()
 
     # Initialize every pygame subsystem we use: display, mixer, fonts, input, etc.
     pygame.init()
+    # Now that the mixer is open, keep the music channels (calm and tense)
+    # away from effects.
+    reserve_channels(MUSIC_CHANNEL_COUNT)
     try:
         # Load the generated project icon if it is available.
         # This is optional on purpose: if the icon file is missing for any reason,

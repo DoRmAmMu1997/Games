@@ -8,7 +8,10 @@ magic numbers through the code. The save paths intentionally live under
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
+
+from audio import Note, midi
 
 # ---------------------------------------------------------------------------
 # Window and timing
@@ -173,3 +176,296 @@ def _user_save_dir() -> Path:
 SAVE_DIR = _user_save_dir()
 STATS_PATH = SAVE_DIR / "stats.json"          # lifetime games and wins
 SAVEGAME_PATH = SAVE_DIR / "savegame.json"    # one resumable in-progress game
+
+
+# ---------------------------------------------------------------------------
+# Sound
+# ---------------------------------------------------------------------------
+# Every sound is a recipe: a list of `Note`s that audio.py renders into
+# samples when the game starts (no audio files ship with the game). Pitches
+# are MIDI note numbers through `midi()`: 69 is A4 (440 Hz), +12 is one octave
+# up. The palette is bright marimba-like plucks in G major, the same key as
+# the music, so effects that overlap the tune or each other stay in harmony.
+#
+# Beginner note:
+# - A "pluck" note below has no sustain: it rises over a few milliseconds and
+#   then rings down over `ring` seconds, like a mallet striking a marimba bar.
+# - Volumes stay well under 1.0 on purpose: several effects often play at
+#   once (a hop, a capture and a turn change) and their samples add up.
+# - A name such as "hop@3" or "dice@5" is a *pitch variant*: the same sound
+#   pre-rendered at another pitch. `SoundBank.play(name, pitch_step=n)` plays
+#   "name@n" when it exists and falls back to the plain "name" otherwise, so
+#   the plain entry doubles as step 0 ("hop") or face 1 ("dice").
+SFX_PLUCK_ATTACK = 0.004  # A struck note reaches full volume this fast (s).
+# Fade used when a pluck is cut short before it has rung down (the music loop
+# trims notes at its end); a pluck that rings out fully is already silent here.
+SFX_PLUCK_RELEASE = 0.02  # Seconds.
+SFX_ROOT_NOTE = 67  # G4: the home note of the effects' G major ladder.
+G_MAJOR_STEPS = (0, 2, 4, 5, 7, 9, 11)  # Semitones above G for each degree of the scale.
+# The dice sound is a rattle of short noise ticks (the die tumbling), then the
+# face's own note lands DICE_RESULT_AT seconds in, as the tray animation stops.
+# Each tick is drawn at a different noise rate, so the rattle sounds uneven.
+DICE_RATTLE_TICKS = ((0.0, 3200.0), (0.05, 2400.0), (0.1, 3600.0), (0.16, 2800.0), (0.22, 3000.0), (0.27, 2200.0))
+DICE_RESULT_AT = 0.33  # Seconds; a little under DICE_ANIM_MS so the note lands with the last face.
+# The note each die face lands on (faces 1 to 6): the G major pentatonic
+# ladder G A B D E G, so a 6 lands an octave above a 1.
+DICE_FACE_NOTES = (67, 69, 71, 74, 76, 79)
+# A token's hops climb the G major ladder one degree per cell, so the player
+# hears the count: hop n of a move plays variant "hop@n". A move is at most
+# six hops; HOP_PITCH_STEPS variants cover that.
+HOP_PITCH_STEPS = 6
+
+
+def pluck(pitch: float, start: float, ring: float, volume: float, voice: str = "pluck") -> Note:
+    """Return a struck note: a near-instant attack, then a ring down to silence.
+
+    Args:
+        pitch: MIDI note number (converted to Hz with `midi`).
+        start: Seconds from the start of the sound.
+        ring: Seconds the note takes to fade from full volume to silence.
+        volume: Peak loudness, 0 to 1.
+        voice: Wavetable name from audio.py; "pluck" is the marimba-like tone.
+
+    Beginner note:
+    - In ADSR terms this is attack `SFX_PLUCK_ATTACK`, decay `ring`, and
+      sustain 0: the note is held just long enough (attack plus ring) for the
+      decay to reach silence, so nothing is left for the release to fade.
+    """
+
+    return Note(
+        midi(pitch),
+        start,
+        SFX_PLUCK_ATTACK + ring,
+        voice,
+        volume,
+        attack=SFX_PLUCK_ATTACK,
+        decay=ring,
+        sustain=0.0,
+        release=SFX_PLUCK_RELEASE,
+    )
+
+
+def scale_note(degree: int) -> int:
+    """Return the MIDI note `degree` steps up the G major ladder from SFX_ROOT_NOTE.
+
+    Degrees past the seventh wrap into the next octave: degree 0 is G4 (67),
+    degree 6 is F#5 (78) and degree 7 is G5 (79).
+    """
+
+    octave, step = divmod(degree, len(G_MAJOR_STEPS))
+    return SFX_ROOT_NOTE + 12 * octave + G_MAJOR_STEPS[step]
+
+
+def dice_notes(face: int) -> list[Note]:
+    """Return the dice sound for `face` (1 to 6): a noise rattle, then the face's marimba note."""
+
+    notes = [
+        Note(rate, at, 0.012, "noise", 0.16, attack=0.001, decay=0.025, sustain=0.0, release=0.01)
+        for at, rate in DICE_RATTLE_TICKS
+    ]
+    pitch = DICE_FACE_NOTES[face - 1]
+    notes.append(pluck(pitch, DICE_RESULT_AT, 0.2, 0.3))
+    notes.append(pluck(pitch + 12, DICE_RESULT_AT, 0.12, 0.08, voice="sine"))
+    return notes
+
+
+def hop_notes(step: int) -> list[Note]:
+    """Return one hop of a token: a short marimba tap `step` degrees up the ladder, with a wooden knock."""
+
+    return [
+        pluck(scale_note(step), 0.0, 0.07, 0.22),
+        Note(900.0, 0.0, 0.008, "noise", 0.05, attack=0.001, decay=0.015, sustain=0.0, release=0.005),
+    ]
+
+
+SFX_RECIPES: dict[str, list[Note]] = {
+    "dice": dice_notes(1),
+    **{f"dice@{face}": dice_notes(face) for face in range(2, 7)},
+    # A rolled 6: a quick high G major sparkle, timed to land with the die.
+    "six": [
+        pluck(pitch, DICE_RESULT_AT + 0.06 + index * 0.05, 0.25, 0.16, voice="sine")
+        for index, pitch in enumerate((79, 83, 86, 91))
+    ],
+    # A third 6 in a row forfeits the roll: a deflating G minor fall, also
+    # timed to follow the die.
+    "three_sixes": [
+        pluck(74, DICE_RESULT_AT + 0.06, 0.14, 0.2, voice="square"),
+        pluck(70, DICE_RESULT_AT + 0.2, 0.14, 0.2, voice="square"),
+        Note(midi(67), DICE_RESULT_AT + 0.34, 0.2, "triangle", 0.24, glide=-40.0, attack=0.01, decay=0.2,
+             sustain=0.4, release=0.15),
+    ],
+    # A token leaves its yard: a bouncy rising pop G - D - G.
+    "leave_yard": [
+        Note(midi(55), 0.0, 0.06, "sine", 0.18, glide=900.0, attack=0.004, decay=0.06, sustain=0.0, release=0.02),
+        *(pluck(pitch, 0.03 + index * 0.06, 0.14, 0.24) for index, pitch in enumerate((67, 74, 79))),
+    ],
+    "hop": hop_notes(0),
+    **{f"hop@{step}": hop_notes(step) for step in range(1, HOP_PITCH_STEPS)},
+    # A capture: two falling "bonks" with a dull thud, as the token is knocked home.
+    "capture": [
+        Note(midi(62), 0.0, 0.14, "triangle", 0.34, glide=-520.0, attack=0.002, decay=0.14, sustain=0.0,
+             release=0.02),
+        Note(500.0, 0.0, 0.03, "noise", 0.12, attack=0.001, decay=0.03, sustain=0.0, release=0.01),
+        Note(midi(55), 0.13, 0.2, "triangle", 0.3, glide=-260.0, attack=0.002, decay=0.2, sustain=0.0,
+             release=0.03),
+    ],
+    # A token reaches home: a ringing G major chord, struck low to high.
+    "home": [
+        *(pluck(pitch, index * 0.07, 0.4, 0.22) for index, pitch in enumerate((67, 71, 74, 79))),
+        Note(midi(83), 0.28, 0.12, "sine", 0.1, attack=0.02, decay=0.1, sustain=0.6, release=0.2),
+    ],
+    # A bonus roll earned by a capture or a token home: a bright rising fifth.
+    "bonus": [pluck(86, 0.0, 0.16, 0.16, voice="sine"), pluck(93, 0.07, 0.24, 0.14, voice="sine")],
+    # No legal move: a soft, low "nope" double bump.
+    "no_move": [pluck(50, 0.0, 0.07, 0.24, voice="square"), pluck(50, 0.1, 0.09, 0.2, voice="square")],
+    # The turn passes: a quiet two-note woodblock knock.
+    "turn": [pluck(74, 0.0, 0.05, 0.12), pluck(79, 0.06, 0.07, 0.1)],
+    # A short, soft two-note click for every button.
+    "click": [pluck(84, 0.0, 0.05, 0.2, voice="sine"), pluck(91, 0.012, 0.04, 0.07, voice="sine")],
+}
+# The fewest seconds between two plays of the same effect (variants share
+# their base name's cooldown). A slow frame can finish several hops at once,
+# and the autotest fires an AI action every frame; these keep such bursts a
+# gentle patter instead of a pile of identical sounds.
+SFX_COOLDOWNS: dict[str, float] = {
+    "hop": 0.05,
+    "dice": 0.1,
+    "turn": 0.15,
+    "no_move": 0.2,
+    "click": 0.04,
+}
+
+# Game-over jingles: the music fades out and one of these plays.
+SFX_RECIPES.update(
+    {
+        # A human won (or the AI table finished): an ascending G major
+        # fanfare that settles into a ringing chord over a low G.
+        "win": [
+            *(pluck(pitch, index * 0.12, 0.3, 0.24) for index, pitch in enumerate((67, 71, 74, 79))),
+            *(
+                Note(midi(pitch), 0.5, 0.7, "triangle", 0.13, attack=0.03, decay=0.2, sustain=0.6, release=0.6)
+                for pitch in (79, 83, 86)
+            ),
+            Note(midi(43), 0.5, 0.7, "sine", 0.22, attack=0.05, decay=0.2, sustain=0.8, release=0.6),
+            pluck(91, 0.5, 0.5, 0.1, voice="sine"),
+        ],
+        # A computer beat the humans: a gentle descending G minor phrase.
+        "lose": [
+            Note(midi(74), 0.0, 0.26, "triangle", 0.24, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+            Note(midi(70), 0.32, 0.26, "triangle", 0.24, attack=0.015, decay=0.1, sustain=0.6, release=0.2),
+            Note(midi(67), 0.64, 0.7, "triangle", 0.26, attack=0.015, decay=0.2, sustain=0.6, release=0.5),
+            Note(midi(43), 0.64, 0.7, "sine", 0.2, attack=0.2, decay=0.2, sustain=0.8, release=0.5),
+            Note(midi(50), 0.64, 0.7, "sine", 0.1, attack=0.3, decay=0.2, sustain=0.8, release=0.5),
+        ],
+    }
+)
+
+# Music: an upbeat folk tune in G major, rendered once into a loop that plays
+# on the reserved mixer channel 0 (see `music_notes`). A marimba melody rides
+# an "oom-pah" accompaniment: the bass plays the chord's root on beat 1 and
+# its fifth on beat 3, a soft chord answers on beats 2 and 4, and a quiet
+# shaker ticks on every off-beat.
+MUSIC_BPM = 128  # Beats per minute: a brisk walking-dance pace.
+MUSIC_BEATS_PER_BAR = 4
+MUSIC_BEAT_SECONDS = 60.0 / MUSIC_BPM
+MUSIC_VOLUME = 0.22  # Channel volume: low, so effects sit on top of the music.
+MUSIC_FADE_IN_MS = 1500  # The tune eases in when the app opens or a new game is set up.
+MUSIC_GAME_OVER_FADE_MS = 700  # How quickly the tune fades under the game-over jingle.
+# Each chord: (bass root, bass fifth, the three notes of the off-beat "pah"), as MIDI numbers.
+# The fifth sits above or below the root, whichever keeps the bass in one low
+# register (E2 to D3), so the "oom" never jumps around.
+MUSIC_CHORDS: dict[str, tuple[int, int, tuple[int, int, int]]] = {
+    "G": (43, 50, (55, 59, 62)),
+    "C": (48, 43, (55, 60, 64)),
+    "D": (50, 45, (54, 57, 62)),
+    "Em": (40, 47, (55, 59, 64)),
+}
+# The tune, one bar per entry: the chord, then the melody notes as (beat in
+# the bar, length in beats, MIDI pitch). Bars 1-8 are the A part, 9-16 the B
+# part that wanders to E minor before coming home to G.
+MUSIC_SCORE: tuple[tuple[str, tuple[tuple[float, float, int], ...]], ...] = (
+    ("G", ((0, 0.5, 74), (0.5, 0.5, 71), (1, 0.5, 67), (1.5, 0.5, 71), (2, 1, 74), (3, 1, 79))),
+    ("C", ((0, 1, 76), (1, 0.5, 72), (1.5, 0.5, 76), (2, 1, 79), (3, 1, 76))),
+    ("G", ((0, 0.5, 74), (0.5, 0.5, 71), (1, 0.5, 74), (1.5, 0.5, 79), (2, 1, 71), (3, 0.5, 69), (3.5, 0.5, 67))),
+    ("D", ((0, 1, 69), (1, 0.5, 66), (1.5, 0.5, 69), (2, 2, 74))),
+    ("G", ((0, 0.5, 74), (0.5, 0.5, 71), (1, 0.5, 67), (1.5, 0.5, 71), (2, 1, 74), (3, 1, 79))),
+    ("C", ((0, 0.5, 76), (0.5, 0.5, 79), (1, 0.5, 76), (1.5, 0.5, 72), (2, 1, 76), (3, 0.5, 74), (3.5, 0.5, 72))),
+    ("D", ((0, 0.5, 69), (0.5, 0.5, 66), (1, 0.5, 69), (1.5, 0.5, 74), (2, 1, 78), (3, 1, 74))),
+    ("G", ((0, 2, 67), (2, 0.5, 67), (2.5, 0.5, 71), (3, 1, 74))),
+    ("Em", ((0, 1, 71), (1, 0.5, 67), (1.5, 0.5, 71), (2, 1, 76), (3, 0.5, 74), (3.5, 0.5, 71))),
+    ("C", ((0, 1, 72), (1, 0.5, 76), (1.5, 0.5, 79), (2, 1, 76), (3, 1, 72))),
+    ("G", ((0, 0.5, 71), (0.5, 0.5, 74), (1, 0.5, 79), (1.5, 0.5, 74), (2, 1, 71), (3, 1, 67))),
+    ("D", ((0, 0.5, 69), (0.5, 0.5, 71), (1, 0.5, 69), (1.5, 0.5, 66), (2, 2, 62))),
+    ("Em", ((0, 1, 76), (1, 0.5, 71), (1.5, 0.5, 76), (2, 1, 79), (3, 1, 76))),
+    ("C", ((0, 0.5, 79), (0.5, 0.5, 76), (1, 0.5, 72), (1.5, 0.5, 76), (2, 1, 79), (3, 1, 81))),
+    ("D", ((0, 1, 78), (1, 0.5, 76), (1.5, 0.5, 74), (2, 1, 69), (3, 1, 66))),
+    ("G", ((0, 1, 67), (1, 1, 71), (2, 2, 67))),
+)
+MUSIC_BARS = len(MUSIC_SCORE)
+# 16 bars x 4 beats = 64 beats, and one beat is 60 / 128 s, so 64 x 0.46875 = 30 s exactly.
+MUSIC_LOOP_SECONDS = MUSIC_BARS * MUSIC_BEATS_PER_BAR * MUSIC_BEAT_SECONDS
+MUSIC_MELODY_VOLUME = 0.22
+MUSIC_MELODY_RING = 1.5  # A melody note rings this many times its written length (legato marimba).
+MUSIC_BASS_VOLUME = 0.26
+MUSIC_BASS_RING = 0.8  # Beats a bass note rings, so "oom" stays short and bouncy.
+MUSIC_CHORD_VOLUME = 0.06  # Per chord note; three of them sound together.
+MUSIC_CHORD_RING = 0.35  # Beats an off-beat chord rings: a light "pah".
+MUSIC_SHAKER_VOLUME = 0.03
+MUSIC_SHAKER_RATE = 6000.0  # Noise values per second: a high, airy hiss.
+# The shaker tick's decay time (s). Each tick is held only 5 ms and then
+# released over 10 ms, so it is cut long before this decay ends: the value
+# just tilts the tick slightly downward, and each tick lasts about 15 ms.
+MUSIC_SHAKER_RING = 0.06
+
+
+def music_notes() -> list[Note]:
+    """Return one loop of the folk tune (see `MUSIC_SCORE`).
+
+    Every note ends by `MUSIC_LOOP_SECONDS`: a note that would ring past the
+    end is shortened so its release fade finishes exactly there, so the loop
+    restarts without a click.
+
+    Each bar adds four layers: the melody, the bass "oom" on beats 1 and 3,
+    the soft chord "pah" on beats 2 and 4, and a shaker tick on each off-beat
+    (halfway between beats).
+
+    Beginner note:
+    - Times are worked out in beats and turned into seconds by multiplying
+      by `MUSIC_BEAT_SECONDS`, so changing `MUSIC_BPM` speeds up or slows
+      down the whole tune (and the loop length) together.
+    - The loop is rendered to exactly `MUSIC_LOOP_SECONDS`, so a note still
+      ringing there would be cut off mid-sound every time the loop restarts
+      (only the renderer's 3 ms edge fade would soften the cut). Trimming
+      notes to end in their own release fade makes the seam clean.
+    """
+
+    beat = MUSIC_BEAT_SECONDS
+    notes: list[Note] = []
+    for bar, (chord, melody) in enumerate(MUSIC_SCORE):
+        start = bar * MUSIC_BEATS_PER_BAR * beat
+        root, fifth, triad = MUSIC_CHORDS[chord]
+        for at, length, pitch in melody:
+            notes.append(pluck(pitch, start + at * beat, length * beat * MUSIC_MELODY_RING, MUSIC_MELODY_VOLUME))
+        for beat_index, bass in ((0, root), (2, fifth)):
+            notes.append(pluck(bass, start + beat_index * beat, MUSIC_BASS_RING * beat, MUSIC_BASS_VOLUME, "triangle"))
+        for beat_index in (1, 3):
+            for pitch in triad:
+                notes.append(pluck(pitch, start + beat_index * beat, MUSIC_CHORD_RING * beat, MUSIC_CHORD_VOLUME))
+        for beat_index in range(MUSIC_BEATS_PER_BAR):
+            at = start + (beat_index + 0.5) * beat
+            notes.append(
+                Note(MUSIC_SHAKER_RATE, at, 0.005, "noise", MUSIC_SHAKER_VOLUME, attack=0.003,
+                     decay=MUSIC_SHAKER_RING, sustain=0.0, release=0.01)
+            )
+    # Fit every note inside the loop: one that would ring past the end gets a
+    # shorter held part so its release ends exactly at MUSIC_LOOP_SECONDS; one
+    # that starts too late for even its release to fit is dropped.
+    fitted = []
+    for note in notes:
+        room = MUSIC_LOOP_SECONDS - note.start - note.release
+        if note.end > MUSIC_LOOP_SECONDS:
+            if room <= 0:
+                continue
+            note = replace(note, length=room)
+        fitted.append(note)
+    return fitted

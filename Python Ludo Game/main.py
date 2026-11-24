@@ -13,6 +13,11 @@ then scaled to the real window. Layout constants below are therefore in
 logical pixels, and mouse positions are converted back into logical pixels
 before they are compared with buttons.
 
+Sound: ``audio.py`` synthesises every effect and the music; this shell plays
+them for the engine's events (``event_sounds``), token hops and buttons.
+Ctrl+M, or a Sound button, switches all sound off and on; the choice is
+saved as ``"sound"`` in the stats file.
+
 Run ``python main.py`` to play. With the environment variable
 ``LUDO_AUTOTEST=1`` set, it instead plays a short hidden all-AI game and
 exits, which is used as a smoke test.
@@ -35,6 +40,7 @@ from typing import Any
 import pygame
 
 import ai
+import audio
 import ui
 import visual_theme as theme
 from board import BoardLayout
@@ -46,6 +52,7 @@ from settings import (
     AUTOTEST_FRAMES,
     AUTOTEST_SEED,
     DICE_ANIM_MS,
+    DISABLED,
     FPS,
     GOLD,
     ICON_BOARD_COLOR,
@@ -60,6 +67,10 @@ from settings import (
     INK,
     MAX_PLAYERS,
     MIN_PLAYERS,
+    MUSIC_FADE_IN_MS,
+    MUSIC_GAME_OVER_FADE_MS,
+    MUSIC_LOOP_SECONDS,
+    MUSIC_VOLUME,
     PANEL_BG,
     PANEL_CARD,
     PANEL_EDGE,
@@ -69,11 +80,15 @@ from settings import (
     SAVEGAME_PATH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SFX_COOLDOWNS,
+    SFX_RECIPES,
     SOFT,
     STATS_PATH,
+    SUCCESS,
     TOKEN_HOP_SPEED,
     WHITE,
     WINDOW_TITLE,
+    music_notes,
     seat_colors,
     seat_name,
 )
@@ -135,11 +150,21 @@ SETUP_ACTION_BUTTON_GAP = 6
 SETUP_ACTION_HEIGHT = 34
 SETUP_RESUME_Y = SETUP_NAME_SECTION_BOTTOM + SETUP_ACTION_GAP
 SETUP_START_Y = SETUP_RESUME_Y + SETUP_ACTION_HEIGHT + SETUP_ACTION_BUTTON_GAP
+# The setup screen's Sound toggle sits under Quit, right-aligned with it, in
+# the corner beside the "Setup" title. 136 px holds "Sound: Off" (117 px in
+# DejaVu Sans Bold, the widest font seen) with 9 px to spare each side.
+SETUP_SOUND_RECT = pygame.Rect(SCREEN_WIDTH - 168, 68, 136, 34)
 WINDOW_FIT_PADDING = 8
 PLAY_SAVE_RECT = pygame.Rect(34, 794, 136, 38)
 PLAY_PILL_HOVER_BRIGHTEN = 28  # a hovered Save/New pill lights up by this much
 PLAY_NEW_RECT = pygame.Rect(34, 842, 136, 34)
 PLAY_DICE_TRAY_RECT = pygame.Rect(214, 790, 430, 86)
+# The in-game Sound pill sits just right of the dice tray, level with Roll:
+# the free strip between the tray and the table log, below every board.
+PLAY_SOUND_RECT = pygame.Rect(PLAY_DICE_TRAY_RECT.right + 20, 818, 136, 38)
+# The pill is green while sound is on and grey while it is off.
+PLAY_SOUND_ON_COLOR = SUCCESS
+PLAY_SOUND_OFF_COLOR = DISABLED
 PLAY_ROLL_RECT = pygame.Rect(510, 818, 112, 38)
 # The tray's player banner, then the turn prompt under it. 48 px holds two
 # wrapped lines of the small font (21 px in Windows Arial, Liberation Sans and
@@ -190,6 +215,51 @@ OVER_PLAQUE_PADDING = (28, 8)  # space around the text: horizontal, vertical
 OVER_PLAQUE_MAX_WIDTH = 620
 PREVIEW_CENTERS = ((200, 470), (450, 470), (700, 470))
 PREVIEW_SIZE = 216
+
+# Which effect (a name in settings.SFX_RECIPES) each engine event plays; see
+# game.EVENT_KINDS. "move" has no entry because a moving token sounds cell by
+# cell through its hops, and "game_won" is answered by the game-over jingle.
+EVENT_SOUNDS = {
+    "roll": "dice",
+    "rolled_six": "six",
+    "three_sixes": "three_sixes",
+    "leave_yard": "leave_yard",
+    "capture": "capture",
+    "home": "home",
+    "bonus_turn": "bonus",
+    "no_move": "no_move",
+    "turn_change": "turn",
+}
+
+
+def event_sounds(kinds: list[str], last_roll: int | None, human_to_play: bool) -> list[tuple[str, int]]:
+    """Return the ``(effect name, pitch step)`` to play for one frame's engine events.
+
+    Args:
+        kinds: The events drained from the engine this frame, oldest first.
+        last_roll: The engine's current die value; the dice sound uses it as
+            its pitch step, so each face lands on its own note.
+        human_to_play: Whether a human seat is to play now.
+
+    A few events stay quiet so one moment never sounds twice: a forfeited
+    third 6 groans instead of sparkling, a bonus roll earned by a 6 was
+    already announced by the six sparkle, and the turn knock only plays when
+    it calls a human to the table (AI-to-AI changes are heard as the next
+    roll).
+    """
+
+    sounds: list[tuple[str, int]] = []
+    for kind in kinds:
+        name = EVENT_SOUNDS.get(kind)
+        if (
+            name is None
+            or (kind == "rolled_six" and "three_sixes" in kinds)
+            or (kind == "bonus_turn" and last_roll == 6)
+            or (kind == "turn_change" and not human_to_play)
+        ):
+            continue
+        sounds.append((name, (last_roll or 0) if kind == "roll" else 0))
+    return sounds
 
 
 @dataclass(frozen=True)
@@ -394,15 +464,16 @@ def load_stats() -> dict:
     """Read lifetime stats, filling in defaults and repairing malformed fields.
 
     Returns a dict with ``games``, ``human_wins``, ``ai_wins``,
-    ``turn_total`` and ``by_player_count`` (games per board size, keyed by
+    ``turn_total``, ``by_player_count`` (games per board size, keyed by
     the strings "4", "5" and "6", because JSON object keys are always
-    strings).
+    strings) and ``sound`` (the player's sound on/off choice).
 
     A missing or unreadable file simply gives the all-zero defaults. Values
     read from the file are merged over the defaults, so older files that
     lack a field still work, and every counter is passed through
     ``_stat_count`` so one damaged value is reset to 0 instead of crashing
-    the game-over screen.
+    the game-over screen. ``sound`` stays on unless the file holds a real
+    JSON ``false``, so a damaged value can never silence the game.
     """
 
     defaults: dict[str, Any] = {
@@ -411,6 +482,7 @@ def load_stats() -> dict:
         "ai_wins": 0,
         "turn_total": 0,
         "by_player_count": {"4": 0, "5": 0, "6": 0},
+        "sound": True,
     }
     try:
         data = json.loads(STATS_PATH.read_text(encoding="utf-8"))
@@ -430,6 +502,7 @@ def load_stats() -> dict:
     buckets = defaults["by_player_count"]
     for key in buckets:
         buckets[key] = _stat_count(buckets[key], f"by_player_count[{key}]")
+    defaults["sound"] = defaults["sound"] is not False
     return defaults
 
 
@@ -499,10 +572,12 @@ class LudoApp:
             shared by highlights, move buttons, number keys and clicks.
         total_players, human_count, ai_profile_index, rule_*: The setup
             screen's current choices.
-        token_pixels / token_steps / token_waypoints: Pawn animation state
-            (see ``_update_token_pixels``).
+        token_pixels / token_steps / token_waypoints / token_hops: Pawn
+            animation state (see ``_update_token_pixels``).
+        sounds: The ``audio.SoundBank`` of effects (silent without a mixer).
+        music: The ``audio.MusicPlayer`` looping the folk tune.
         ai_timer: Milliseconds since the last AI action, used to pace AI turns.
-        stats: Lifetime stats loaded from disk.
+        stats: Lifetime stats loaded from disk, plus the ``"sound"`` setting.
     """
 
     def __init__(self, persist: bool = True) -> None:
@@ -524,6 +599,12 @@ class LudoApp:
         self.clock = pygame.time.Clock()
         self.fonts = ui.make_fonts()
         self.running = True
+        # Every effect is synthesised once here from the recipes in settings.
+        self.sounds = audio.SoundBank(SFX_RECIPES, SFX_COOLDOWNS)
+        # The tune renders in a background thread; it starts playing on the
+        # first frame after it is ready (``music.update`` in ``_update``).
+        self.music = audio.MusicPlayer(music_notes, MUSIC_LOOP_SECONDS, MUSIC_VOLUME)
+        self.music.start(MUSIC_FADE_IN_MS)
 
         self.screen = "setup"
         self.game: LudoGame | None = None
@@ -545,6 +626,8 @@ class LudoApp:
         self.rule_three_sixes = True
 
         self.stats = load_stats()
+        # A saved "sound": false silences the bank and the music from the first frame.
+        self._apply_sound_setting()
         self.stats_recorded = False
         self.ai_timer = 0
         self.dice_anim_remaining = 0
@@ -553,9 +636,45 @@ class LudoApp:
         self.token_pixels: dict[tuple[int, int], tuple[float, float]] = {}
         self.token_steps: dict[tuple[int, int], int] = {}
         self.token_waypoints: dict[tuple[int, int], list[tuple[float, float]]] = {}
+        # Per token, the pitch step of its next hop sound, or None while it
+        # is sliding (to or from the yard) rather than hopping.
+        self.token_hops: dict[tuple[int, int], int | None] = {}
         self.preview_cache: dict[int, pygame.Surface] = {}
         self.message = "Choose a table and start the race."
         self.saved_turns_taken: int | None = None
+
+    @property
+    def sound_on(self) -> bool:
+        """True unless the player has switched sound off (Ctrl+M or a Sound button)."""
+
+        return bool(self.stats.get("sound", True))
+
+    def _toggle_sound(self) -> None:
+        """Switch all sound off or back on, and remember the choice in stats.json.
+
+        Muting stops the music at once and blocks every effect; unmuting
+        resumes the music and plays a click so the player hears it worked. A
+        non-persisting app (the autotest) only changes the setting in memory,
+        so a smoke test never overwrites the player's real stats file.
+
+        The choice is stored as ``"sound"`` in the lifetime stats file rather
+        than in the savegame, so it applies to every game and survives
+        starting a new one. The shortcut is Ctrl+M rather than plain M
+        because M must still type into the setup screen's name fields.
+        """
+
+        self.stats["sound"] = not self.sound_on
+        self._apply_sound_setting()
+        if self.persist:
+            save_stats(self.stats)
+        if self.sound_on:
+            self.sounds.play("click")
+
+    def _apply_sound_setting(self) -> None:
+        """Pass the sound setting to the effects bank and the music player."""
+
+        self.sounds.muted = not self.sound_on
+        self.music.set_muted(not self.sound_on)
 
     def setup_buttons(self) -> list[ui.Button]:
         """Build fresh button objects for the setup screen.
@@ -566,7 +685,8 @@ class LudoApp:
 
         It contains the -/+ steppers for total and human players, the </>
         stepper for the AI profile, the four house-rule toggles, Start Game,
-        Resume Saved Game (disabled without a save) and Quit. Each button's
+        Resume Saved Game (disabled without a save), Quit and the Sound
+        toggle under it. Each button's
         ``key`` is handled by ``_on_setup_button``.
         """
 
@@ -604,6 +724,7 @@ class LudoApp:
                 enabled=has_saved_game(),
             ),
             ui.Button(pygame.Rect(SCREEN_WIDTH - 132, 24, 100, 36), "Quit", "quit"),
+            ui.Button(SETUP_SOUND_RECT, _toggle_label("Sound", self.sound_on), "toggle_sound"),
         ]
 
     def run(self, max_frames: int | None = None) -> None:
@@ -682,6 +803,7 @@ class LudoApp:
         self.token_pixels = {}
         self.token_steps = {}
         self.token_waypoints = {}
+        self.token_hops = {}
         self.saved_turns_taken = game.turns_taken
         self.message = "Roll a 6 to bring a token out."
 
@@ -709,6 +831,7 @@ class LudoApp:
         # button, even if a token's generous hit circle reaches under it.
         for button in self._buttons_for_screen():
             if button.contains(pos):
+                self.sounds.play("click")
                 self._on_button(button.key)
                 return
 
@@ -728,11 +851,16 @@ class LudoApp:
     def _handle_key(self, event: pygame.event.Event) -> None:
         """Route keyboard shortcuts for setup typing and human turns.
 
-        Escape saves and returns to setup during a game, and quits from any
-        other screen. While a setup name field has focus, keys type into it.
-        On a human turn, R rolls and 1-4 pick the matching move button.
+        Ctrl+M switches sound off and on, on every screen (even while a
+        name field has focus, so plain M still types). Escape saves and
+        returns to setup during a game, and quits from any other screen.
+        While a setup name field has focus, keys type into it. On a human
+        turn, R rolls and 1-4 pick the matching move button.
         """
 
+        if event.key == pygame.K_m and event.mod & pygame.KMOD_CTRL:
+            self._toggle_sound()
+            return
         if event.key == pygame.K_ESCAPE:
             if self.screen == "playing" and self.game:
                 self._save_game()
@@ -774,15 +902,22 @@ class LudoApp:
                 self.name_fields[index] = candidate
 
     def _on_button(self, key: str) -> None:
-        """Dispatch a clicked button key to the active screen."""
+        """Dispatch a clicked button key to the active screen.
 
-        if self.screen == "setup":
+        The Sound toggle works the same on every screen, so it is handled
+        here first.
+        """
+
+        if key == "toggle_sound":
+            self._toggle_sound()
+        elif self.screen == "setup":
             self._on_setup_button(key)
         elif self.screen == "playing":
             self._on_play_button(key)
         elif self.screen == "over":
             if key == "new_game":
                 self.screen = "setup"
+                self.music.start(MUSIC_FADE_IN_MS)
             elif key == "quit":
                 self.running = False
 
@@ -931,10 +1066,12 @@ class LudoApp:
             self.visible_moves = self.game.legal_moves(self.game.last_roll)
 
     def _update(self, autotest: bool) -> None:
-        """Advance animations, game-over bookkeeping, and AI turns.
+        """Advance animations, sounds, game-over bookkeeping, and AI turns.
 
-        Called once per frame. In order it: counts down the dice animation,
-        moves pawns along their hop paths, switches to the game-over screen
+        Called once per frame. In order it: lets the music player start the
+        tune once it has rendered, counts down the dice animation,
+        moves pawns along their hop paths, plays the sounds for everything
+        the engine reported since the last frame, switches to the game-over screen
         (recording stats once) when the engine says the game ended, and, if
         an AI seat is to play, waits ``AI_TURN_DELAY_MS`` between AI actions
         so humans can follow them. One AI action is a roll plus, when
@@ -944,10 +1081,15 @@ class LudoApp:
         milliseconds, so timers count real time whatever the frame rate.
         """
 
+        self.music.update()
         elapsed = self.clock.get_time()
         if self.dice_anim_remaining > 0:
             self.dice_anim_remaining = max(0, self.dice_anim_remaining - elapsed)
         self._update_token_pixels(elapsed)
+        # Events are played before the game-over check below, so the winning
+        # move's own sounds (its token reaching home) are heard before the jingle.
+        if self.game is not None:
+            self._play_event_sounds()
 
         if self.screen != "playing" or self.game is None:
             return
@@ -955,6 +1097,7 @@ class LudoApp:
             # Stats are recorded here instead of inside the engine because
             # stats are app persistence, not core Ludo rules.
             self._record_finished_game_once()
+            self._play_game_over_jingle()
             self.screen = "over"
             return
         if self.game.current_player.is_human:
@@ -967,6 +1110,33 @@ class LudoApp:
         self._perform_ai_step()
         self._refresh_visible_moves()
         self._save_if_turn_completed()
+
+    def _play_event_sounds(self) -> None:
+        """Drain the engine's event queue and play each event's effect.
+
+        Draining once per frame means every event is heard exactly once,
+        whether a human click or an AI step caused it.
+        """
+
+        assert self.game is not None
+        kinds = self.game.drain_events()
+        human_to_play = self.game.current_player.is_human
+        for name, step in event_sounds(kinds, self.game.last_roll, human_to_play):
+            self.sounds.play(name, pitch_step=step)
+
+    def _play_game_over_jingle(self) -> None:
+        """Fade the music out and play the win or lose jingle for the finished game.
+
+        The win jingle plays when a human won, and also when no human played
+        at all (an all-AI table); a computer beating the humans gets the
+        gentle lose jingle.
+        """
+
+        assert self.game is not None and self.game.winner is not None
+        self.music.stop(MUSIC_GAME_OVER_FADE_MS)
+        humans = [player for player in self.game.players if player.is_human]
+        won = not humans or self.game.players[self.game.winner].is_human
+        self.sounds.play("win" if won else "lose")
 
     def _perform_ai_step(self) -> None:
         """Let the current AI player roll or choose one move.
@@ -1036,6 +1206,11 @@ class LudoApp:
            second, using the time ``elapsed_ms`` since the last frame.
         4. With nothing queued, glides any leftover gap to the token's cell.
 
+        Each cell reached on a forward move taps a hop sound one step higher
+        than the last, so the player hears the count. Slides into or out of
+        the yard are silent here: leaving the yard and being captured have
+        their own event sounds.
+
         Beginner note: moving a fixed *distance budget* per frame (speed
         times elapsed time) rather than a fixed number of pixels keeps the
         animation the same speed on fast and slow computers.
@@ -1056,9 +1231,14 @@ class LudoApp:
                     self.token_waypoints[key] = []
                     continue
                 if token.steps != self.token_steps.get(key):
+                    old_steps = self.token_steps.get(key, -1)
                     self.token_waypoints[key] = self._token_waypoints(
-                        player_index, token_index, self.token_steps.get(key, -1), token.steps
+                        player_index, token_index, old_steps, token.steps
                     )
+                    # Only a forward move between board cells hops (counting from
+                    # pitch step 0). Leaving the yard (old steps -1) and being
+                    # captured (new steps -1) are silent slides.
+                    self.token_hops[key] = 0 if 0 <= old_steps < token.steps else None
                     self.token_steps[key] = token.steps
 
                 # Walk the waypoint queue at constant speed. One frame may
@@ -1075,6 +1255,7 @@ class LudoApp:
                         current = head
                         queue.pop(0)
                         remaining -= length
+                        self._play_hop(key)
                     else:
                         # Not enough budget left to reach the next cell: move
                         # part of the way along the unit vector (dx, dy) / length.
@@ -1091,6 +1272,20 @@ class LudoApp:
                         current[1] + dy / length * remaining,
                     )
                 self.token_pixels[key] = current
+
+    def _play_hop(self, key: tuple[int, int]) -> None:
+        """Tap the hop sound for a token that just reached a cell, one step higher each time.
+
+        Hops only sound on the play screen: the winning move ends the game at
+        once, and its token may still be easing home on the game-over screen,
+        where its taps would step on the win jingle (likewise after Save or
+        New sends the player back to setup mid-hop).
+        """
+
+        step = self.token_hops.get(key)
+        if step is not None and self.screen == "playing":
+            self.sounds.play("hop", pitch_step=step)
+            self.token_hops[key] = step + 1
 
     def _save_if_turn_completed(self) -> None:
         """Autosave after completed turns, not after every animation frame.
@@ -1377,13 +1572,17 @@ class LudoApp:
     def _draw_play_button(self, button: ui.Button, mouse: tuple[int, int]) -> None:
         """Draw gameplay buttons with the new table-HUD treatment.
 
-        Save and New are drawn as rounded pills; Roll and the move buttons are
+        Save, New and Sound are drawn as rounded pills; Roll and the move buttons are
         dark cards edged in the current player's colour (Roll in gold) that
         fill with that colour while hovered.
         """
 
         hovered = button.contains(mouse)
         current_color = self.game.current_player.color if self.game is not None else GOLD
+        if button.key == "toggle_sound":
+            color = _sound_pill_color(self.sound_on, hovered)
+            theme.draw_round_icon_button(self.window, button.rect, color, button.text, self.fonts)
+            return
         if button.key in {"save_quit", "new_game"}:
             # These small controls behave like table buttons rather than a
             # rectangular sidebar menu. The key text stays short so it fits
@@ -1406,7 +1605,8 @@ class LudoApp:
         During play the buttons follow the engine state: a human waiting to
         roll gets Roll, a human choosing a move gets up to four move buttons
         ("1: Token 2 -> 14", where 14 is the token's new step count), and
-        Save and New are always present. AI turns show only Save and New.
+        Save, New and Sound are always present. AI turns show only those
+        three.
         """
 
         if self.screen == "setup":
@@ -1425,6 +1625,7 @@ class LudoApp:
                 buttons.append(ui.Button(_move_button_rect(index), label, f"move_{index}"))
         buttons.append(ui.Button(PLAY_SAVE_RECT, "Save", "save_quit"))
         buttons.append(ui.Button(PLAY_NEW_RECT, "New", "new_game"))
+        buttons.append(ui.Button(PLAY_SOUND_RECT, _toggle_label("Sound", self.sound_on), "toggle_sound"))
         return buttons
 
     def _winner_plaque(self, winner) -> tuple[pygame.Rect, str]:
@@ -1544,9 +1745,16 @@ def _name_rect(index: int) -> pygame.Rect:
 
 
 def _toggle_label(label: str, enabled: bool) -> str:
-    """Format an On/Off label for a house-rule toggle button."""
+    """Format an On/Off label for a house-rule or Sound toggle button."""
 
     return f"{label}: {'On' if enabled else 'Off'}"
+
+
+def _sound_pill_color(sound_on: bool, hovered: bool) -> tuple[int, int, int]:
+    """Return the in-game Sound pill's colour: green while on, grey while off, lighter when hovered."""
+
+    color = PLAY_SOUND_ON_COLOR if sound_on else PLAY_SOUND_OFF_COLOR
+    return theme.brighten(color, PLAY_PILL_HOVER_BRIGHTEN) if hovered else color
 
 
 def _resource_path(name: str) -> str:
@@ -1588,11 +1796,15 @@ def _make_icon() -> pygame.Surface:
 def main() -> None:
     """Initialize pygame, run the app, and always shut pygame down.
 
-    The ``try``/``finally`` makes sure ``pygame.quit()`` runs even if the app
-    raises, so the window is always closed cleanly.
+    The mixer format is requested before ``pygame.init()`` opens the mixer,
+    and the music channel is reserved right after. The ``try``/``finally``
+    makes sure ``pygame.quit()`` runs even if the app raises, so the window
+    is always closed cleanly.
     """
 
+    audio.init_mixer()
     pygame.init()
+    audio.reserve_channels()
     try:
         if os.environ.get("LUDO_AUTOTEST"):
             # Headless self-test: play a seeded all-AI game on the classic

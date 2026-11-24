@@ -6,6 +6,7 @@ instead, so they can be tested directly without opening a window:
 - combo tracking and the combo score multiplier,
 - the fail timer that fills while the stack is too high,
 - the HUD stress level and the danger-beep rhythm,
+- which impact thud and aim tick to play,
 - cleaning up saved progress loaded from disk.
 
 Beginner note:
@@ -18,15 +19,21 @@ Beginner note:
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from settings import (
+    AIM_TICK_DEGREES,
     COMBO_MAX_MULTIPLIER,
     COMBO_STEP,
     COMBO_WINDOW,
     FAIL_DECAY,
     FAIL_GRACE,
     FAIL_LINE_Y,
+    IMPACT_EVENT_SPEED,
+    IMPACT_LOUDEST_SPEED,
+    IMPACT_SOUND_BANDS,
+    IMPACT_VOLUME_RANGE,
     STRESS_PREVIEW_RANGE,
     STRESS_PREVIEW_SHARE,
     STRESS_TIMER_SHARE,
@@ -117,15 +124,49 @@ def stress_level(highest_top: float, fail_timer: float, warning: bool) -> float:
     return max(preview_stress, danger_stress)
 
 
-def sanitize_progress(data: Any) -> dict[str, int]:
-    """Clean raw saved-progress data into three safe, non-negative integers.
+def impact_sound(speed: float) -> tuple[int, float]:
+    """Return (thud weight, volume) for a collision at `speed` pixels per second.
 
-    Missing fields default to zero and `best_tier` is clamped onto the tier
-    ladder. Data that cannot be cleaned (not a JSON object, or a field that
-    `int()` cannot convert) raises, and the caller falls back to fresh progress.
+    The weight counts how many `IMPACT_SOUND_BANDS` the speed reaches (0 is
+    the lightest thud). The volume rises in a straight line across
+    `IMPACT_VOLUME_RANGE`, from the softest audible hit
+    (`IMPACT_EVENT_SPEED`) up to `IMPACT_LOUDEST_SPEED`, and stays there.
+    """
+    weight = sum(1 for band in IMPACT_SOUND_BANDS if speed >= band)
+    share = clamp((speed - IMPACT_EVENT_SPEED) / (IMPACT_LOUDEST_SPEED - IMPACT_EVENT_SPEED), 0.0, 1.0)
+    low, high = IMPACT_VOLUME_RANGE
+    return weight, low + (high - low) * share
+
+
+def aim_tick_crossed(old_angle: float, new_angle: float) -> bool:
+    """Return True when the aim moved past a multiple of `AIM_TICK_DEGREES`.
+
+    Beginner note:
+    - `math.floor(angle / step)` numbers the "detent" the angle sits in
+      (-1 for -5..0, 0 for 0..5 with a 5 degree step). The aim crossed a
+      detent exactly when that number changed.
+    """
+    return math.floor(old_angle / AIM_TICK_DEGREES) != math.floor(new_angle / AIM_TICK_DEGREES)
+
+
+def sanitize_progress(data: Any) -> dict[str, int]:
+    """Clean raw saved-progress data into safe values.
+
+    The three counters become non-negative integers: missing fields default
+    to zero and `best_tier` is clamped onto the tier ladder. `muted` (the
+    sound setting) is True only for a real JSON `true`; anything else,
+    including a missing key or a string such as "yes", leaves sound on, so a
+    damaged save can never silence the game by accident. Data that cannot be
+    cleaned (not a JSON object, or a field that `int()` cannot convert)
+    raises, and the caller falls back to fresh progress.
+
+    Beginner note:
+    - The return type says `dict[str, int]` although `muted` is a bool. That
+      is allowed: in Python `bool` is a kind of `int` (True == 1).
     """
     return {
         "high_score": max(0, int(data.get("high_score", 0))),
         "games_played": max(0, int(data.get("games_played", 0))),
         "best_tier": max(0, min(len(TIERS) - 1, int(data.get("best_tier", 0)))),
+        "muted": data.get("muted") is True,
     }

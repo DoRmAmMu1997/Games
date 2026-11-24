@@ -144,8 +144,21 @@ _SETUP_LEFT, _SETUP_RIGHT = 90, 424
 SETUP_VALUE_MARGIN = 8
 
 
-def setup_buttons(has_save: bool) -> list:
-    """Build the clickable buttons for the setup screen."""
+def setup_sound_rect() -> pygame.Rect:
+    """Screen rect of the setup screen's Sound toggle: just under Quit, the same size."""
+    return pygame.Rect(SCREEN_WIDTH - 160, 80, 130, 40)
+
+
+def sound_label(sound_on: bool) -> str:
+    """The Sound toggle's label, saying whether sound is on now."""
+    return f"Sound: {'On' if sound_on else 'Off'}"
+
+
+def setup_buttons(has_save: bool, sound_on: bool = True) -> list:
+    """Build the clickable buttons for the setup screen.
+
+    `sound_on` sets the Sound toggle's label (it sits under Quit).
+    """
     buttons = [
         # The left column runs from the "-"/"<" steppers to the "+"/">"
         # ones; the values between them are fitted by `setup_value_line`.
@@ -162,6 +175,7 @@ def setup_buttons(has_save: bool) -> list:
         # A way out of the setup screen without closing the window.
         Button((SCREEN_WIDTH - 160, 30, 130, 40), "Quit", "quit",
                color=(120, 60, 60)),
+        Button(setup_sound_rect(), sound_label(sound_on), "toggle_sound"),
     ]
     if has_save:
         buttons.append(Button((_SETUP_LEFT, 660, _SETUP_RIGHT - _SETUP_LEFT, 50),

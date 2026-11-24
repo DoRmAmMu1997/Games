@@ -6,7 +6,6 @@ import os
 import sys
 import unittest
 from pathlib import Path
-from unittest import mock
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
@@ -17,29 +16,24 @@ if str(GAME_DIR) not in sys.path:
 
 import pygame
 
-from assets import AssetLibrary, SoundBank
-from settings import TIERS
+import audio
+from assets import AssetLibrary
+from settings import SFX_COOLDOWNS, SFX_RECIPES, TIERS
 
 
-class ToneChannelTests(unittest.TestCase):
-    """Generated tones must hold one sample per channel for every moment."""
+class SoundBankWiringTests(unittest.TestCase):
+    """The asset library exposes the shared audio bank built from settings."""
 
-    def test_sample_count_matches_every_channel_layout(self) -> None:
-        """Mono, stereo, 4, 6 and 8 channel mixers each get a full interleaved buffer."""
+    def test_sounds_come_from_the_settings_recipes(self) -> None:
+        """``AssetLibrary.sounds`` is an ``audio.SoundBank`` holding every recipe."""
 
-        rate, duration = 22050, 0.05
-        frames = int(rate * duration)
-        for channels in (1, 2, 4, 6, 8):
-            with self.subTest(channels=channels):
-                with (
-                    mock.patch.object(pygame.mixer, "get_init", return_value=(rate, -16, channels)),
-                    mock.patch.object(pygame.mixer, "Sound") as fake_sound,
-                ):
-                    SoundBank._make_tone(SoundBank.__new__(SoundBank), [440.0], duration, 0.3)
-
-                # Each sample is a signed 16-bit integer, which is two bytes.
-                buffer = fake_sound.call_args.kwargs["buffer"]
-                self.assertEqual(len(buffer), frames * channels * 2)
+        pygame.init()
+        pygame.display.set_mode((1, 1))
+        assets = AssetLibrary()
+        self.assertIsInstance(assets.sounds, audio.SoundBank)
+        self.assertTrue(assets.sounds.enabled)
+        self.assertEqual(set(assets.sounds.sounds), set(SFX_RECIPES))
+        self.assertEqual(assets.sounds.cooldowns, SFX_COOLDOWNS)
 
 
 class OrbArtTests(unittest.TestCase):
